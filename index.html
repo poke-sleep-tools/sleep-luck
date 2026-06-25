@@ -112,7 +112,7 @@
             </div>
             <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center col-span-2 md:col-span-1">
                 <div class="text-[10px] text-red-500 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
-                    <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>金帮总数
+                    <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>金帮毕业总数
                 </div>
                 <div class="text-2xl font-black text-red-600 mt-1 font-mono" id="total-gold-grad">0</div>
             </div>
@@ -499,7 +499,7 @@ function normalizePlayerBox() {
                         <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
                     </div>
                     <div class="text-center">
-                        <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮</span>
+                        <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮毕业</span>
                         <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
                     </div>
                 </div>`;
@@ -904,7 +904,7 @@ function normalizePlayerBox() {
                             `}
                             <div><span class="block text-[9px] text-slate-600 font-bold mb-0.5">总毕业</span><input type="number" id="edit-grad-${idx}" value="${p.gradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-slate-800"></div>
                             <div><span class="block text-[9px] text-purple-600 font-bold mb-0.5">总大毕业</span><input type="number" id="edit-big-grad-${idx}" value="${p.bigGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-purple-600"></div>
-                            <div><span class="block text-[9px] text-red-600 font-bold mb-0.5">总金帮</span><input type="number" id="edit-gold-grad-${idx}" value="${p.goldGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-red-600"></div>
+                            <div><span class="block text-[9px] text-red-600 font-bold mb-0.5">总金帮毕业</span><input type="number" id="edit-gold-grad-${idx}" value="${p.goldGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-red-600"></div>
                         </div>`}
                     </div>`;
                 }
@@ -949,7 +949,7 @@ function normalizePlayerBox() {
                             ${isBoth && p.bigGradCount > 0 ? `<div class="text-[8px] text-purple-500/70 font-normal scale-90">${p.bigGradCount_AAA || 0}AAA/ ${p.bigGradCount_ABB || 0}ABB</div>` : ''}
                         </div>
                         <div class="px-1 py-1 rounded-lg ${p.goldGradCount > 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-300'}">
-                            <div class="text-[9px]">金帮</div><div class="text-xs font-mono mt-0.5">${p.goldGradCount}</div>
+                            <div class="text-[9px]">金帮毕业</div><div class="text-xs font-mono mt-0.5">${p.goldGradCount}</div>
                             ${isBoth && p.goldGradCount > 0 ? `<div class="text-[8px] text-red-500/70 font-normal scale-90">${p.goldGradCount_AAA || 0}AAA / ${p.goldGradCount_ABB || 0}ABB</div>` : ''}
                         </div>
                     </div>
