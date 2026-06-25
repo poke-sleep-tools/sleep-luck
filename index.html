@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokémon Sleep - 全局 Box 欧非 analysis 站</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Supabase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Outfit:wght@300;400;600;800&display=swap');
+        body { font-family: 'Outfit', 'Noto Sans SC', sans-serif; background-color: #f1f5f9; }
+        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen flex flex-col items-center justify-start text-slate-800" onclick="closeSuggestionsOutside(event)">
+
+    <div class="max-w-5xl w-full flex flex-col gap-6">
+        
+        <!-- 头部标题栏 -->
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-900 text-white p-6 rounded-3xl shadow-xl gap-4">
+            <div class="flex items-center gap-3">
+                <div class="bg-amber-500 text-slate-950 p-2.5 rounded-2xl">
+                    <i class="fa-solid fa-box-archive text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-extrabold tracking-tight">Sleep 全局 Box 分析看板</h1>
+                    <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
+                </div>
+            </div>
+
+            <!-- 登录 / 注册区域 -->
+            <div class="w-full md:w-auto bg-slate-800/80 p-3 rounded-2xl flex flex-col gap-2">
+                <div id="auth-user-info" class="text-[11px] text-slate-300 font-bold hidden"></div>
+
+                <div id="auth-form" class="flex flex-col md:flex-row gap-2">
+                    <input 
+                        type="email" 
+                        id="auth-email" 
+                        placeholder="邮箱"
+                        class="bg-white text-slate-900 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none w-full md:w-44"
+                    >
+
+                    <input 
+                        type="password" 
+                        id="auth-password" 
+                        placeholder="密码"
+                        class="bg-white text-slate-900 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none w-full md:w-36"
+                    >
+
+                    <button 
+                        onclick="signUpUser()" 
+                        class="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs px-3 py-2 rounded-xl"
+                    >
+                        注册
+                    </button>
+
+                    <button 
+                        onclick="signInUser()" 
+                        class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-3 py-2 rounded-xl"
+                    >
+                        登录
+                    </button>
+                </div>
+
+                <button 
+                    id="logout-btn"
+                    onclick="signOutUser()" 
+                    class="hidden bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs px-3 py-2 rounded-xl"
+                >
+                    退出登录
+                </button>
+            </div>
+        </div>
+
+        <!-- 顶栏七列统计卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-7 gap-4">
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">总收录宝可梦</div>
+                <div class="text-2xl font-black text-slate-800 mt-1" id="total-species">0 种</div>
+            </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Box录入总捕捉</div>
+                <div class="text-2xl font-black text-slate-800 mt-1 font-mono" id="total-catches">0 只</div>
+            </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center border-l-4 border-l-indigo-500">
+                <div class="text-[10px] text-indigo-600 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-chart-pie text-[9px]"></i> 纳入测评总捕
+                </div>
+                <div class="text-2xl font-black text-indigo-600 mt-1 font-mono" id="total-eval-catches">0 只</div>
+            </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                <div class="text-[10px] text-amber-600 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-amber-500"></span>和解总数
+                </div>
+                <div class="text-2xl font-black text-amber-600 mt-1 font-mono" id="total-tied">0</div>
+            </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                <div class="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-slate-400"></span>毕业总数
+                </div>
+                <div class="text-2xl font-black text-slate-800 mt-1 font-mono" id="total-grad">0</div>
+            </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                <div class="text-[10px] text-purple-500 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-purple-500"></span>大毕业总数
+                </div>
+                <div class="text-2xl font-black text-purple-600 mt-1 font-mono" id="total-big-grad">0</div>
+            </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center col-span-2 md:col-span-1">
+                <div class="text-[10px] text-red-500 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>金帮总数
+                </div>
+                <div class="text-2xl font-black text-red-600 mt-1 font-mono" id="total-gold-grad">0</div>
+            </div>
+        </div>
+
+        <!-- 🚀 气运天命星盘看板 -->
+        <div id="luck-destiny-panel" class="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm hidden flex-col md:flex-row items-center gap-8 transition duration-300">
+            <div class="relative w-36 h-36 flex items-center justify-center flex-shrink-0">
+                <div id="pie-chart-render" class="w-36 h-36 rounded-full shadow-inner relative flex items-center justify-center transition-all duration-500" style="background: conic-gradient(#e2e8f0 0% 100%);">
+                    <div class="w-24 h-24 bg-white rounded-full shadow-sm flex flex-col items-center justify-center text-center p-1">
+                        <span class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">大仓总分</span>
+                        <span class="text-2xl font-black text-slate-900 tracking-tight leading-none my-0.5 font-mono" id="pie-total-score">-</span>
+                        <span class="text-[9px] text-slate-500 font-extrabold" id="pie-dominant-type">-</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1 w-full">
+                <h3 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                    <i class="fa-solid fa-wand-magic-sparkles text-indigo-500 animate-pulse"></i> Box 气运命格天梯星盘 (0-100 纯客观幂律联合检验变换天梯)
+                </h3>
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-3" id="pie-chart-legend">
+                    <!-- 动态高光数值分卡将在这里渲染 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 战绩追加录入面板 -->
+        <div class="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm flex flex-col lg:flex-row gap-4 items-end">
+            <div class="w-full lg:flex-1 relative" onclick="event.stopPropagation()">
+                <label class="block text-xs font-bold text-slate-500 mb-1.5">
+                    宝可梦名字 <span class="text-[10px] text-slate-400 font-normal">(自动弹出下拉提示栏)</span>
+                </label>
+                <input type="text" id="input-name" oninput="handleNameInput()" onfocus="handleNameInput()" placeholder="输入如: 小, 皮, 妙蛙..." class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-slate-400">
+                <div id="suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-60 overflow-y-auto"></div>
+            </div>
+            
+            <div class="w-full lg:w-[100px]">
+                <label class="block text-xs font-bold text-slate-500 mb-1.5">追加捕捉数</label>
+                <input type="number" id="input-count" min="0" value="0" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-mono font-bold text-center focus:outline-none focus:border-slate-400">
+            </div>
+            
+            <div class="w-full lg:w-[120px]">
+                <label class="block text-xs font-bold text-slate-500 mb-1.5">40+锁金策略</label>
+                <select id="input-lock-mode" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold focus:outline-none focus:border-slate-400">
+                    <option value="none">不锁金</option>
+                    <option value="one">锁 1 金</option>
+                    <option value="two" selected>锁 2 金</option>
+                </select>
+            </div>
+
+            <div class="w-full lg:w-[430px]">
+                <label class="block text-xs font-bold text-slate-500 mb-1.5">本次追加的具体出货数量</label>
+                <div id="add-quantities-container" class="w-full">
+                    <div class="grid grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
+                        <div class="text-center">
+                            <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
+                            <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
+                        </div>
+                        <div class="text-center">
+                            <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
+                            <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
+                        </div>
+                        <div class="text-center">
+                            <span class="block text-[10px] font-bold text-purple-600 mb-1">追加大毕业</span>
+                            <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
+                        </div>
+                        <div class="text-center">
+                            <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮</span>
+                            <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <button onclick="addPokemon()" class="w-full lg:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-6 py-3 rounded-xl transition duration-150 flex items-center justify-center gap-2 whitespace-nowrap">
+                <i class="fa-solid fa-pen-fancy"></i> 录入到 Box
+            </button>
+        </div>
+
+        <!-- 检索与控制栏 -->
+        <div class="bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+            <div class="relative w-full md:w-[320px]">
+                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                    <i class="fa-solid fa-magnifying-glass text-xs"></i>
+                </span>
+                <input type="text" id="search-box" oninput="triggerSearchFilter()" placeholder="极速检索某种宝可梦(支持繁简)..." class="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
+            </div>
+            <div class="flex flex-wrap gap-1.5 w-full md:w-auto justify-start md:justify-end items-center">
+                <button onclick="filterByType('all')" id="filter-all" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-900 text-white shadow-sm">全盘大仓</button>
+                <button onclick="filterByType('berry')" id="filter-berry" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">树果型</button>
+                <button onclick="filterByType('food')" id="filter-food" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">食材型</button>
+                <button onclick="filterByType('skill')" id="filter-skill" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">技能型</button>
+                <button onclick="toggleAllPokemonStandard()" id="global-eval-toggle" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200/60 shadow-sm flex items-center gap-1 ml-2" title="一键将大仓内所有种类的宝可梦统一切换标准">
+                    <i class="fa-solid fa-scale-unbalanced"></i> 全局标准
+                </button>
+                <button onclick="toggleShowOnlyGraduated()" id="filter-only-graduated" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1 ml-2" title="切换是否只显示已满足各自设定标准出货的宝可梦">
+                    <i class="fa-solid fa-eye-slash"></i> 只看已出货: 关
+                </button>
+            </div>
+        </div>
+
+        <!-- 宝可梦大仓网格卡片容器 -->
+        <div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="box-container"></div>
+        </div>
+    </div>
+
+    <!-- 弹窗通知 -->
+    <div id="toast" class="fixed bottom-5 bg-slate-900 text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-2 transform translate-y-24 opacity-0 transition duration-300 pointer-events-none z-50">
+        <i class="fa-solid fa-circle-check text-emerald-400"></i>
+        <span id="toast-msg">已保存!</span>
+    </div>
+
+    <script>
+        
+
+        const SUPABASE_URL = "https://skuyfohpnhfggxgkcnqt.supabase.co";
+        const SUPABASE_ANON_KEY = "sb_publishable_OSh53mqcD2rpLRPRlguW3w_JnxPayQv";
+
+        const supabaseClient = window.supabase.createClient(
+            SUPABASE_URL,
+            SUPABASE_ANON_KEY
+        );
+
+        let currentCloudUser = null;
+
+let playerBox = [];
+let editingIndices = {};
+let currentFilterType = 'all'; 
+let showOnlyGraduated = false;
+
+let saveBoxTimer = null;
+
+const OLD_LOCAL_KEY = 'sleep_player_box';
+const GUEST_LOCAL_KEY = 'sleep_player_box_guest';
+
+function getLocalStorageKey() {
+    if (currentCloudUser) {
+        return 'sleep_player_box_' + currentCloudUser.id;
+    }
+    return GUEST_LOCAL_KEY;
+}
+
+function loadBoxFromLocal() {
+    const key = getLocalStorageKey();
+
+    let localData = localStorage.getItem(key);
+
+    // 兼容你以前的旧数据
+    if (!localData && !currentCloudUser) {
+        localData = localStorage.getItem(OLD_LOCAL_KEY);
+    }
+
+    playerBox = localData ? JSON.parse(localData) : [];
+}
+
+function normalizePlayerBox() {
+    playerBox.forEach(p => { 
+        if (!p.lockMode) p.lockMode = 'two'; 
+        if (!p.evalMode) p.evalMode = 'tied'; 
+        if (p.tiedCount_AAA === undefined) p.tiedCount_AAA = 0;
+        if (p.tiedCount_ABB === undefined) p.tiedCount_ABB = p.tiedCount || 0;
+        if (p.gradCount_AAA === undefined) p.gradCount_AAA = 0;
+        if (p.gradCount_ABB === undefined) p.gradCount_ABB = p.gradCount || 0;
+        if (p.bigGradCount_AAA === undefined) p.bigGradCount_AAA = 0;
+        if (p.bigGradCount_ABB === undefined) p.bigGradCount_ABB = p.bigGradCount || 0;
+        if (p.goldGradCount_AAA === undefined) p.goldGradCount_AAA = 0;
+        if (p.goldGradCount_ABB === undefined) p.goldGradCount_ABB = p.goldGradCount || 0;
+    });
+}
+
+        const pokemonDictionary = {
+            '绿毛虫': { standard: '绿毛虫', type: 'berry', defaultLock: 'two' }, '綠毛蟲': { standard: '绿毛虫', type: 'berry', defaultLock: 'two' },
+            '铁甲蛹': { standard: '铁甲蛹', type: 'berry', defaultLock: 'two' }, '鐵甲蛹': { standard: '铁甲蛹', type: 'berry', defaultLock: 'two' },
+            '巴大蝶': { standard: '巴大蝶', type: 'berry', defaultLock: 'two' },
+            '小拉达': { standard: '小拉达', type: 'berry', defaultLock: 'two' }, '小拉達': { standard: '小拉达', type: 'berry', defaultLock: 'two' },
+            '拉达': { standard: '拉达', type: 'berry', defaultLock: 'two' }, '拉達': { standard: '拉达', type: 'berry', defaultLock: 'two' },
+            '阿柏蛇': { standard: '阿柏蛇', type: 'berry', defaultLock: 'two' }, '阿柏怪': { standard: '阿柏怪', type: 'berry', defaultLock: 'two' },
+            '皮卡丘': { standard: '皮卡丘', type: 'berry', defaultLock: 'two' },
+            '皮卡丘(万圣节)': { standard: '皮卡丘(万圣节)', type: 'berry', defaultLock: 'two' }, '皮卡丘（萬聖節）': { standard: '皮卡丘(万圣节)', type: 'berry', defaultLock: 'two' },
+            '雷丘': { standard: '雷丘', type: 'berry', defaultLock: 'two' }, '皮皮': { standard: '皮皮', type: 'berry', defaultLock: 'two' }, '皮可西': { standard: '皮可西', type: 'berry', defaultLock: 'two' },
+            '六尾': { standard: '六尾', type: 'berry', defaultLock: 'two' }, '六尾(阿罗拉的样子)': { standard: '六尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' }, '六尾（阿羅拉的樣子）': { standard: '六尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' },
+            '九尾': { standard: '九尾', type: 'berry', defaultLock: 'two' }, '九尾(阿罗拉的样子)': { standard: '九尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' }, '九尾（阿羅拉的樣子）': { standard: '九尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' },
+            '猴怪': { standard: '猴怪', type: 'berry', defaultLock: 'two' }, '火暴猴': { standard: '火暴猴', type: 'berry', defaultLock: 'two' }, '火爆猴': { standard: '火暴猴', type: 'berry', defaultLock: 'two' },
+            '嘟嘟': { standard: '嘟嘟', type: 'berry', defaultLock: 'two' }, '嘟嘟利': { standard: '嘟嘟利', type: 'berry', defaultLock: 'two' }, '大岩蛇': { standard: '大岩蛇', type: 'berry', defaultLock: 'two' },
+            '卡拉卡拉': { standard: '卡拉卡拉', type: 'berry', defaultLock: 'two' }, '嘎啦嘎啦': { standard: '嘎啦嘎啦', type: 'berry', defaultLock: 'two' },
+            '伊布(佳节)': { standard: '伊布(佳节)', type: 'berry', defaultLock: 'two' }, '伊布（佳節）': { standard: '伊布(佳节)', type: 'berry', defaultLock: 'two' },
+            '菊草叶': { standard: '菊草叶', type: 'berry', defaultLock: 'two' }, '菊草葉': { standard: '菊草叶', type: 'berry', defaultLock: 'two' },
+            '月桂叶': { standard: '月桂叶', type: 'berry', defaultLock: 'two' }, '月桂葉': { standard: '月桂叶', type: 'berry', defaultLock: 'two' },
+            '大竺葵': { standard: '大竺葵', type: 'berry', defaultLock: 'two' }, '火球鼠': { standard: '火球鼠', type: 'berry', defaultLock: 'two' }, '火岩鼠': { standard: '火岩鼠', type: 'berry', defaultLock: 'two' },
+            '火暴兽': { standard: '火暴兽', type: 'berry', defaultLock: 'two' }, '火爆獸': { standard: '火暴兽', type: 'berry', defaultLock: 'two' },
+            '小锯鳄': { standard: '小锯鳄', type: 'berry', defaultLock: 'two' }, '小鏡鱷': { standard: '小锯鳄', type: 'berry', defaultLock: 'two' },
+            '蓝鳄': { standard: '蓝鳄', type: 'berry', defaultLock: 'two' }, '藍鱷': { standard: '蓝鳄', type: 'berry', defaultLock: 'two' },
+            '大力鳄': { standard: '大力鳄', type: 'berry', defaultLock: 'two' }, '大力鱷': { standard: '大力鳄', type: 'berry', defaultLock: 'two' },
+            '皮丘': { standard: '皮丘', type: 'berry', defaultLock: 'two' }, '皮宝宝': { standard: '皮宝宝', type: 'berry', defaultLock: 'two' }, '皮寶寶': { standard: '皮宝宝', type: 'berry', defaultLock: 'two' },
+            '天然雀': { standard: '天然雀', type: 'berry', defaultLock: 'two' }, '天然鸟': { standard: '天然鸟', type: 'berry', defaultLock: 'two' }, '天然鳥': { standard: '天然鸟', type: 'berry', defaultLock: 'two' },
+            '大钢蛇': { standard: '大钢蛇', type: 'berry', defaultLock: 'two' }, '大鋼蛇': { standard: '大钢蛇', type: 'berry', defaultLock: 'two' },
+            '狃拉': { standard: '狃拉', type: 'berry', defaultLock: 'two' }, '火稚鸡': { standard: '火稚鸡', type: 'berry', defaultLock: 'two' }, '火稚雞': { standard: '火稚鸡', type: 'berry', defaultLock: 'two' },
+            '戴鲁比': { standard: '戴鲁比', type: 'berry', defaultLock: 'two' }, '戴魯比': { standard: '戴鲁比', type: 'berry', defaultLock: 'two' },
+            '黑鲁加': { standard: '黑鲁加', type: 'berry', defaultLock: 'two' }, '黑魯加': { standard: '黑鲁加', type: 'berry', defaultLock: 'two' },
+            '力壮鸡': { standard: '力壮鸡', type: 'berry', defaultLock: 'two' }, '力壯雞': { standard: '力壮鸡', type: 'berry', defaultLock: 'two' },
+            '火焰鸡': { standard: '火焰鸡', type: 'berry', defaultLock: 'two' }, '火焰雞': { standard: '火焰鸡', type: 'berry', defaultLock: 'two' },
+            '水跃鱼': { standard: '水跃鱼', type: 'berry', defaultLock: 'two' }, '水躍魚': { standard: '水跃鱼', type: 'berry', defaultLock: 'two' },
+            '沼跃鱼': { standard: '沼跃鱼', type: 'berry', defaultLock: 'two' }, '沼躍魚': { standard: '沼跃鱼', type: 'berry', defaultLock: 'two' },
+            '巨沼怪': { standard: '巨沼怪', type: 'berry', defaultLock: 'two' }, '懒人獭': { standard: '懒人獭', type: 'berry', defaultLock: 'two' }, '懶人獺': { standard: '懒人獭', type: 'berry', defaultLock: 'two' },
+            '过动猿': { standard: '过动猿', type: 'berry', defaultLock: 'two' }, '過動猿': { standard: '过动猿', type: 'berry', defaultLock: 'two' },
+            '请假王': { standard: '请假王', type: 'berry', defaultLock: 'two' }, '請假王': { standard: '请假王', type: 'berry', defaultLock: 'two' },
+            '青绵鸟': { standard: '青绵鸟', type: 'berry', defaultLock: 'two' }, '青綿鳥': { standard: '青绵鸟', type: 'berry', defaultLock: 'two' },
+            '七夕青鸟': { standard: '七夕青鸟', type: 'berry', defaultLock: 'two' }, '七夕青鳥': { standard: '七夕青鸟', type: 'berry', defaultLock: 'two' },
+            '怨影娃娃': { standard: '怨影娃娃', type: 'berry', defaultLock: 'two' }, '诅咒娃娃': { standard: '诅咒娃娃', type: 'berry', defaultLock: 'two' }, '遞詛娃娃': { standard: '诅咒娃娃', type: 'berry', defaultLock: 'two' },
+            '海豹球': { standard: '海豹球', type: 'berry', defaultLock: 'two' }, '海魔狮': { standard: '海魔狮', type: 'berry', defaultLock: 'two' }, '海魔獅': { standard: '海魔狮', type: 'berry', defaultLock: 'two' },
+            '帝牙海狮': { standard: '帝牙海狮', type: 'berry', defaultLock: 'two' }, '帝牙海獅': { standard: '帝牙海狮', type: 'berry', defaultLock: 'two' },
+            '宝贝龙': { standard: '宝贝龙', type: 'berry', defaultLock: 'two' }, '寶貝龍': { standard: '宝贝龙', type: 'berry', defaultLock: 'two' },
+            '甲壳龙': { standard: '甲壳龙', type: 'berry', defaultLock: 'two' }, '甲殼幫': { standard: '甲壳龙', type: 'berry', defaultLock: 'two' },
+            '暴飞龙': { standard: '暴飞龙', type: 'berry', defaultLock: 'two' }, '暴飛龍': { standard: '暴飞龙', type: 'berry', defaultLock: 'two' },
+            '玛狃拉': { standard: '玛狃拉', type: 'berry', defaultLock: 'two' }, '瑪狃拉': { standard: '玛狃拉', type: 'berry', defaultLock: 'two' },
+            '食梦梦': { standard: '食梦梦', type: 'berry', defaultLock: 'two' }, '食夢夢': { standard: '食梦梦', type: 'berry', defaultLock: 'two' },
+            '梦梦蚀': { standard: '梦梦蚀', type: 'berry', defaultLock: 'two' }, '夢夢蝕': { standard: '梦梦蚀', type: 'berry', defaultLock: 'two' },
+            '宝宝暴龙': { standard: '宝宝暴龙', type: 'berry', defaultLock: 'two' }, '寶寶暴龍': { standard: '宝宝暴龙', type: 'berry', defaultLock: 'two' },
+            '怪颚龙': { standard: '怪颚龙', type: 'berry', defaultLock: 'two' }, '怪顎龍': { standard: '怪颚龙', type: 'berry', defaultLock: 'two' },
+
+            '妙蛙种子': { standard: '妙蛙种子', type: 'food', defaultLock: 'none' }, '妙蛙種子': { standard: '妙蛙种子', type: 'food', defaultLock: 'none' },
+            '妙蛙草': { standard: '妙蛙草', type: 'food', defaultLock: 'none' }, '妙蛙花': { standard: '妙蛙花', type: 'food', defaultLock: 'none' },
+            '小火龙': { standard: '小火龙', type: 'food', defaultLock: 'none' }, '小火龍': { standard: '小火龙', type: 'food', defaultLock: 'none' },
+            '火恐龙': { standard: '火恐龙', type: 'food', defaultLock: 'none' }, '火恐龍': { standard: '火恐龙', type: 'food', defaultLock: 'none' },
+            '喷火龙': { standard: '喷火龙', type: 'food', defaultLock: 'none' }, '噴火龍': { standard: '喷火龙', type: 'food', defaultLock: 'none' },
+            '杰尼龟': { standard: '杰尼龟', type: 'food', defaultLock: 'none' }, '傑尼龜': { standard: '杰尼龟', type: 'food', defaultLock: 'none' },
+            '卡咪龟': { standard: '卡咪龟', type: 'food', defaultLock: 'none' }, '卡咪龜': { standard: '卡咪龟', type: 'food', defaultLock: 'none' },
+            '水箭龟': { standard: '水箭龟', type: 'food', defaultLock: 'none' }, '水箭龜': { standard: '水箭龟', type: 'food', defaultLock: 'none' },
+            '地鼠': { standard: '地鼠', type: 'food', defaultLock: 'none' }, '三地鼠': { standard: '三地鼠', type: 'food', defaultLock: 'none' },
+            '喇叭芽': { standard: '喇叭芽', type: 'food', defaultLock: 'none' }, '口呆花': { standard: '口呆花', type: 'food', defaultLock: 'none' }, '大食花': { standard: '大食花', type: 'food', defaultLock: 'none' },
+            '小拳石': { standard: '小拳石', type: 'food', defaultLock: 'none' }, '隆隆石': { standard: '隆隆石', type: 'food', defaultLock: 'none' }, '隆隆岩': { standard: '隆隆岩', type: 'food', defaultLock: 'none' },
+            '大葱鸭': { standard: '大葱鸭', type: 'food', defaultLock: 'none' }, '大蔥鴨': { standard: '大葱鸭', type: 'food', defaultLock: 'none' },
+            '鬼斯': { standard: '鬼斯', type: 'food', defaultLock: 'none' }, '鬼斯通': { standard: '鬼斯通', type: 'food', defaultLock: 'none' }, '耿鬼': { standard: '耿鬼', type: 'food', defaultLock: 'none' },
+            '吉利蛋': { standard: '吉利蛋', type: 'food', defaultLock: 'none' }, '幸福蛋': { standard: '幸福蛋', type: 'food', defaultLock: 'none' },
+            '袋兽': { standard: '袋兽', type: 'food', defaultLock: 'none' }, '袋獸': { standard: '袋兽', type: 'food', defaultLock: 'none' },
+            '魔墙人偶': { standard: '魔墙人偶', type: 'food', defaultLock: 'none' }, '魔牆人偶': { standard: '魔墙人偶', type: 'food', defaultLock: 'none' },
+            '凯罗斯': { standard: '凯罗斯', type: 'food', defaultLock: 'none' }, '凱羅斯': { standard: '凯罗斯', type: 'food', defaultLock: 'none' },
+            '百变怪': { standard: '百变怪', type: 'food', defaultLock: 'none' }, '百變怪': { standard: '百变怪', type: 'food', defaultLock: 'none' },
+            '迷你龙': { standard: '迷你龙', type: 'food', defaultLock: 'none' }, '迷你龍': { standard: '迷你龙', type: 'food', defaultLock: 'none' },
+            '哈克龙': { standard: '哈克龙', type: 'food', defaultLock: 'none' }, '哈克龍': { standard: '哈克龙', type: 'food', defaultLock: 'none' },
+            '快龙': { standard: '快龙', type: 'food', defaultLock: 'none' }, '快龍': { standard: '快龙', type: 'food', defaultLock: 'none' },
+            '乌波': { standard: '乌波', type: 'food', defaultLock: 'none' }, '烏波': { standard: '乌波', type: 'food', defaultLock: 'none' },
+            '乌波(帕底亚的样子)': { standard: '乌波(帕底亚的样子)', type: 'food', defaultLock: 'none' }, '烏波（帕底亞的樣子）': { standard: '乌波(帕底亚的样子)', type: 'food', defaultLock: 'none' },
+            '沼王': { standard: '沼王', type: 'food', defaultLock: 'none' }, '信使鸟': { standard: '信使鸟', type: 'food', defaultLock: 'none' }, '信使鳥': { standard: '信使鸟', type: 'food', defaultLock: 'none' },
+            '幼基拉斯': { standard: '幼基拉斯', type: 'food', defaultLock: 'none' }, '沙基拉斯': { standard: '沙基拉斯', type: 'food', defaultLock: 'none' }, '班基拉斯': { standard: '班基拉斯', type: 'food', defaultLock: 'none' },
+            '大嘴娃': { standard: '大嘴娃', type: 'food', defaultLock: 'none' }, '可可多拉': { standard: '可可多拉', type: 'food', defaultLock: 'none' },
+            '可多拉': { standard: '可多拉', type: 'food', defaultLock: 'none' }, '波士可多拉': { standard: '波士可多拉', type: 'food', defaultLock: 'none' },
+            '大颚蚁': { standard: '大颚蚁', type: 'food', defaultLock: 'none' }, '大顎蟻': { standard: '大颚蚁', type: 'food', defaultLock: 'none' },
+            '超音波幼虫': { standard: '超音波幼虫', type: 'food', defaultLock: 'none' }, '超音波幼蟲': { standard: '超音波幼虫', type: 'food', defaultLock: 'none' },
+            '沙漠蜻蜓': { standard: '沙漠蜻蜓', type: 'food', defaultLock: 'none' }, '阿勃梭鲁': { standard: '阿勃梭鲁', type: 'food', defaultLock: 'none' }, '阿勃梭魯': { standard: '阿勃梭鲁', type: 'food', defaultLock: 'none' },
+            '小猫怪': { standard: '小猫怪', type: 'food', defaultLock: 'none' }, '小貓怪': { standard: '小猫怪', type: 'food', defaultLock: 'none' },
+            '勒克猫': { standard: '勒克猫', type: 'food', defaultLock: 'none' }, '勒克貓': { standard: '勒克猫', type: 'food', defaultLock: 'none' },
+            '论琴猫': { standard: '论琴猫', type: 'food', defaultLock: 'none' }, '倫琴貓': { standard: '论琴猫', type: 'food', defaultLock: 'none' },
+            '魔尼尼': { standard: '魔尼尼', type: 'food', defaultLock: 'none' }, '小福蛋': { standard: '小福蛋', type: 'food', defaultLock: 'none' }, '花岩怪': { standard: '花岩怪', type: 'food', defaultLock: 'none' },
+            '不良蛙': { standard: '不良蛙', type: 'food', defaultLock: 'none' }, '毒骷蛙': { standard: '毒骷蛙', type: 'food', defaultLock: 'none' }, '雪笠怪': { standard: '雪笠怪', type: 'food', defaultLock: 'none' }, '暴雪王': { standard: '暴雪王', type: 'food', defaultLock: 'none' },
+            '强颚鸡母虫': { standard: '强颚鸡母虫', type: 'food', defaultLock: 'none' }, '強顎雞母蟲': { standard: '强颚鸡母虫', type: 'food', defaultLock: 'none' },
+            '虫电宝': { standard: '虫电宝', type: 'food', defaultLock: 'none' }, '蟲電寶': { standard: '虫电宝', type: 'food', defaultLock: 'none' },
+            '锹农炮虫': { standard: '锹农炮虫', type: 'food', defaultLock: 'none' }, '鍬農炮蟲': { standard: '锹农炮虫', type: 'food', defaultLock: 'none' },
+            '萌虻': { standard: '萌虻', type: 'food', defaultLock: 'none' }, '蝶结萌虻': { standard: '蝶结萌虻', type: 'food', defaultLock: 'none' }, '蝶結萌虻': { standard: '蝶结萌虻', type: 'food', defaultLock: 'none' },
+            '童偶熊': { standard: '童偶熊', type: 'food', defaultLock: 'none' }, '穿着熊': { standard: '穿着熊', type: 'food', defaultLock: 'none' }, '穿著熊': { standard: '穿着熊', type: 'food', defaultLock: 'none' },
+            '花疗环环': { standard: '花疗环环', type: 'food', defaultLock: 'none' },
+            '老翁龙': { standard: '老翁龙', type: 'food', defaultLock: 'none' }, '老翁長': { standard: '老翁龙', type: 'food', defaultLock: 'none' },
+            '古月鸟': { standard: '古月鸟', type: 'food', defaultLock: 'none' }, '古月鳥': { standard: '古月鸟', type: 'food', defaultLock: 'none' },
+            '新叶喵': { standard: '新叶喵', type: 'food', defaultLock: 'none' }, '新葉喵': { standard: '新叶喵', type: 'food', defaultLock: 'none' },
+            '蒂蕾喵': { standard: '蒂蕾喵', type: 'food', defaultLock: 'none' }, '魔幻假面喵': { standard: '魔幻假面喵', type: 'food', defaultLock: 'none' },
+            '呆火鳄': { standard: '呆火鳄', type: 'food', defaultLock: 'none' }, '呆火鱷': { standard: '呆火鳄', type: 'food', defaultLock: 'none' },
+            '炙烫鳄': { standard: '炙烫鳄', type: 'food', defaultLock: 'none' }, '炙燙鱷': { standard: '炙烫鳄', type: 'food', defaultLock: 'none' },
+            '骨纹巨声鳄': { standard: '骨纹巨声鳄', type: 'food', defaultLock: 'none' }, '骨紋巨聲鱷': { standard: '骨纹巨声鳄', type: 'food', defaultLock: 'none' },
+            '润水鸭': { standard: '润水鸭', type: 'food', defaultLock: 'none' }, '潤水鴨': { standard: '润水鸭', type: 'food', defaultLock: 'none' },
+            '涌跃鸭': { standard: '涌跃鸭', type: 'food', defaultLock: 'none' }, '湧躍鴨': { standard: '涌跃鸭', type: 'food', defaultLock: 'none' },
+            '狂欢浪舞鸭': { standard: '狂欢浪舞鸭', type: 'food', defaultLock: 'none' }, '狂歡浪舞鴨': { standard: '狂欢浪舞鸭', type: 'food', defaultLock: 'none' },
+            '走鲸': { standard: '走鲸', type: 'food', defaultLock: 'none' }, '走鯨': { standard: '走鲸', type: 'food', defaultLock: 'none' },
+            '浩大鲸': { standard: '浩大鲸', type: 'food', defaultLock: 'none' }, '浩大鯨': { standard: '浩大鲸', type: 'food', defaultLock: 'none' },
+            '土王': { standard: '土王', type: 'food', defaultLock: 'none' },
+
+            '皮卡丘(佳节)': { standard: '皮卡丘(佳节)', type: 'skill', defaultLock: 'none' }, '皮卡丘（佳節）': { standard: '皮卡丘(佳节)', type: 'skill', defaultLock: 'none' },
+            '穿山鼠': { standard: '穿山鼠', type: 'skill', defaultLock: 'none' }, '穿山王': { standard: '穿山王', type: 'skill', defaultLock: 'none' },
+            '胖丁': { standard: '胖丁', type: 'skill', defaultLock: 'none' }, '胖可丁': { standard: '胖可丁', type: 'skill', defaultLock: 'none' },
+            '喵喵': { standard: '喵喵', type: 'skill', defaultLock: 'none' }, '穿山王': { standard: '猫老大', type: 'skill', defaultLock: 'none' }, '貓老大': { standard: '猫老大', type: 'skill', defaultLock: 'none' },
+            '小磁怪': { standard: '小磁怪', type: 'skill', defaultLock: 'none' }, '三合一磁怪': { standard: '三合一磁怪', type: 'skill', defaultLock: 'none' },
+            '波克比': { standard: '波克比', type: 'skill', defaultLock: 'none' }, '波克基古': { standard: '波克基古', type: 'skill', defaultLock: 'none' },
+            '雷公': { standard: '雷公', type: 'skill', defaultLock: 'none' }, '炎帝': { standard: '炎帝', type: 'skill', defaultLock: 'none' }, '水君': { standard: '水君', type: 'skill', defaultLock: 'none' },
+            '拉鲁拉丝': { standard: '拉鲁拉丝', type: 'skill', defaultLock: 'none' }, '拉魯拉絲': { standard: '拉鲁拉丝', type: 'skill', defaultLock: 'none' },
+            '奇鲁莉安': { standard: '奇鲁莉安', type: 'skill', defaultLock: 'none' }, '奇魯莉安': { standard: '奇鲁莉安', type: 'skill', defaultLock: 'none' },
+            '沙奈朵': { standard: '沙奈朵', type: 'skill', defaultLock: 'none' }, '勾魂眼': { standard: '勾魂眼', type: 'skill', defaultLock: 'none' },
+            '正电拍拍': { standard: '正电拍拍', type: 'skill', defaultLock: 'none' }, '正電拍拍': { standard: '正电拍拍', type: 'skill', defaultLock: 'none' },
+            '负电拍拍': { standard: '负电拍拍', type: 'skill', defaultLock: 'none' }, '負電拍拍': { standard: '负电拍拍', type: 'skill', defaultLock: 'none' },
+            '溶食兽': { standard: '溶食兽', type: 'skill', defaultLock: 'none' }, '溶食獸': { standard: '溶食兽', type: 'skill', defaultLock: 'none' },
+            '吞食兽': { standard: '吞食兽', type: 'skill', defaultLock: 'none' }, '吞食獸': { standard: '吞食兽', type: 'skill', defaultLock: 'none' },
+            '小果然': { standard: '小果然', type: 'skill', defaultLock: 'none' },
+            '海豹球(佳节)': { standard: '海豹球(佳节)', type: 'skill', defaultLock: 'none' }, '海豹球（佳節）': { standard: '海豹球(佳节)', type: 'skill', defaultLock: 'none' },
+            '拉帝亚斯': { standard: '拉帝亚斯', type: 'special_skill', defaultLock: 'none' }, '拉帝亞斯': { standard: '拉帝亚斯', type: 'special_skill', defaultLock: 'none' },
+            '拉帝欧斯': { standard: '拉帝欧斯', type: 'special_skill', defaultLock: 'none' }, '拉帝歐斯': { standard: '拉帝欧斯', type: 'skill', defaultLock: 'none' },
+            '自爆磁怪': { standard: '自爆磁怪', type: 'skill', defaultLock: 'none' }, '波克基斯': { standard: '波克基斯', type: 'skill', defaultLock: 'none' },
+            '艾路雷朵': { standard: '艾路雷朵', type: 'skill', defaultLock: 'none' }, '克雷色利亚': { standard: '克雷色利亚', type: 'skill', defaultLock: 'none' }, '克雷色利亞': { standard: '克雷色利亚', type: 'skill', defaultLock: 'none' },
+            '石居蟹': { standard: '石居蟹', type: 'skill', defaultLock: 'none' }, '岩殿居蟹': { standard: '岩殿居蟹', type: 'skill', defaultLock: 'none' },
+            '托戈德玛尔': { standard: '托戈德玛尔', type: 'skill', defaultLock: 'none' }, '托戈德瑪爾': { standard: '托戈德玛尔', type: 'skill', defaultLock: 'none' },
+            '毒电婴': { standard: '毒电婴', type: 'skill', defaultLock: 'none' }, '毒電嬰': { standard: '毒电婴', type: 'skill', defaultLock: 'none' },
+            '布拨': { standard: '布拨', type: 'skill', defaultLock: 'none' }, '布撥': { standard: '布拨', type: 'skill', defaultLock: 'none' },
+            '布土拨': { standard: '布土拨', type: 'skill', defaultLock: 'none' }, '布土撥': { standard: '布土拨', type: 'skill', defaultLock: 'none' },
+            '巴布土拨': { standard: '巴布土拨', type: 'skill', defaultLock: 'none' }, '巴布土撥': { standard: '巴布土拨', type: 'skill', defaultLock: 'none' },
+            '利欧路': { standard: '利欧路', type: 'skill', defaultLock: 'none' }, '利歐路': { standard: '利欧路', type: 'skill', defaultLock: 'none' },
+            '路卡利欧': { standard: '路卡利欧', type: 'skill', defaultLock: 'none' }, '路卡利歐': { standard: '路卡利欧', type: 'skill', defaultLock: 'none' },
+            '咚咚鼠': { standard: '咚咚鼠', type: 'skill', defaultLock: 'none' },
+
+            '木守宫': { standard: '木守宫', type: 'special_skill', defaultLock: 'none' }, '木守宮': { standard: '木守宫', type: 'special_skill', defaultLock: 'none' },
+            '森林蜥蜴': { standard: '森林蜥蜴', type: 'special_skill', defaultLock: 'none' },
+            '蜥蜴王': { standard: '蜥蜴王', type: 'special_skill', defaultLock: 'none' },
+            '飘飘球': { standard: '飘飘球', type: 'special_skill', defaultLock: 'none' }, '飄飄球': { standard: '飘飘球', type: 'special_skill', defaultLock: 'none' },
+            '随风球': { standard: '随风球', type: 'special_skill', defaultLock: 'none' }, '隨風球': { standard: '随风球', type: 'special_skill', defaultLock: 'none' },
+            '嗡蝠': { standard: '嗡蝠', type: 'special_skill', defaultLock: 'none' },
+            '音波龙': { standard: '音波龙', type: 'special_skill', defaultLock: 'none' }, '音波龍': { standard: '音波龙', type: 'special_skill', defaultLock: 'none' },
+            '谜拟Q': { standard: '谜拟Q', type: 'special_skill', defaultLock: 'none' }, '謎擬Q': { standard: '谜拟Q', type: 'special_skill', defaultLock: 'none' },
+            '咩利羊': { standard: '咩利羊', type: 'special_skill', defaultLock: 'none' },
+            '茸茸': { standard: '茸茸', type: 'special_skill', defaultLock: 'none' }, '茸茸羊': { standard: '茸茸', type: 'special_skill', defaultLock: 'none' },
+            '电龙': { standard: '电龙', type: 'special_skill', defaultLock: 'none' }, '電龍': { standard: '电龙', type: 'special_skill', defaultLock: 'none' },
+            '可达鸭': { standard: '可达鸭', type: 'special_skill', defaultLock: 'none' }, '可達鴨': { standard: '可达鸭', type: 'special_skill', defaultLock: 'none' },
+            '哥达鸭': { standard: '哥达鸭', type: 'special_skill', defaultLock: 'none' }, '哥達鴨': { standard: '哥达鸭', type: 'special_skill', defaultLock: 'none' },
+            '盆才怪': { standard: '盆才怪', type: 'special_skill', defaultLock: 'none' },
+            '树才怪': { standard: '树才怪', type: 'special_skill', defaultLock: 'none' }, '樹才怪': { standard: '树才怪', type: 'special_skill', defaultLock: 'none' },
+            '毛头小鹰': { standard: '毛头小鹰', type: 'special_skill', defaultLock: 'none' }, '毛頭小鷹': { standard: '毛头小鹰', type: 'special_skill', defaultLock: 'none' },
+            '勇士雄鹰': { standard: '勇士雄鹰', type: 'special_skill', defaultLock: 'none' }, '勇士雄鷹': { standard: '勇士雄鹰', type: 'special_skill', defaultLock: 'none' },
+            '伊布': { standard: '伊布', type: 'special_skill', defaultLock: 'none' },
+            '水伊布': { standard: '水伊布', type: 'special_skill', defaultLock: 'none' },
+            '雷伊布': { standard: '雷伊布', type: 'special_skill', defaultLock: 'none' },
+            '火伊布': { standard: '火伊布', type: 'special_skill', defaultLock: 'none' },
+            '太阳伊布': { standard: '太阳伊布', type: 'special_skill', defaultLock: 'none' }, '太陽伊布': { standard: '太阳伊布', type: 'special_skill', defaultLock: 'none' },
+            '月亮伊布': { standard: '月亮伊布', type: 'special_skill', defaultLock: 'none' },
+            '叶伊布': { standard: '叶伊布', type: 'special_skill', defaultLock: 'none' }, '葉伊布': { standard: '叶伊布', type: 'special_skill', defaultLock: 'none' },
+            '冰伊布': { standard: '冰伊布', type: 'special_skill', defaultLock: 'none' },
+            '仙子伊布': { standard: '仙子伊布', type: 'special_skill', defaultLock: 'none' }
+        };
+
+        function updateAddPanelWeights() {
+            const nameInput = document.getElementById('input-name');
+            const container = document.getElementById('add-quantities-container');
+            if (!container) return;
+
+            let rawName = nameInput.value.trim();
+            let standardName = rawName;
+            if (pokemonDictionary[rawName]) {
+                standardName = pokemonDictionary[rawName].standard;
+            }
+
+            let isBoth = FOOD_MODE_BOTH.includes(standardName);
+
+            if (isBoth) {
+                container.innerHTML = `
+                <div class="flex flex-col gap-1 bg-slate-50 p-2 rounded-xl border border-slate-200 text-[10px] w-full">
+                    <div class="grid grid-cols-5 gap-1 items-center text-center font-bold text-slate-400 border-b border-slate-200/60 pb-1">
+                        <div class="text-left pl-1">追加食材</div><div>和解</div><div>毕业</div><div>大毕业</div><div>金帮毕业</div>
+                    </div>
+                    <div class="grid grid-cols-5 gap-1.5 items-center text-center">
+                        <div class="text-left font-black text-indigo-600 pl-1">AAA 纯净</div>
+                        <input type="number" id="num-tied-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
+                        <input type="number" id="num-grad-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
+                        <input type="number" id="num-big-grad-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
+                        <input type="number" id="num-gold-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
+                    </div>
+                    <div class="grid grid-cols-5 gap-1.5 items-center text-center">
+                        <div class="text-left font-black text-emerald-600 pl-1">ABB 多产</div>
+                        <input type="number" id="num-tied-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-amber-700 focus:outline-none focus:border-amber-400">
+                        <input type="number" id="num-grad-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-slate-700 focus:outline-none focus:border-slate-400">
+                        <input type="number" id="num-big-grad-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-purple-700 focus:outline-none focus:border-purple-400">
+                        <input type="number" id="num-gold-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-red-700 focus:outline-none focus:border-red-700">
+                    </div>
+                </div>`;
+            } else {
+                container.innerHTML = `
+                <div class="grid grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
+                    <div class="text-center">
+                        <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
+                        <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
+                    </div>
+                    <div class="text-center">
+                        <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
+                        <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
+                    </div>
+                    <div class="text-center">
+                        <span class="block text-[10px] font-bold text-purple-600 mb-1">追加大毕业</span>
+                        <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
+                    </div>
+                    <div class="text-center">
+                        <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮</span>
+                        <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
+                    </div>
+                </div>`;
+            }
+        }
+
+        function handleNameInput() {
+            const inputEl = document.getElementById('input-name');
+            const suggestEl = document.getElementById('suggestion-box');
+            const lockSelect = document.getElementById('input-lock-mode');
+            
+            let query = inputEl.value.trim().toLowerCase();
+            if (!query) {
+                suggestEl.innerHTML = '';
+                suggestEl.classList.add('hidden');
+                updateAddPanelWeights();
+                return;
+            }
+
+            let matches = [];
+            for (let key in pokemonDictionary) {
+                if (key.toLowerCase().includes(query)) {
+                    let sName = pokemonDictionary[key].standard;
+                    if (!matches.includes(sName)) matches.push(sName);
+                }
+            }
+
+            if (matches.length === 0) {
+                suggestEl.innerHTML = '';
+                suggestEl.classList.add('hidden');
+                return;
+            }
+
+            suggestEl.innerHTML = matches.map(name => {
+                let dictItem = pokemonDictionary[name];
+                let typeText = dictItem.type === 'berry' ? '树果' : (dictItem.type === 'food' ? '食材' : (dictItem.type === 'skill' ? '技能' : '特殊技能'));
+                let colorClass = dictItem.type === 'berry' ? 'bg-amber-100 text-amber-800' : (dictItem.type === 'food' ? 'bg-emerald-100 text-emerald-800' : (dictItem.type === 'skill' ? 'bg-purple-100 text-purple-800' : 'bg-slate-200 text-slate-700'));
+                return `
+                <div onclick="selectSuggestion('${name}')" class="px-4 py-2.5 hover:bg-slate-100 cursor-pointer flex items-center justify-between text-xs font-bold transition">
+                    <span class="text-slate-900">${name}</span>
+                    <span class="px-2 py-0.5 rounded-md text-[10px] ${colorClass}">${typeText}型</span>
+                </div>`;
+            }).join('');
+
+            suggestEl.classList.remove('hidden');
+
+            if (pokemonDictionary[inputEl.value.trim()]) {
+                lockSelect.value = pokemonDictionary[inputEl.value.trim()].defaultLock;
+            }
+            updateAddPanelWeights();
+        }
+
+        function selectSuggestion(name) {
+            const inputEl = document.getElementById('input-name');
+            const suggestEl = document.getElementById('suggestion-box');
+            const lockSelect = document.getElementById('input-lock-mode');
+
+            inputEl.value = name; 
+            suggestEl.classList.add('hidden'); 
+
+            if (pokemonDictionary[name]) {
+                lockSelect.value = pokemonDictionary[name].defaultLock; 
+            }
+            updateAddPanelWeights();
+        }
+
+        function closeSuggestionsOutside(event) {
+            const suggestEl = document.getElementById('suggestion-box');
+            if (suggestEl) suggestEl.classList.add('hidden');
+        }
+
+        function filterByType(type) {
+            currentFilterType = type;
+            const types = ['all', 'berry', 'food', 'skill'];
+            types.forEach(t => {
+                const btn = document.getElementById(`filter-${t}`);
+                if (t === type) {
+                    btn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-900 text-white shadow-sm";
+                } else {
+                    btn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100";
+                }
+            });
+            updateBoxUI();
+        }
+
+        function triggerSearchFilter() {
+            updateBoxUI();
+        }
+
+        function updateBoxUI(saveToCloud = true) {
+            localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
+
+            if (saveToCloud) {
+                scheduleSaveBoxToCloud();
+            }            
+            let totalSpecies = playerBox.length;
+            let totalCatches = playerBox.reduce((sum, item) => sum + item.count, 0);
+            
+            let totalEvalCatches = playerBox.reduce((sum, item) => {
+                let dict = pokemonDictionary[item.name];
+                if (dict && dict.type === 'special_skill') return sum;
+                return sum + item.count;
+            }, 0);
+
+            let totalTied = playerBox.reduce((sum, item) => sum + item.tiedCount, 0);
+            let totalGrad = playerBox.reduce((sum, item) => sum + item.gradCount, 0);
+            let totalBigGrad = playerBox.reduce((sum, item) => sum + item.bigGradCount, 0);
+            let totalGoldGrad = playerBox.reduce((sum, item) => sum + item.goldGradCount, 0);
+
+            document.getElementById('total-species').innerText = totalSpecies + ' 种';
+            document.getElementById('total-catches').innerText = totalCatches + ' 只';
+            document.getElementById('total-eval-catches').innerText = totalEvalCatches + ' 只';
+            
+            document.getElementById('total-tied').innerText = totalTied;
+            document.getElementById('total-grad').innerText = totalGrad;
+            document.getElementById('total-big-grad').innerText = totalBigGrad;
+            document.getElementById('total-gold-grad').innerText = totalGoldGrad;
+
+            let searchKeyword = document.getElementById('search-box').value.trim().toLowerCase();
+            if (pokemonDictionary[searchKeyword]) searchKeyword = pokemonDictionary[searchKeyword].standard.toLowerCase();
+
+            let filteredBox = playerBox.filter(p => {
+                let matchType = true;
+                if (currentFilterType !== 'all') {
+                    let dictItem = pokemonDictionary[p.name];
+                    if (currentFilterType === 'skill') {
+                        matchType = (dictItem && (dictItem.type === 'skill' || dictItem.type === 'special_skill'));
+                    } else {
+                        matchType = (dictItem && dictItem.type === currentFilterType);
+                    }
+                }
+                let matchKeyword = true;
+                if (searchKeyword) matchKeyword = p.name.toLowerCase().includes(searchKeyword);
+                
+                let matchGraduated = true;
+                if (showOnlyGraduated) {
+                    let isTiedIncluded = (p.evalMode !== 'grad');
+                    let qualifiesCount = (p.goldGradCount || 0) + (p.bigGradCount || 0) + (p.gradCount || 0) + (isTiedIncluded ? (p.tiedCount || 0) : 0);
+                    matchGraduated = qualifiesCount > 0;
+                }
+                
+                return matchType && matchKeyword && matchGraduated;
+            });
+
+            const typeKeys = { all: '全盘大仓', berry: '树果型', food: '食材型', skill: '技能型' };
+
+            const onlyGradBtn = document.getElementById('filter-only-graduated');
+            if (onlyGradBtn) {
+                if (showOnlyGraduated) {
+                    onlyGradBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-600 text-white shadow-sm flex items-center gap-1 ml-2";
+                    onlyGradBtn.innerHTML = `<i class="fa-solid fa-eye"></i> 只看已出货: 开`;
+                } else {
+                    onlyGradBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1 ml-2";
+                    onlyGradBtn.innerHTML = `<i class="fa-solid fa-eye-slash"></i> 只看已出货: 关`;
+                }
+            }
+            
+            Object.keys(typeKeys).forEach(tk => {
+                let btn = document.getElementById(`filter-${tk}`);
+                if (btn) {
+                    let typeRate = getTypeLuckInfo(tk);
+                    if (typeRate !== null) btn.innerText = `${typeKeys[tk]} [击败${typeRate}%]`;
+                    else btn.innerText = typeKeys[tk]; 
+                }
+            });
+
+            const globalToggleBtn = document.getElementById('global-eval-toggle');
+            if (globalToggleBtn) {
+                if (playerBox.length === 0) {
+                    globalToggleBtn.innerHTML = `<i class="fa-solid fa-scale-unbalanced"></i> 全局标准`;
+                } else {
+                    let hasTiedMode = playerBox.some(p => (p.evalMode || 'tied') === 'tied');
+                    globalToggleBtn.innerHTML = `<i class="fa-solid ${hasTiedMode ? 'fa-bolt text-indigo-500' : 'fa-scale-unbalanced'}"></i> ${hasTiedMode ? '全局: 一键仅看毕业' : '全局: 一键包含和解'}`;
+                }
+            }
+
+            // 🚀 响应式大盘重绘：双核引擎完美重组
+            const panelEl = document.getElementById('luck-destiny-panel');
+            if (panelEl) {
+                let zBerry = getTypeLuckZ('berry');
+                let zFood = getTypeLuckZ('food');
+                let zSkill = getTypeLuckZ('skill');
+
+                let eBerry = zBerry !== null ? Math.exp(zBerry) : 0;
+                let eFood = zFood !== null ? Math.exp(zFood) : 0;
+                let eSkill = zSkill !== null ? Math.exp(zSkill) : 0;
+
+                let totalEnergy = eBerry + eFood + eSkill;
+
+                if (playerBox.length === 0 || totalEnergy === 0) {
+                    panelEl.classList.remove('flex');
+                    panelEl.classList.add('hidden');
+                } else {
+                    panelEl.classList.remove('hidden');
+                    panelEl.classList.add('flex');
+
+                    let pBerry = (eBerry / totalEnergy) * 100;
+                    let pFood = (eFood / totalEnergy) * 100;
+                    let pSkill = (eSkill / totalEnergy) * 100;
+
+                    let arc1 = pBerry;
+                    let arc2 = pBerry + pFood;
+                    const chartRender = document.getElementById('pie-chart-render');
+                    if (chartRender) {
+                        chartRender.style.background = `conic-gradient(#f59e0b 0% ${arc1}%, #10b981 ${arc1}% ${arc2}%, #a855f7 ${arc2}% 100%)`;
+                    }
+
+                    let rateAll = getTypeLuckInfo('all');
+                    let rateBerry = getTypeLuckInfo('berry');
+                    let rateFood = getTypeLuckInfo('food');
+                    let rateSkill = getTypeLuckInfo('skill');
+
+                    // 👑 核心绝杀更正：大仓总评分直接通过全大仓的 Meta-Z 联合击败率（rateAll）换算[cite: 3]！
+                    // 这完美回归了我们的公理：极端运气占绝对主导；少量捕捉且未出货的宠 Z 趋近 0，对总评分的干涉接近于 0[cite: 3]！
+                    let scoreBoxTotal = rateAll !== null ? convertRateToObjectiveScore(rateAll) : 50;
+
+                    let scoreBerry = convertRateToObjectiveScore(rateBerry);
+                    let scoreFood = convertRateToObjectiveScore(rateFood);
+                    let scoreSkill = convertRateToObjectiveScore(rateSkill);
+
+                    let countValidPairs = playerBox.filter(p => p.count && p.count > 0).length;
+
+                    // 刷新圆环正中心的全局打分显示
+                    const totalScoreEl = document.getElementById('pie-total-score');
+                    if (totalScoreEl) totalScoreEl.innerText = scoreBoxTotal.toFixed(1);
+
+                    let dominantText = "平庸之辈";
+                    if (eBerry >= eFood && eBerry >= eSkill) dominantText = "树果天命";
+                    else if (eFood >= eBerry && eFood >= eSkill) dominantText = "食材主宰";
+                    else dominantText = "技能核心";
+                    const dominantEl = document.getElementById('pie-dominant-type');
+                    if (dominantEl) dominantEl.innerText = dominantText;
+
+                    let getBoxTotalBadge = (score) => {
+                        if (score >= 90) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-gradient-to-r from-red-500 to-yellow-500 text-white shadow border border-red-400">命格: 欧寿无疆 (至尊)</span>`;
+                        if (score >= 75) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-amber-500 text-white border border-amber-400">命格: 好运连连 (强力)</span>`;
+                        if (score >= 45) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">命格: 安稳度日 (平民)</span>`;
+                        if (score >= 20) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-rose-100 text-rose-700 border border-rose-200">命格: 时运不济 (非酋)</span>`;
+                        return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-purple-900 text-purple-100 border border-purple-950">命格: 非气蚀骨 (非帝)</span>`;
+                    };
+
+                    let makeAbsBadge = (rate) => {
+                        if (rate === null) return `<span class="text-[9px] text-slate-400">暂无捕捉</span>`;
+                        if (rate >= 95) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-red-500 text-white border border-red-400">击败: ${rate}% (极欧)</span>`;
+                        if (rate >= 80) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-amber-500 text-white border border-amber-400">击败: ${rate}% (欧皇)</span>`;
+                        if (rate >= 40) return `<span class="text-[9px] px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">击败: ${rate}% (普通)</span>`;
+                        return `<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-rose-100 text-rose-700 border border-rose-200">击败: ${rate}% (非海)</span>`;
+                    };
+
+                    const legendEl = document.getElementById('pie-chart-legend');
+                    if (legendEl) {
+                        legendEl.innerHTML = `
+                        <!-- 👑 卡片 1：全局大仓总评卡 -->
+                        <div class="bg-slate-900 text-white p-3 rounded-2xl border border-slate-950 flex flex-col justify-between gap-2 shadow-md">
+                            <div>
+                                <div class="text-[10px] text-slate-400 font-bold flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span> 全局大仓总评</div>
+                                <div class="text-2xl font-black text-amber-400 mt-1 font-mono">${scoreBoxTotal.toFixed(1)} <span class="text-xs font-bold text-slate-400">pts</span></div>
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <div class="mt-0.5">${getBoxTotalBadge(scoreBoxTotal)}</div>
+                                <div class="text-[9px] text-slate-400 font-semibold">有效测评品类: ${countValidPairs} 种</div>
+                            </div>
+                        </div>
+                        <!-- 卡片 2：树果 -->
+                        <div class="bg-amber-50/60 p-3 rounded-2xl border border-amber-200/30 flex flex-col justify-between gap-2">
+                            <div>
+                                <div class="text-[10px] text-amber-700 font-bold flex items-center justify-between">
+                                    <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> 树果型命格</span>
+                                    <span class="text-[9px] text-slate-400 font-normal">占比 ${pBerry.toFixed(1)}%</span>
+                                </div>
+                                <div class="text-2xl font-black text-amber-600 mt-1 font-mono">${scoreBerry !== null ? scoreBerry.toFixed(1) : '-'} <span class="text-xs font-bold text-slate-400">pts</span></div>
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <div class="mt-0.5">${makeAbsBadge(rateBerry)}</div>
+                                <div class="text-[9px] text-slate-400 font-mono font-medium">能量指数: ${eBerry.toFixed(2)}</div>
+                            </div>
+                        </div>
+                        <!-- 卡片 3：食材 -->
+                        <div class="bg-emerald-50/60 p-3 rounded-2xl border border-emerald-200/30 flex flex-col justify-between gap-2">
+                            <div>
+                                <div class="text-[10px] text-emerald-700 font-bold flex items-center justify-between">
+                                    <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 食材型命格</span>
+                                    <span class="text-[9px] text-slate-400 font-normal">占比 ${pFood.toFixed(1)}%</span>
+                                </div>
+                                <div class="text-2xl font-black text-emerald-600 mt-1 font-mono">${scoreFood !== null ? scoreFood.toFixed(1) : '-'} <span class="text-xs font-bold text-slate-400">pts</span></div>
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <div class="mt-0.5">${makeAbsBadge(rateFood)}</div>
+                                <div class="text-[9px] text-slate-400 font-mono font-medium">能量指数: ${eFood.toFixed(2)}</div>
+                            </div>
+                        </div>
+                        <!-- 卡片 4：技能 -->
+                        <div class="bg-purple-50/60 p-3 rounded-2xl border border-purple-200/30 flex flex-col justify-between gap-2">
+                            <div>
+                                <div class="text-[10px] text-purple-700 font-bold flex items-center justify-between">
+                                    <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span> 技能型命格</span>
+                                    <span class="text-[9px] text-slate-400 font-normal">占比 ${pSkill.toFixed(1)}%</span>
+                                </div>
+                                <div class="text-2xl font-black text-purple-600 mt-1 font-mono">${scoreSkill !== null ? scoreSkill.toFixed(1) : '-'} <span class="text-xs font-bold text-slate-400">pts</span></div>
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <div class="mt-0.5">${makeAbsBadge(rateSkill)}</div>
+                                <div class="text-[9px] text-slate-400 font-mono font-medium">能量指数: ${eSkill.toFixed(2)}</div>
+                            </div>
+                        </div>`;
+                    }
+                }
+            }
+
+            const container = document.getElementById('box-container');
+            if (playerBox.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full bg-white rounded-3xl p-12 text-center border border-dashed border-slate-300 text-slate-400 text-xs">
+                        <i class="fa-solid fa-folder-open text-3xl block mb-3 text-slate-300"></i>目前大仓里空空如也，请在上方追加捕捉战绩！
+                    </div>`;
+                return;
+            }
+
+            if (filteredBox.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full bg-white rounded-3xl p-12 text-center border border-dashed border-slate-200 text-slate-400 text-xs">
+                        <i class="fa-solid fa-ban text-3xl block mb-3 text-slate-300"></i>未检索到符合当前条件的宝可梦。
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = filteredBox.map((p) => {
+                let idx = playerBox.findIndex(item => item.name === p.name);
+                let isBoth = FOOD_MODE_BOTH.includes(p.name);
+                let isAbbOnly = FOOD_MODE_ABB_ONLY.includes(p.name);
+                let isSpecialDowngrade = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
+
+                let dict = pokemonDictionary[p.name];
+                let typeLabel = '未知';
+                if (dict) typeLabel = dict.type === 'berry' ? '树果' : (dict.type === 'food' ? '食材' : (dict.type === 'skill' ? '技能' : '特殊技能'));
+                if (isBoth) typeLabel += "·双轨模式";
+                if (isAbbOnly) typeLabel += "·纯ABB模式";
+                if (isSpecialDowngrade) typeLabel += "·特异放宽标准";
+
+                let adviceHTML = '';
+                if (p.count === 0) adviceHTML = `<span class="text-slate-400"><i class="fa-solid fa-circle-notch mr-1"></i>尚未开始捕捉。</span>`;
+                else if (p.count < 8) adviceHTML = `<span class="text-slate-500"><i class="fa-solid fa-seedling mr-1"></i>区间：1-8只 (无保底)</span>`;
+                else if (p.count >= 8 && p.count < 39) adviceHTML = `<span class="text-slate-500"><i class="fa-solid fa-lock mr-1"></i>区间：9-38只 (锁一金)</span>`;
+                else adviceHTML = `<span class="text-slate-500"><i class="fa-solid fa-fire mr-1"></i>区间：39只+ (锁二金)</span>`;
+
+                let strategyText = p.lockMode === 'none' ? '不锁金' : (p.lockMode === 'one' ? '锁 1 金' : '锁 2 金');
+                let rate = calculateLuckPercentile(p);
+                let badgeColor = "bg-slate-100 text-slate-600"; 
+                if (rate >= 95) badgeColor = "bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 text-white font-black shadow-md animate-pulse"; 
+                else if (rate >= 80) badgeColor = "bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold shadow-sm"; 
+                else if (rate >= 40) badgeColor = "bg-emerald-100 text-emerald-800 font-medium"; 
+                else if (rate >= 15) badgeColor = "bg-slate-200 text-slate-700"; 
+                else badgeColor = "bg-rose-100 text-rose-700 font-black";
+
+                if (editingIndices[idx]) {
+                    return `
+                    <div class="bg-slate-50 p-5 rounded-3xl border-2 border-amber-400 shadow-md flex flex-col gap-3 transition">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs font-black text-slate-800 bg-amber-100 text-amber-800 px-2 py-0.5 rounded">精确覆写面板: ${p.name}</span>
+                            <div class="flex gap-2">
+                                <button onclick="saveInlineEdit(${idx})" class="text-xs bg-emerald-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-emerald-700 transition">保存</button>
+                                <button onclick="cancelInlineEdit(${idx})" class="text-xs bg-slate-300 text-slate-700 font-bold px-2.5 py-1 rounded-lg hover:bg-slate-400 transition">取消</button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                                <label class="block text-[10px] text-slate-400 font-bold mb-1">当前总抓捕数</label>
+                                <input type="number" id="edit-count-${idx}" value="${p.count}" class="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold font-mono text-center focus:border-amber-400 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-slate-400 font-bold mb-1">40+锁金策略</label>
+                                <select id="edit-lock-${idx}" class="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold focus:border-amber-400 focus:outline-none">
+                                    <option value="none" ${p.lockMode === 'none' ? 'selected' : ''}>不锁金</option>
+                                    <option value="one" ${p.lockMode === 'one' ? 'selected' : ''}>锁 1 金</option>
+                                    <option value="two" ${p.lockMode === 'two' ? 'selected' : ''}>锁 2 金</option>
+                                </select>
+                            </div>
+                        </div>
+                        ${isBoth ? `
+                        <div class="flex flex-col gap-2 bg-white p-3 rounded-xl border border-slate-200 text-[11px]">
+                            <div class="grid grid-cols-5 gap-1 items-center text-center font-bold text-slate-400 border-b border-slate-100 pb-1">
+                                    <div class="text-left pl-1">食材档</div><div>和解</div><div>毕业</div><div>大毕业</div><div>金帮毕业</div>
+                                </div>
+                                <div class="grid grid-cols-5 gap-1.5 items-center text-center">
+                                    <div class="text-left font-black text-indigo-600 pl-1">AAA 纯净</div>
+                                    <input type="number" id="edit-tied-aaa-${idx}" value="${p.tiedCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-amber-600 font-bold focus:border-amber-400">
+                                    <input type="number" id="edit-grad-aaa-${idx}" value="${p.gradCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-slate-800 font-bold focus:border-slate-400">
+                                    <input type="number" id="edit-big-grad-aaa-${idx}" value="${p.bigGradCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-purple-600 font-bold focus:border-purple-400">
+                                    <input type="number" id="edit-gold-aaa-${idx}" value="${p.goldGradCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-red-600 font-bold focus:border-red-400">
+                                </div>
+                                <div class="grid grid-cols-5 gap-1.5 items-center text-center">
+                                    <div class="text-left font-black text-emerald-600 pl-1">ABB 多产</div>
+                                    <input type="number" id="edit-tied-abb-${idx}" value="${p.tiedCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-amber-700 font-bold focus:border-amber-400">
+                                    <input type="number" id="edit-grad-abb-${idx}" value="${p.gradCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-slate-700 font-bold focus:border-slate-700">
+                                    <input type="number" id="edit-big-grad-abb-${idx}" value="${p.bigGradCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-purple-700 font-bold focus:border-purple-700">
+                                    <input type="number" id="edit-gold-abb-${idx}" value="${p.goldGradCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-red-700 font-bold focus:border-red-700">
+                                </div>
+                        </div>` : `
+                        <div class="grid ${isSpecialDowngrade ? 'grid-cols-3' : 'grid-cols-4'} gap-1 text-center bg-white p-2 rounded-xl border border-slate-200">
+                            ${isSpecialDowngrade ? '' : `
+                                <div><span class="block text-[9px] text-amber-600 font-bold mb-0.5">总和解</span><input type="number" id="edit-tied-${idx}" value="${p.tiedCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-amber-600"></div>
+                            `}
+                            <div><span class="block text-[9px] text-slate-600 font-bold mb-0.5">总毕业</span><input type="number" id="edit-grad-${idx}" value="${p.gradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-slate-800"></div>
+                            <div><span class="block text-[9px] text-purple-600 font-bold mb-0.5">总大毕业</span><input type="number" id="edit-big-grad-${idx}" value="${p.bigGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-purple-600"></div>
+                            <div><span class="block text-[9px] text-red-600 font-bold mb-0.5">总金帮</span><input type="number" id="edit-gold-grad-${idx}" value="${p.goldGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-red-600"></div>
+                        </div>`}
+                    </div>`;
+                }
+
+                return `
+                <div class="bg-white p-5 rounded-3xl border border-slate-200/60 shadow-sm flex flex-col justify-between gap-4">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h4 class="text-sm font-black text-slate-800">${p.name}</h4>
+                                <span class="text-[9px] font-bold bg-amber-50 text-amber-700 px-1 py-0.5 rounded border border-amber-200/40">${typeLabel}</span>
+                                <span class="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200/60">40+策略: ${strategyText}</span>
+                                ${rate !== null ? `<span class="text-[9px] px-1.5 py-0.5 rounded-md ${badgeColor}">击败了全服 ${rate}% 的玩家</span>` : ''}
+                            </div>
+                            <div class="text-[11px] text-slate-400 mt-1 font-mono font-semibold">
+                                已累计捕捉: <span class="text-slate-950 font-bold bg-slate-100 px-2 py-0.5 rounded-md text-xs">${p.count}</span> 只
+                            </div>
+                        </div>
+                        <div class="flex gap-3 items-center">
+                            ${isSpecialDowngrade ? '' : `
+                            <button onclick="togglePokemonStandard(${idx})" class="text-[11px] transition duration-150 flex items-center gap-0.5 ${p.evalMode === 'grad' ? 'text-indigo-600 font-bold bg-indigo-50 px-1.5 py-0.5 rounded-md border border-indigo-200/40' : 'text-slate-400 hover:text-amber-600'}" title="点击切换审计标准">
+                                <i class="fa-solid ${p.evalMode === 'grad' ? 'fa-bolt text-indigo-500' : 'fa-scale-unbalanced'}"></i>${p.evalMode === 'grad' ? '标准: 仅看毕业' : '标准: 包含和解'}
+                            </button>
+                            `}
+                            <button onclick="toggleInlineEdit(${idx})" class="text-slate-400 hover:text-amber-600 transition text-xs flex items-center gap-0.5"><i class="fa-solid fa-pen-to-square"></i> 修改</button>
+                            <button onclick="deletePokemon(${idx})" class="text-slate-300 hover:text-rose-500 transition p-1 text-xs"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>
+                    </div>
+                    <div class="grid ${isSpecialDowngrade ? 'grid-cols-3' : 'grid-cols-4'} gap-2 text-center bg-slate-50/50 p-2 rounded-xl border border-slate-100">
+                        ${isSpecialDowngrade ? '' : `
+                        <div class="px-1 py-1 rounded-lg ${p.tiedCount > 0 ? 'bg-amber-50 text-amber-700 font-bold' : 'text-slate-300'}">
+                            <div class="text-[9px]">和解</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
+                            ${isBoth && p.tiedCount > 0 ? `<div class="text-[8px] text-amber-600/70 font-normal scale-90">${p.tiedCount_AAA || 0}AAA / ${p.tiedCount_ABB || 0}ABB</div>` : ''}
+                        </div>
+                        `}
+                        <div class="px-1 py-1 rounded-lg ${p.gradCount > 0 ? 'bg-slate-100 text-slate-800 font-bold' : 'text-slate-300'}">
+                            <div class="text-[9px]">毕业</div><div class="text-xs font-mono mt-0.5">${p.gradCount}</div>
+                            ${isBoth && p.gradCount > 0 ? `<div class="text-[8px] text-slate-500 font-normal scale-90">${p.gradCount_AAA || 0}AAA / ${p.gradCount_ABB || 0}ABB</div>` : ''}
+                        </div>
+                        <div class="px-1 py-1 rounded-lg ${p.bigGradCount > 0 ? 'bg-purple-50 text-purple-600 font-bold' : 'text-slate-300'}">
+                            <div class="text-[9px]">大毕业</div><div class="text-xs font-mono mt-0.5">${p.bigGradCount}</div>
+                            ${isBoth && p.bigGradCount > 0 ? `<div class="text-[8px] text-purple-500/70 font-normal scale-90">${p.bigGradCount_AAA || 0}AAA/ ${p.bigGradCount_ABB || 0}ABB</div>` : ''}
+                        </div>
+                        <div class="px-1 py-1 rounded-lg ${p.goldGradCount > 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-300'}">
+                            <div class="text-[9px]">金帮</div><div class="text-xs font-mono mt-0.5">${p.goldGradCount}</div>
+                            ${isBoth && p.goldGradCount > 0 ? `<div class="text-[8px] text-red-500/70 font-normal scale-90">${p.goldGradCount_AAA || 0}AAA / ${p.goldGradCount_ABB || 0}ABB</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="border-t border-slate-50 pt-2.5 text-[11px] flex items-center justify-between">
+                        <div class="flex items-center gap-1">${adviceHTML}</div>
+                        ${dict && dict.type === 'special_skill' ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-shield-halved text-slate-400 mr-0.5"></i> 因技术问题暂不计入运气计算</div>` : ''}
+                        ${SPECIAL_STANDARD_DOWNGRADE.includes(p.name) ? `<div class="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/40"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 毕业标准降级，一般的和解即视为毕业</div>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function toggleInlineEdit(index) {
+            editingIndices[index] = true;
+            updateBoxUI();
+        }
+
+        function cancelInlineEdit(index) {
+            delete editingIndices[index];
+            updateBoxUI();
+        }
+
+        function addPokemon() {
+            const nameInput = document.getElementById('input-name');
+            const countInput = document.getElementById('input-count');
+            const lockInput = document.getElementById('input-lock-mode');
+            
+            let rawName = nameInput.value.trim();
+            let addedCount = parseInt(countInput.value) || 0;
+            let lockMode = lockInput.value;
+            
+            if (!rawName) {
+                showToast("请输入宝可梦名字！");
+                return;
+            }
+
+            let standardName = rawName;
+            if (pokemonDictionary[rawName]) standardName = pokemonDictionary[rawName].standard;
+
+            let isBoth = FOOD_MODE_BOTH.includes(standardName);
+            let addedTied = 0, addedGrad = 0, addedBigGrad = 0, addedGoldGrad = 0;
+            let tied_aaa = 0, tied_abb = 0, grad_aaa = 0, grad_abb = 0, big_aaa = 0, big_abb = 0, gold_aaa = 0, gold_abb = 0;
+
+            if (isBoth) {
+                tied_aaa = parseInt(document.getElementById('num-tied-aaa').value) || 0;
+                tied_abb = parseInt(document.getElementById('num-tied-abb').value) || 0;
+                addedTied = tied_aaa + tied_abb;
+
+                grad_aaa = parseInt(document.getElementById('num-grad-aaa').value) || 0;
+                grad_abb = parseInt(document.getElementById('num-grad-abb').value) || 0;
+                addedGrad = grad_aaa + grad_abb;
+
+                big_aaa = parseInt(document.getElementById('num-big-grad-aaa').value) || 0;
+                big_abb = parseInt(document.getElementById('num-big-grad-abb').value) || 0;
+                addedBigGrad = big_aaa + big_abb;
+
+                gold_aaa = parseInt(document.getElementById('num-gold-aaa').value) || 0;
+                gold_abb = parseInt(document.getElementById('num-gold-abb').value) || 0;
+                addedGoldGrad = gold_aaa + gold_abb;
+            } else {
+                addedTied = parseInt(document.getElementById('num-tied').value) || 0;
+                addedGrad = parseInt(document.getElementById('num-grad').value) || 0;
+                addedBigGrad = parseInt(document.getElementById('num-big-grad').value) || 0;
+                addedGoldGrad = parseInt(document.getElementById('num-gold-grad').value) || 0;
+            }
+
+            let existingIndex = playerBox.findIndex(item => item.name === standardName);
+
+            if (existingIndex > -1) {
+                let p = playerBox[existingIndex];
+                let newTotalCount = p.count + addedCount;
+                let newTied = p.tiedCount + addedTied;
+                let newGrad = p.gradCount + addedGrad;
+                let newBigGrad = p.bigGradCount + addedBigGrad;
+                let newGoldGrad = p.goldGradCount + addedGoldGrad;
+
+                if (newTied + newGrad + newBigGrad + newGoldGrad > newTotalCount) {
+                    showToast(`累加后矛盾！总出货数不能大于总捕捉数`);
+                    return;
+                }
+
+                p.count = newTotalCount;
+                p.lockMode = lockMode;
+                p.tiedCount = newTied;
+                p.gradCount = newGrad;
+                p.bigGradCount = newBigGrad;
+                p.goldGradCount = newGoldGrad;
+
+                if (isBoth) {
+                    p.tiedCount_AAA = (p.tiedCount_AAA || 0) + tied_aaa;
+                    p.tiedCount_ABB = (p.tiedCount_ABB || 0) + tied_abb;
+                    p.gradCount_AAA = (p.gradCount_AAA || 0) + grad_aaa;
+                    p.gradCount_ABB = (p.gradCount_ABB || 0) + grad_abb;
+                    p.bigGradCount_AAA = (p.bigGradCount_AAA || 0) + big_aaa;
+                    p.bigGradCount_ABB = (p.bigGradCount_ABB || 0) + big_abb;
+                    p.goldGradCount_AAA = (p.goldGradCount_AAA || 0) + gold_aaa;
+                    p.goldGradCount_ABB = (p.goldGradCount_ABB || 0) + gold_abb;
+                }
+                showToast(`已在【${standardName}】格中追加数据！`);
+            } else {
+                let totalGolds = addedTied + addedGrad + addedBigGrad + addedGoldGrad;
+                if (totalGolds > addedCount) {
+                    showToast(`数据矛盾！出货总数不能大于总捕捉数`);
+                    return;
+                }
+
+                let newRecord = {
+                    name: standardName,
+                    count: addedCount,
+                    lockMode: lockMode,
+                    tiedCount: addedTied,
+                    gradCount: addedGrad,
+                    bigGradCount: addedBigGrad,
+                    goldGradCount: addedGoldGrad,
+                    tiedCount_AAA: tied_aaa,
+                    tiedCount_ABB: tied_abb,
+                    gradCount_AAA: grad_aaa,
+                    gradCount_ABB: grad_abb,
+                    bigGradCount_AAA: big_aaa,
+                    bigGradCount_ABB: big_abb,
+                    goldGradCount_AAA: gold_aaa,
+                    goldGradCount_ABB: gold_abb
+                };
+                playerBox.unshift(newRecord);
+                showToast("成功创建【" + standardName + "】的官方种类资产格！");
+            }
+            
+            nameInput.value = '';
+            countInput.value = '0';
+            lockInput.value = 'two';
+
+            updateAddPanelWeights();
+            updateBoxUI();
+        }
+
+        function deletePokemon(index) {
+            if (confirm("确定要彻底注销该宝可梦种类的资产数据吗？")) {
+                playerBox.splice(index, 1);
+                if (editingIndices[index]) delete editingIndices[index];
+                updateBoxUI();
+                showToast("已成功移除。");
+            }
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-msg').innerText = msg;
+            toast.classList.remove('translate-y-24', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-24', 'opacity-0');
+            }, 2000);
+        }
+
+        async function loadBoxFromCloud() {
+    if (!currentCloudUser) {
+        loadBoxFromLocal();
+        normalizePlayerBox();
+        updateAddPanelWeights();
+        updateBoxUI(false);
+        return;
+    }
+
+    const { data, error } = await supabaseClient
+        .from('player_boxes')
+        .select('box_data')
+        .eq('user_id', currentCloudUser.id)
+        .maybeSingle();
+
+    if (error) {
+        console.error(error);
+        showToast("读取云端 Box 失败");
+        return;
+    }
+
+    if (data && Array.isArray(data.box_data)) {
+        playerBox = data.box_data;
+        normalizePlayerBox();
+        localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
+        updateAddPanelWeights();
+        updateBoxUI(false);
+        showToast("已读取账号 Box");
+        return;
+    }
+
+    // 如果这个账号还没有云端数据，就把当前页面里的数据作为首次数据保存上去
+    normalizePlayerBox();
+    await saveBoxToCloudNow();
+    localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
+    updateAddPanelWeights();
+    updateBoxUI(false);
+    showToast("已为此账号创建 Box");
+}
+
+async function saveBoxToCloudNow() {
+    if (!currentCloudUser) return;
+
+    const { error } = await supabaseClient
+        .from('player_boxes')
+        .upsert({
+            user_id: currentCloudUser.id,
+            box_data: playerBox,
+            updated_at: new Date().toISOString()
+        }, {
+            onConflict: 'user_id'
+        });
+
+    if (error) {
+        console.error(error);
+        showToast("云端保存失败");
+    }
+}
+
+function scheduleSaveBoxToCloud() {
+    if (!currentCloudUser) return;
+
+    clearTimeout(saveBoxTimer);
+
+    saveBoxTimer = setTimeout(() => {
+        saveBoxToCloudNow();
+    }, 500);
+}
+
+        async function signUpUser() {
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+
+    if (!email || !password) {
+        showToast("请输入邮箱和密码");
+        return;
+    }
+
+    if (password.length < 6) {
+        showToast("密码至少需要 6 位");
+        return;
+    }
+
+    const { data, error } = await supabaseClient.auth.signUp({
+        email: email,
+        password: password
+    });
+
+    if (error) {
+        console.error(error);
+        showToast("注册失败：" + error.message);
+        return;
+    }
+
+    showToast("注册成功，请检查邮箱确认邮件");
+}
+
+async function signInUser() {
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+
+    if (!email || !password) {
+        showToast("请输入邮箱和密码");
+        return;
+    }
+
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+        email: email,
+        password: password
+    });
+
+    if (error) {
+        console.error(error);
+        showToast("登录失败：" + error.message);
+        return;
+    }
+
+    currentCloudUser = data.user;
+    updateAuthUI();
+    await loadBoxFromCloud();
+    showToast("登录成功，已切换到账号 Box");
+}
+
+async function signOutUser() {
+    const { error } = await supabaseClient.auth.signOut();
+
+    if (error) {
+        console.error(error);
+        showToast("退出失败：" + error.message);
+        return;
+    }
+
+    currentCloudUser = null;
+    updateAuthUI();
+
+    loadBoxFromLocal();
+    normalizePlayerBox();
+    updateAddPanelWeights();
+    updateBoxUI(false);
+
+    showToast("已退出登录，已切换到游客本地 Box");
+}
+
+function updateAuthUI() {
+    const authForm = document.getElementById('auth-form');
+    const logoutBtn = document.getElementById('logout-btn');
+    const userInfo = document.getElementById('auth-user-info');
+
+    if (currentCloudUser) {
+        authForm.classList.add('hidden');
+        logoutBtn.classList.remove('hidden');
+        userInfo.classList.remove('hidden');
+        userInfo.innerText = "当前账号：" + currentCloudUser.email;
+    } else {
+        authForm.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+        userInfo.classList.add('hidden');
+        userInfo.innerText = "";
+    }
+}
+
+        function togglePokemonStandard(index) {
+            let currentMode = playerBox[index].evalMode || 'tied';
+            playerBox[index].evalMode = (currentMode === 'tied') ? 'grad' : 'tied';
+            updateBoxUI();
+            showToast("已成功将【" + playerBox[index].name + "】切换为" + (playerBox[index].evalMode === 'grad' ? '仅看毕业的硬核标准' : '包含和解的大众标准'));
+        }
+
+        function toggleAllPokemonStandard() {
+            if (playerBox.length === 0) {
+                showToast("大仓空空如也，请先录入宝可梦资产！");
+                return;
+            }
+            let hasTiedMode = playerBox.some(p => !SPECIAL_STANDARD_DOWNGRADE.includes(p.name) && (p.evalMode || 'tied') === 'tied');
+            let targetMode = hasTiedMode ? 'grad' : 'tied';
+            
+            playerBox.forEach(p => {
+                if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+                    p.evalMode = 'grad';
+                } else {
+                    p.evalMode = targetMode;
+                }
+            });
+            
+            updateBoxUI();
+            showToast("已将全局资产整体切换为：" + (targetMode === 'grad' ? '仅看毕业的硬核标准' : '包含和解的大众标准'));
+        }
+
+        function toggleShowOnlyGraduated() {
+            showOnlyGraduated = !showOnlyGraduated;
+            updateBoxUI(); 
+            showToast(showOnlyGraduated ? "已开启过滤：当前仅展现大仓内已出货的胚子！" : "已关闭过滤：展现全盘大仓！");
+        }
+
+        const FOOD_MODE_BOTH = [
+            "迷你龙", "哈克龙", "快龙", "幼基拉斯", "沙基拉斯", "班基拉斯", 
+            "润水鸭", "涌跃鸭", "狂欢浪舞鸭", "强颚鸡母虫", "虫电宝", "锹农炮虫", 
+            "杰尼龟", "卡咪龟", "水箭龟", "小猫怪", "勒克猫", "伦琴猫", "童偶熊", "穿着熊", "萌虻", "蝶结萌虻"
+        ];
+        const FOOD_MODE_ABB_ONLY = ["鬼斯", "鬼斯通", "耿鬼"];
+    
+        const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
+
+        function getPokemonLuckMetrics(p) {
+            if (!p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50 };
+            
+            let dict = pokemonDictionary[p.name];
+            if (!dict || dict.type === 'special_skill') return null;
+            
+            let pType = dict.type;
+            const matrix = {
+                berry: {
+                    none: { gold: 0.0025, bigGrad: 0.0056, grad: 0.0065, tied: 0.0251 },
+                    one:  { gold: 0.0124, bigGrad: 0.0207, grad: 0.0228, tied: 0.0752 },
+                    two:  { gold: 0.0526, bigGrad: 0.0592, grad: 0.0598, tied: 0.1197 }
+                },
+                food: {
+                    none: { gold: 0.0012, bigGrad: 0.0082, grad: 0.0127, tied: 0.0214 },
+                    one:  { gold: 0.0032, bigGrad: 0.0053, grad: 0.0083, tied: 0.0113 },
+                    two:  { gold: 0.0023, bigGrad: 0.0023, grad: 0.0039, tied: 0.0039 }
+                },
+                skill: {
+                    none: { gold: 0.0085, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
+                    one:  { gold: 0.0225, bigGrad: 0.0311, grad: 0.0412, tied: 0.0679 },
+                    two:  { gold: 0.0140, bigGrad: 0.0140, grad: 0.0140, tied: 0.0285 }
+                }
+            };
+            
+            let foodMultiplier = 1;
+            let foodMode = 'normal'; 
+            if (pType === 'food') {
+                if (FOOD_MODE_BOTH.includes(p.name)) {
+                    foodMultiplier = 3;
+                    foodMode = 'both';
+                } else if (FOOD_MODE_ABB_ONLY.includes(p.name)) {
+                    foodMultiplier = 2;
+                    foodMode = 'abb_only';
+                }
+            }
+
+            let sumGold = 0, sumBigGrad = 0, sumGrad = 0, sumTied = 0;
+            for (let i = 1; i <= p.count; i++) {
+                let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
+                let pr = matrix[pType][lockType];
+                sumGold += pr.gold * foodMultiplier; 
+                sumBigGrad += pr.bigGrad * foodMultiplier;
+                sumGrad += pr.grad * foodMultiplier;
+                sumTied += pr.tied * foodMultiplier;
+            }
+            
+            const W_gold = sumGold > 0 ? p.count / (sumGold / p.count) : 0;
+            const W_bigGrad = sumBigGrad > 0 ? p.count / (sumBigGrad / p.count) : 0;
+            const W_grad = sumGrad > 0 ? p.count / (sumGrad / p.count) : 0;
+            const W_tied = sumTied > 0 ? p.count / (sumTied / p.count) : 0;
+            
+            let isTiedIncluded = (p.evalMode !== 'grad');
+            if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+                isTiedIncluded = true;
+            }
+            let expectedScore = 0;
+            let variance = 0;
+
+            for (let i = 1; i <= p.count; i++) {
+                let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
+                let pr = matrix[pType][lockType];
+
+                let p_gold = pr.gold * foodMultiplier;
+                let p_big = pr.bigGrad * foodMultiplier;
+                let p_gr = (pr.grad - pr.bigGrad) * foodMultiplier;
+                let p_ti = (pr.tied - pr.grad) * foodMultiplier;
+                
+                if (p_gr < 0) p_gr = 0;
+                if (p_ti < 0) p_ti = 0;
+                
+                let mu_i = 0, sq_i = 0;
+
+                if (foodMode === 'both') {
+                    let S_gold_aaa = W_gold * 3.0, S_gold_abb = W_gold * 1.5;
+                    let S_big_aaa = W_bigGrad * 3.0, S_big_abb = W_bigGrad * 1.5;
+                    let S_grad_aaa = W_grad * 3.0, S_grad_abb = W_grad * 1.5;
+                    let S_tied_aaa = isTiedIncluded ? W_tied * 3.0 : 0, S_tied_abb = isTiedIncluded ? W_tied * 1.5 : 0;
+
+                    mu_i = p_gold * (1/3 * S_gold_aaa + 2/3 * S_gold_abb) +
+                           p_big  * (1/3 * S_big_aaa + 2/3 * S_big_abb) +
+                           p_gr   * (1/3 * S_grad_aaa + 2/3 * S_grad_abb) +
+                           p_ti   * (1/3 * S_tied_aaa + 2/3 * S_tied_abb);
+
+                    sq_i = p_gold * (1/3 * Math.pow(S_gold_aaa, 2) + 2/3 * Math.pow(S_gold_abb, 2)) +
+                           p_big  * (1/3 * Math.pow(S_big_aaa, 2) + 2/3 * Math.pow(S_big_abb, 2)) +
+                           p_gr   * (1/3 * Math.pow(S_grad_aaa, 2) + 2/3 * Math.pow(S_grad_abb, 2)) +
+                           p_ti   * (1/3 * Math.pow(S_tied_aaa, 2) + 2/3 * Math.pow(S_tied_abb, 2));
+                } else {
+                    let S_tied = isTiedIncluded ? W_tied : 0;
+                    mu_i = p_gold * W_gold + p_big * W_bigGrad + p_gr * W_grad + p_ti * S_tied;
+                    sq_i = p_gold * Math.pow(W_gold, 2) + p_big * Math.pow(W_bigGrad, 2) + p_gr * Math.pow(W_grad, 2) + p_ti * Math.pow(S_tied, 2);
+                }
+                
+                expectedScore += mu_i;
+                variance += (sq_i - Math.pow(mu_i, 2));
+            }
+            
+            let actualScore = 0;
+            if (foodMode === 'both') {
+                let tied_aaa = p.tiedCount_AAA !== undefined ? p.tiedCount_AAA : 0;
+                let tied_abb = p.tiedCount_ABB !== undefined ? p.tiedCount_ABB : (p.tiedCount || 0);
+                let grad_aaa = p.gradCount_AAA !== undefined ? p.gradCount_AAA : 0;
+                let grad_abb = p.gradCount_ABB !== undefined ? p.gradCount_ABB : (p.gradCount || 0);
+                let big_aaa = p.bigGradCount_AAA !== undefined ? p.bigGradCount_AAA : 0;
+                let big_abb = p.bigGradCount_ABB !== undefined ? p.bigGradCount_ABB : (p.bigGradCount || 0);
+                let gold_aaa = p.goldGradCount_AAA !== undefined ? p.goldGradCount_AAA : 0;
+                let gold_abb = p.goldGradCount_ABB !== undefined ? p.goldGradCount_ABB : (p.goldGradCount || 0);
+
+                actualScore += gold_aaa * W_gold * 3.0 + gold_abb * W_gold * 1.5 +
+                               tied_aaa * W_tied * 3.0 + tied_abb * W_tied * 1.5 +
+                               grad_aaa * W_grad * 3.0 + grad_abb * W_grad * 1.5 +
+                               big_aaa * W_bigGrad * 3.0 + big_abb * W_bigGrad * 1.5;
+            } else {
+                if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+                    actualScore += (p.goldGradCount || 0) * W_bigGrad +
+                                   (p.bigGradCount || 0) * W_grad +
+                                   (p.gradCount || 0) * W_tied;
+                } else {
+                    actualScore += (p.goldGradCount || 0) * W_gold +
+                                   (p.bigGradCount || 0) * W_bigGrad +
+                                   (p.gradCount || 0) * W_grad +
+                                   (p.tiedCount || 0) * (isTiedIncluded ? W_tied : 0);
+                }
+            }
+                              
+            let rate = 50;
+            if (variance > 0) {
+                let z = (actualScore - expectedScore) / Math.sqrt(variance);
+                let percentile = (0.5 * (1 + erf(z / Math.sqrt(2)))) * 100;
+                rate = Math.min(99.9, Math.max(0.1, Math.round(percentile * 10) / 10));
+            }
+            
+            return { actual: actualScore, expected: expectedScore, variance: variance, rate: rate };
+        }
+
+        function calculateLuckPercentile(p) {
+            let metrics = getPokemonLuckMetrics(p);
+            return metrics ? metrics.rate : null;
+        }
+
+        function getTypeLuckInfo(targetType) {
+            let sumZ = 0;
+            let countValidElements = 0;
+            
+            playerBox.forEach(p => {
+                if (!p.count || p.count === 0) return;
+                let dict = pokemonDictionary[p.name];
+                if (!dict || dict.type === 'special_skill') return;
+                
+                let match = false;
+                if (targetType === 'all') match = true;
+                else if (targetType === 'skill') match = (dict.type === 'skill' || dict.type === 'special_skill');
+                else match = (dict.type === targetType);
+                
+                if (!match) return;
+
+                let metrics = getPokemonLuckMetrics(p);
+                if (metrics && metrics.variance > 0) {
+                    let zIndividual = (metrics.actual - metrics.expected) / Math.sqrt(metrics.variance);
+                    sumZ += zIndividual;
+                    countValidElements++;
+                }
+            });
+            
+            if (countValidElements === 0) return null;
+            
+            let zMeta = sumZ / Math.sqrt(countValidElements);
+            let percentile = (0.5 * (1 + erf(zMeta / Math.sqrt(2)))) * 100;
+            return Math.min(99.9, Math.max(0.1, Math.round(percentile * 10) / 10));
+        }
+
+        function getTypeLuckZ(targetType) {
+            let sumZ = 0;
+            let countValidElements = 0;
+            playerBox.forEach(p => {
+                if (!p.count || p.count === 0) return;
+                let dict = pokemonDictionary[p.name];
+                if (!dict || dict.type === 'special_skill') return;
+
+                let match = false;
+                if (targetType === 'skill') {
+                    match = (dict.type === 'skill' || dict.type === 'special_skill');
+                } else {
+                    match = (dict.type === targetType);
+                }
+                if (!match) return;
+
+                let metrics = getPokemonLuckMetrics(p);
+                if (metrics && metrics.variance > 0) {
+                    let zIndividual = (metrics.actual - metrics.expected) / Math.sqrt(metrics.variance);
+                    sumZ += zIndividual;
+                    countValidElements++;
+                }
+            });
+            if (countValidElements === 0) return null;
+            return sumZ / Math.sqrt(countValidElements);
+        }
+
+        function convertRateToObjectiveScore(rate) {
+            if (rate === null) return null;
+            let p = rate / 100;
+            let score = 50;
+            if (p >= 0.5) {
+                score = 100 - 50 * Math.pow(2 * (1 - p), 0.43);
+            } else {
+                score = 50 * Math.pow(2 * p, 0.43);
+            }
+            return Math.min(100, Math.max(0, score));
+        }
+
+        function saveInlineEdit(index) {
+            let count = parseInt(document.getElementById(`edit-count-${index}`).value) || 0;
+            let lockMode = document.getElementById(`edit-lock-${index}`).value;
+            let tiedCount = 0, gradCount = 0, bigGradCount = 0, goldGradCount = 0;
+            let tied_aaa = 0, tied_abb = 0, grad_aaa = 0, grad_abb = 0, big_aaa = 0, big_abb = 0, gold_aaa = 0, gold_abb = 0;
+
+            if (FOOD_MODE_BOTH.includes(playerBox[index].name)) {
+                tied_aaa = parseInt(document.getElementById(`edit-tied-aaa-${index}`).value) || 0;
+                tied_abb = parseInt(document.getElementById(`edit-tied-abb-${index}`).value) || 0;
+                tiedCount = tied_aaa + tied_abb;
+                grad_aaa = parseInt(document.getElementById(`edit-grad-aaa-${index}`).value) || 0;
+                grad_abb = parseInt(document.getElementById(`edit-grad-abb-${index}`).value) || 0;
+                gradCount = grad_aaa + grad_abb;
+                big_aaa = parseInt(document.getElementById(`edit-big-grad-aaa-${index}`).value) || 0;
+                big_abb = parseInt(document.getElementById(`edit-big-grad-abb-${index}`).value) || 0;
+                bigGradCount = big_aaa + big_abb;
+                gold_aaa = parseInt(document.getElementById(`edit-gold-aaa-${index}`).value) || 0;
+                gold_abb = parseInt(document.getElementById(`edit-gold-abb-${index}`).value) || 0;
+                goldGradCount = gold_aaa + gold_abb;
+            } else {
+                if (SPECIAL_STANDARD_DOWNGRADE.includes(playerBox[index].name)) {
+                    tiedCount = 0;
+                } else {
+                    tiedCount = parseInt(document.getElementById(`edit-tied-${index}`).value) || 0;
+                }
+                gradCount = parseInt(document.getElementById(`edit-grad-${index}`).value) || 0;
+                bigGradCount = parseInt(document.getElementById(`edit-big-grad-${index}`).value) || 0;
+                goldGradCount = parseInt(document.getElementById(`edit-gold-grad-${index}`).value) || 0;
+            }
+
+            let totalGolds = tiedCount + gradCount + bigGradCount + goldGradCount;
+            if (totalGolds > count) { alert("数据矛盾！出货总数不能大于总捕捉数"); return; }
+
+            playerBox[index].count = count; playerBox[index].lockMode = lockMode;
+            playerBox[index].tiedCount = tiedCount; playerBox[index].gradCount = gradCount;
+            playerBox[index].bigGradCount = bigGradCount; playerBox[index].goldGradCount = goldGradCount;
+            playerBox[index].tiedCount_AAA = tied_aaa; playerBox[index].tiedCount_ABB = tied_abb;
+            playerBox[index].gradCount_AAA = grad_aaa; playerBox[index].gradCount_ABB = grad_abb;
+            playerBox[index].bigGradCount_AAA = big_aaa; playerBox[index].bigGradCount_ABB = big_abb;
+            playerBox[index].goldGradCount_AAA = gold_aaa; playerBox[index].goldGradCount_ABB = gold_abb;
+
+            delete editingIndices[index]; updateBoxUI(); showToast("已成功同步修改数据明细！");
+        }
+
+        function erf(x) {
+            let a1 =  0.254829592; let a2 = -0.284496736; let a3 =  1.421413741; let a4 = -1.453152027; let a5 =  1.061405429; let p  =  0.3275911;
+            let sign = (x < 0) ? -1 : 1; x = Math.abs(x); let t = 1.0 / (1.0 + p * x);
+            let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+            return sign * y;
+        }
+
+            window.onload = async () => {
+            const { data, error } = await supabaseClient.auth.getUser();
+
+            if (error) {
+                console.error(error);
+            }
+
+            currentCloudUser = data.user || null;
+            updateAuthUI();
+
+            if (currentCloudUser) {
+                await loadBoxFromCloud();
+            } else {
+                loadBoxFromLocal();
+                normalizePlayerBox();
+                updateAddPanelWeights();
+                updateBoxUI(false);
+            }
+        };
+    </script>
+</body>
+</html>
