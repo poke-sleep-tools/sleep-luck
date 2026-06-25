@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pokémon Sleep - 全局 Box 欧非 analysis 站</title>
+    <title>Pokémon Sleep - 水跃鱼气运审计站 ⚖️</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -27,7 +27,7 @@
                     <i class="fa-solid fa-box-archive text-xl"></i>
                 </div>
                 <div>
-                    <h1 class="text-xl font-extrabold tracking-tight">Sleep 全局 Box 分析看板</h1>
+                    <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
             </div>
@@ -88,39 +88,44 @@
             </button>
             <div id="guide-content" class="hidden p-6 border-t border-slate-100 bg-white flex flex-col gap-5 text-xs leading-relaxed">
                 
-                <!-- 使用方法 -->
                 <div>
                     <h4 class="font-bold text-slate-800 mb-1.5 flex items-center gap-1 text-xs">
-                        <i class="fa-solid fa-gears text-slate-600"></i> 使用方法
+                        <i class="fa-solid fa-gears text-slate-600"></i> 资产录入方法
                     </h4>
                     <p class="text-slate-600 pl-5">
-                        通过输入<strong>宝可梦名字</strong>（支持模糊联想提示）、<strong>捕捉数</strong>、<strong>40级后锁金策略</strong>，以及该宝可梦的<strong>合计出货情况</strong>（和解/毕业/大毕业/金帮毕业的具体数量），输入完成后即可录入一种宝可梦。请特别注意：<strong>不同的进化型在此算作不同的宝可梦</strong>，需要分开独立录入资产。
+                        本站提供两套录入轨道：一是通过主面板的<strong>“战绩追加录入面板”</strong>直接覆写或累加某品种的大仓资产；二是点击控制栏的<strong>【📅 每日捕捉打卡】</strong>盲盒通道，记录单只刚抓到的宠物数据进行因果律运势对撞。请特别注意：<strong>不同的进化型在此算作不同的宝可梦</strong>，需要分开独立录入。
                     </p>
                 </div>
 
-                <!-- 展示效果 -->
                 <div>
-                    <h4 class="font-bold text-slate-800 mb-1.5 flex items-center gap-1 text-xs">
-                        <i class="fa-solid fa-chart-simple text-slate-600"></i> 展示效果
+                    <h4 class="font-bold text-indigo-800 mb-1.5 flex items-center gap-1 text-xs">
+                        <i class="fa-solid fa-timeline text-indigo-500"></i> 盲盒打卡与时空流水线
                     </h4>
                     <p class="text-slate-600 pl-5">
-                        成功录入后，页面会立刻重绘并展示每一种宝可梦独立的<strong>欧非分数</strong>。同时，上方大盘会<strong>实时展现当前大仓的综合运势分数</strong>，以及树果、食材、技能三种品类的相对欧非程度。
+                        点击打卡时，可自由手动调整该只宠物的<strong>捕捉日期与分觉（一觉/二觉）</strong>。这两个选项具备<strong>“同日内粘性记忆”</strong>（单日连抽时自动保持上一次的选择）与<strong>“跨日深夜24点自动强制重置”</strong>特征。打卡数据会实时流向<strong>【📋 本次捕捉录入流水栏】</strong>，系统会自动按照日期和睡眠班次为你进行<strong>分层、分组聚合排版</strong>。
                     </p>
                 </div>
 
-                <!-- 注意事项 -->
+                <div>
+                    <h4 class="font-bold text-slate-800 mb-1.5 flex items-center gap-1 text-xs">
+                        <i class="fa-solid fa-chart-simple text-slate-600"></i> 展示效果与时空倒流
+                    </h4>
+                    <p class="text-slate-600 pl-5">
+                        成功录入后，大盘实时展现 0-100 满分制的<strong>综合运势总分</strong>。点击下方录入流水栏里的任何彩色胶囊小卡片，即可<strong>随时唤回当初的录入面板，支持任意跨日期、跨一二觉进行精修更正或一键撤销（扣除资产）</strong>。点击<strong>【📜 历史抽卡库】</strong>按钮，可以随时查阅过去每一天按睡眠班次归类沉淀的永久抽卡时光长卷。
+                    </p>
+                </div>
+
                 <div class="border-t border-slate-100 pt-4">
                     <h4 class="font-bold text-rose-800 mb-2 flex items-center gap-1 text-xs">
                         <i class="fa-solid fa-triangle-exclamation text-rose-500"></i> 注意事项与防虚高指南
                     </h4>
                     <ul class="list-disc pl-9 space-y-1.5 text-slate-600">
-                        <li><strong>切勿只录出货宠（防总分虚高）</strong>：大盘分数是实时展示的，但<strong>只有录入的 Box 足够完整，这个综合分数才更加真实有效</strong>。如果一直抱有选择性，只录入已经出货的宝可梦，会导致你的综合大盘分<strong>严重虚高</strong>！请务必把那些捕捉量很大、但颗粒无收完全没出货的非酋宠、进化型等如实全部记入。</li>
+                        <li><strong>切勿只录出货宠（防总分虚高）</strong>：大盘分数是实时结算的，但<strong>只有录入的 Box 足够完整，这个综合分数才更加真实有效</strong>。如果玩家抱有选择性，只挑已经出货的宝可梦录入，会导致你的大盘分<strong>严重虚高</strong>！请务必把那些捕捉量很大、但颗粒无收完全没出货的非酋宠、进化型等如实全部记入（打白条宠不影响单宠分数，且对大盘总分干涉极低，但能提供真实的捕捉方差基准）。</li>
                         <li><strong>特异品种暂离</strong>：由于技术原因，有许多宝可梦目前无法参与运气和气运计算，对此深表抱歉。这类无法参与计算的宝可梦<strong>均为特殊技能型宝可梦</strong>。</li>
-                        <li><strong>毕业线参考</strong>：关于各个梯度具体的毕业标准、副技能搭配以及对应的效率增幅，可随时参照本站隔壁的<strong>【审计标准与极限特征值】</strong>说明面板。</li>
+                        <li><strong>毕业线参考</strong>：关于各个梯度具体的毕业标准、副技能搭配以及对应的效率增幅，可随时参照下方<strong>【核心审计标准与极限效率特征值】</strong>说明面板。</li>
                     </ul>
                 </div>
 
-                <!-- 联络渠道 -->
                 <div class="bg-indigo-50/40 p-3 rounded-2xl border border-indigo-100/50 text-[11px] text-indigo-950 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mt-1">
                     <p>
                         💬 <strong>意见与建议</strong>：如果对于本网站有任何改进意见、功能建议，或是任何想唠的话，都随时欢迎联系作者本人。
@@ -376,7 +381,23 @@
                 <button onclick="toggleShowOnlyGraduated()" id="filter-only-graduated" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1 ml-2" title="切换是否只显示已满足各自设定标准出货的宝可梦">
                     <i class="fa-solid fa-eye-slash"></i> 只看已出货: 关
                 </button>
+                <button onclick="openDailyCheckInModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 text-white shadow-md flex items-center gap-1 ml-2 hover:scale-105 active:scale-95 duration-150 animate-pulse" title="记录今天刚抓的那一只，立刻对撞今日因果律运势！">
+                    <i class="fa-solid fa-calendar-check"></i> 📅 每日捕捉打卡
+                </button>
+                <button onclick="openHistoryModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-100 text-slate-700 shadow-sm flex items-center gap-1 ml-1 hover:bg-slate-200" title="查阅过去所有盲盒对撞的历史长卷">
+                    <i class="fa-solid fa-clock text-indigo-500"></i> 📜 历史抽卡库
+                </button>
             </div>
+        </div>
+
+        <div id="today-report-panel" class="bg-white p-5 rounded-3xl border border-indigo-100 shadow-sm hidden flex-col gap-4">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-2">
+                <h3 class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <i class="fa-solid fa-list-check text-indigo-500 animate-pulse"></i> 📋 本次捕捉录入流水栏 <span class="text-[10px] text-slate-400 font-medium">(自动按记录日期与睡眠轨道聚合，翌日重置)</span>
+                </h3>
+                <span class="text-[10px] font-mono bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md font-bold" id="today-report-date">活跃期看板</span>
+            </div>
+            <div class="flex flex-col gap-3.5" id="today-report-chips"></div>
         </div>
 
         <!-- 宝可梦大仓网格卡片容器 -->
@@ -410,6 +431,28 @@ let currentFilterType = 'all';
 let showOnlyGraduated = false;
 
 let saveBoxTimer = null;
+
+let todayCheckIns = []; // 存放今天打卡的流水：{ id, name, result, lockMode, track }
+
+// 🚀 局部新增：历史时光库多账号核心控制轨
+let historyLogs = [];
+function getHistoryStorageKey() {
+    return currentCloudUser ? 'sleep_history_logs_' + currentCloudUser.id : 'sleep_history_logs_guest';
+}
+function loadHistoryFromLocal() {
+    historyLogs = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
+}
+function saveHistoryToLocal() {
+    localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+}
+
+const TODAY_LOG_KEY = 'sleep_today_checkins_log';
+const TODAY_DATE_KEY = 'sleep_today_checkins_date';
+
+// 🚀 局部新增：📅 每日打卡的“日内粘性”与跨日重置记忆变量
+let stickyCheckInDate = "";     // 记忆上次手动选的选择日期
+let stickyCheckInSession = "一觉";  // 记忆上次选的一觉/二觉
+let lastOpenSystemDate = "";    // 记录上次打开小窗时的真实系统日期（用于判定跨日刷新）
 
 const OLD_LOCAL_KEY = 'sleep_player_box';
 const GUEST_LOCAL_KEY = 'sleep_player_box_guest';
@@ -737,6 +780,9 @@ function normalizePlayerBox() {
         function closeSuggestionsOutside(event) {
             const suggestEl = document.getElementById('suggestion-box');
             if (suggestEl) suggestEl.classList.add('hidden');
+            // 顺手隐藏打卡联想框
+            const checkinSuggestEl = document.getElementById('checkin-suggestion-box');
+            if (checkinSuggestEl) checkinSuggestEl.classList.add('hidden');
         }
 
         function filterByType(type) {
@@ -1754,7 +1800,751 @@ function updateAuthUI() {
                 updateAddPanelWeights();
                 updateBoxUI(false);
             }
+
+            // 🚀 核心新增：加载网页时，自动恢复并执行跨日过期的今日战报审计
+            todayCheckIns = JSON.parse(localStorage.getItem(TODAY_LOG_KEY)) || [];
+            renderTodayReportUI();
+            
         };
+
+        // ==========================================
+// 🚀 局部新增：📅 每日捕捉打卡与毒舌气运博弈引擎
+// ==========================================
+
+
+
+// 1. 唤起打卡动态弹窗（升级版：支持日期/睡眠Session手选与日内粘性记忆）
+function openDailyCheckInModal() {
+    // 🛡️ 核心判定：获取当前浏览器本地真实的 YYYY-MM-DD 字符串（防 UTC 时区错位）
+    const now = new Date();
+    const currentSysDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    // 如果过了半夜12点系统日期变了，或者首次点开，则强行初始化为当天和一觉
+    if (lastOpenSystemDate !== currentSysDate) {
+        stickyCheckInDate = currentSysDate;
+        stickyCheckInSession = "一觉";
+        lastOpenSystemDate = currentSysDate;
+    }
+
+    const modal = document.createElement('div');
+    modal.id = 'daily-checkin-modal';
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
+    
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('daily-checkin-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        
+        <div class="text-center">
+            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-dice text-indigo-500 animate-spin"></i> 捕捉现开 · 气运盲盒</h3>
+            <p class="text-[10px] text-slate-400 font-medium mt-0.5">每抓到一只都能来这里单独对撞，看看这发是做慈善还是原地起飞</p>
+        </div>
+
+        <div class="space-y-3">
+            <div class="relative" onclick="event.stopPropagation()">
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">宝可梦名字</label>
+                <input type="text" id="checkin-name" oninput="handleCheckInNameInput()" onfocus="handleCheckInNameInput()" placeholder="输入名字，如: 杰尼龟" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
+                <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-1">记录日期</label>
+                    <input type="date" id="checkin-date" value="${stickyCheckInDate}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none text-slate-700">
+                </div>
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-1">睡眠轨道</label>
+                    <select id="checkin-session" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none text-slate-700">
+                        <option value="一觉" ${stickyCheckInSession === '一觉' ? 'selected' : ''}>一觉 (首睡)</option>
+                        <option value="二觉" ${stickyCheckInSession === '二觉' ? 'selected' : ''}>二觉 (补眠)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">40+级锁金策略</label>
+                <select id="checkin-lock" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none">
+                    <option value="two" selected>锁 2 金</option>
+                    <option value="one">锁 1 金</option>
+                    <option value="none">不锁金</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">今日捕捉出货品质评估</label>
+                <select id="checkin-result" onchange="toggleCheckInFoodTrack()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-slate-700">
+                    <option value="none" class="text-slate-400 font-bold">❌ 没货/白条 (给大盘做慈善)</option>
+                    <option value="tied" class="text-amber-600 font-bold">🔸 和解 (能当个过渡帮手)</option>
+                    <option value="grad" class="text-slate-800 font-bold">🟩 毕业 (核心功能完全解锁)</option>
+                    <option value="bigGrad" class="text-purple-600 font-bold">🔮 大毕业 (双技能正性格神兵)</option>
+                    <option value="goldGrad" class="text-red-600 font-bold">👑 金帮毕业 (自带光环图腾)</option>
+                </select>
+            </div>
+            <div id="checkin-food-track-zone" class="hidden">
+                <label class="block text-[10px] font-bold text-indigo-500 mb-1">食材产出档位</label>
+                <select id="checkin-food-track" class="w-full bg-indigo-50/50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-indigo-900">
+                    <option value="ABB" selected>ABB 多产档 (1.5倍加权)</option>
+                    <option value="AAA">AAA 纯净档 (3.0倍加权)</option>
+                </select>
+            </div>
+        </div>
+
+        <button onclick="submitDailyCheckIn()" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md">
+            <i class="fa-solid fa-signature"></i> 盖章！签定这一发因果律
+        </button>
+    </div>`;
+    
+    document.body.appendChild(modal);
+    
+    const mainName = document.getElementById('input-name').value.trim();
+    if(mainName) document.getElementById('checkin-name').value = mainName;
+    toggleCheckInFoodTrack();
+}
+
+// 🚀 局部新增：打卡弹窗专属模糊输入联想流
+function handleCheckInNameInput() {
+    const inputEl = document.getElementById('checkin-name');
+    const suggestEl = document.getElementById('checkin-suggestion-box');
+    if (!inputEl || !suggestEl) return;
+
+    let query = inputEl.value.trim().toLowerCase();
+    if (!query) {
+        suggestEl.innerHTML = '';
+        suggestEl.classList.add('hidden');
+        toggleCheckInFoodTrack();
+        return;
+    }
+
+    let matches = [];
+    for (let key in pokemonDictionary) {
+        if (key.toLowerCase().includes(query)) {
+            let sName = pokemonDictionary[key].standard;
+            if (!matches.includes(sName)) matches.push(sName);
+        }
+    }
+
+    if (matches.length === 0) {
+        suggestEl.innerHTML = '';
+        suggestEl.classList.add('hidden');
+        return;
+    }
+
+    // 绘制打卡弹窗的模糊联想悬浮层
+    suggestEl.innerHTML = matches.map(name => {
+        let dictItem = pokemonDictionary[name];
+        let typeText = dictItem.type === 'berry' ? '树果' : (dictItem.type === 'food' ? '食材' : (dictItem.type === 'skill' ? '技能' : '特殊技能'));
+        let colorClass = dictItem.type === 'berry' ? 'bg-amber-100 text-amber-800' : (dictItem.type === 'food' ? 'bg-emerald-100 text-emerald-800' : (dictItem.type === 'skill' ? 'bg-purple-100 text-purple-800' : 'bg-slate-200 text-slate-700'));
+        return `
+        <div onclick="selectCheckInSuggestion('${name}')" class="px-4 py-2 hover:bg-slate-100 cursor-pointer flex items-center justify-between text-xs font-bold transition">
+            <span class="text-slate-900">${name}</span>
+            <span class="px-2 py-0.5 rounded text-[10px] ${colorClass}">${typeText}型</span>
+        </div>`;
+    }).join('');
+
+    suggestEl.classList.remove('hidden');
+    toggleCheckInFoodTrack();
+}
+
+// 🚀 局部新增：打卡下拉框选中触发现场对齐
+function selectCheckInSuggestion(name) {
+    const inputEl = document.getElementById('checkin-name');
+    const suggestEl = document.getElementById('checkin-suggestion-box');
+    if (!inputEl || !suggestEl) return;
+
+    inputEl.value = name;
+    suggestEl.classList.add('hidden');
+    toggleCheckInFoodTrack(); // 自动触发食材宠的双轨检测
+}
+
+// 针对双轨食材宠的响应式显隐
+function toggleCheckInFoodTrack() {
+    const nameInput = document.getElementById('checkin-name');
+    const resultSelect = document.getElementById('checkin-result');
+    const zone = document.getElementById('checkin-food-track-zone');
+    if (!nameInput || !resultSelect || !zone) return;
+
+    let rawName = nameInput.value.trim();
+    let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
+    let isBoth = FOOD_MODE_BOTH.includes(standardName);
+    let is出货 = resultSelect.value !== 'none';
+
+    if (isBoth && is出货) {
+        zone.classList.remove('hidden');
+    } else {
+        zone.classList.add('hidden');
+    }
+}
+
+// 2. 核心结算：注入资产格，并爆破式弹出运势分析
+function submitDailyCheckIn() {
+    // 🚀 核心新增：抓取当前节点的改动，咬合进同日内的粘性记忆
+    const dateInput = document.getElementById('checkin-date');
+    const sessionSelect = document.getElementById('checkin-session');
+    if (dateInput && sessionSelect) {
+        stickyCheckInDate = dateInput.value;
+        stickyCheckInSession = sessionSelect.value;
+    }
+    const nameInput = document.getElementById('checkin-name');
+    const lockInput = document.getElementById('checkin-lock');
+    const resultSelect = document.getElementById('checkin-result');
+    
+    let rawName = nameInput.value.trim();
+    let lockMode = lockInput.value;
+    let result = resultSelect.value;
+
+    if (!rawName) { alert("请输入今天打卡的宝可梦名字！"); return; }
+    
+    let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
+    let dict = pokemonDictionary[standardName];
+    
+    // 寻找大仓现存格
+    let idx = playerBox.findIndex(item => item.name === standardName);
+    let beforeRate = null;
+    
+    if (idx > -1) {
+        let metrics = getPokemonLuckMetrics(playerBox[idx]);
+        if(metrics) beforeRate = metrics.rate;
+    }
+
+    // 执行就地追加资产
+    if (idx > -1) {
+        let p = playerBox[idx];
+        p.count += 1;
+        p.lockMode = lockMode;
+        if (result !== 'none') {
+            if (FOOD_MODE_BOTH.includes(standardName)) {
+                let track = document.getElementById('checkin-food-track').value; // AAA or ABB
+                if (result === 'tied') p[`tiedCount_${track}`] = (p[`tiedCount_${track}`] || 0) + 1;
+                if (result === 'grad') p[`gradCount_${track}`] = (p[`gradCount_${track}`] || 0) + 1;
+                if (result === 'bigGrad') p[`bigGradCount_${track}`] = (p[`bigGradCount_${track}`] || 0) + 1;
+                if (result === 'goldGrad') p[`goldGradCount_${track}`] = (p[`goldGradCount_${track}`] || 0) + 1;
+                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
+                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
+                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
+                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            } else {
+                if (result === 'tied') p.tiedCount += 1;
+                if (result === 'grad') p.gradCount += 1;
+                if (result === 'bigGrad') p.bigGradCount += 1;
+                if (result === 'goldGrad') p.goldGradCount += 1;
+            }
+        }
+    } else {
+        // 大仓无此格，原地开辟新资产
+        let newRecord = {
+            name: standardName, count: 1, lockMode: lockMode,
+            tiedCount: 0, gradCount: 0, bigGradCount: 0, goldGradCount: 0,
+            tiedCount_AAA: 0, tiedCount_ABB: 0, gradCount_AAA: 0, gradCount_ABB: 0,
+            bigGradCount_AAA: 0, bigGradCount_ABB: 0, goldGradCount_AAA: 0, goldGradCount_ABB: 0
+        };
+        if (result !== 'none') {
+            if (FOOD_MODE_BOTH.includes(standardName)) {
+                let track = document.getElementById('checkin-food-track').value;
+                newRecord[`${result}Count_${track}`] = 1;
+            }
+            newRecord[`${result}Count`] = 1;
+        }
+        playerBox.unshift(newRecord);
+        idx = 0;
+    }
+
+    // 重新检索当前的单宠气运
+    let afterRate = 50;
+    let metricsAfter = getPokemonLuckMetrics(playerBox[idx]);
+    if (metricsAfter) afterRate = metricsAfter.rate;
+
+    // 🚀 核心改造：将本次打卡数据打上时间戳，压入今日战报流水
+    let trackMode = FOOD_MODE_BOTH.includes(standardName) ? document.getElementById('checkin-food-track').value : null;
+    let checkInId = Date.now();
+    let todayStr = new Date().toISOString().split('T')[0];
+
+    // A. 🚀 记入当日可撤销面板（并入时空特定属性，供面板分类及二次回显精修使用）
+    todayCheckIns.unshift({ 
+        id: checkInId, 
+        date: stickyCheckInDate, 
+        session: stickyCheckInSession, 
+        name: standardName, 
+        result: result, 
+        lockMode: lockMode, 
+        track: trackMode 
+    });
+    localStorage.setItem(TODAY_LOG_KEY, JSON.stringify(todayCheckIns));
+
+    // B. 🚀 记入永久历史抽卡库（打上 explicit 日期戳）
+    // 🚀 时光库记录完美锚定手动选定的日期与睡眠Session档位
+    historyLogs.unshift({ id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, name: standardName, result: result, lockMode: lockMode, track: trackMode });
+    saveHistoryToLocal();
+
+    // 关闭录入弹窗，强行触发云同步与重绘
+    document.getElementById('daily-checkin-modal').remove();
+    updateBoxUI(true); 
+    renderTodayReportUI(); // 重绘今日战报墙
+
+    // 呼唤出高光毒舌分析星盘
+    showDailyReportModal(standardName, result, beforeRate, afterRate);
+}
+
+// 3. 渲染最终的趣味欧气指数战报（直观满分制 + 动态因果律文案）
+function showDailyReportModal(name, result, before, after) {
+    const reportModal = document.createElement('div');
+    reportModal.className = 'fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-scaleUp';
+    
+    let title = "";
+    let colorClass = "";
+    let comment = "";
+    
+    // 👑 转换为最直观的 xx / 100 满分制表现形式
+    const scoreText = `${after.toFixed(1)} / 100`;
+
+    if (result === 'none') {
+        // ❌ 没出货的情况 —— 引入历史底蕴联合检验检测
+        if (after >= 75) {
+            title = "✨ 虽未出货 · 欧气犹存";
+            colorClass = "text-amber-700 bg-amber-50 border-amber-200";
+            comment = `虽然这次抓的【${name}】没出货，但由于你之前的底子实在是太厚了，本人在这个品种上依然是欧气满满的！大盘因果律根本砸不穿你的欧皇防御。`;
+        } else if (after >= 40) {
+            title = "🍃 顺其自然 · 平稳过渡";
+            colorClass = "text-slate-600 bg-slate-50 border-slate-200";
+            comment = `这发【${name}】简简单单，完美融入大众均线。这次没出货不用气馁，蓄力成功，下一发盲盒必有转机！`;
+        } else {
+            title = "💀 慈善金主 · 非气蓄力";
+            colorClass = "text-rose-600 bg-rose-50 border-rose-200";
+            comment = `大盘跌宕起伏，唯有你的黑手稳如泰山。今天这只【${name}】纯粹是来做数字慈善、塞满图鉴仓的，非气蓄力槽已在疯狂震荡！`;
+        }
+    } else {
+        // 🎉 出货的情况
+        const gradeNames = { tied: "🔸和解", grad: "🟩毕业", bigGrad: "🔮大毕业", goldGrad: "👑金帮毕业" };
+        colorClass = "text-emerald-700 bg-emerald-50 border-emerald-200";
+        
+        if (after >= 85) {
+            title = "👑 气运主宰 · 皇格觉醒";
+            comment = `震撼降临！你今天竟然一巴掌拍出了一只【${gradeNames[result]}】品质的【${name}】！神仙命格彻底觉醒，欧气数值强势拉满，建议立刻截图去群里高强度拷打群友！`;
+        } else {
+            title = "🎉 触底反弹 · 成功逆袭";
+            comment = `逆天改命成功！这发【${gradeNames[result]}】品质的【${name}】顺利上岸，大仓账面身价高光亮起。它成功拉高了你的整体运势，请保持这股恐怖的统治力！`;
+        }
+    }
+
+    reportModal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-100 p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 text-center">
+        <div class="text-xl font-black ${colorClass.split(' ')[0]}">${title}</div>
+        
+        <div class="p-4 rounded-2xl border text-xs font-medium leading-relaxed text-slate-600 ${colorClass}">
+            ${comment}
+        </div>
+        
+        <div class="text-[10px] text-slate-400 font-bold mb-1 flex justify-between px-1">
+            <span>📅 记录日期: ${stickyCheckInDate}</span>
+            <span>💤 睡眠轨道: ${stickyCheckInSession}</span>
+        </div>
+
+        <div class="bg-slate-50 p-3 rounded-xl border border-slate-200/60 text-xs font-bold flex items-center justify-between px-4">
+            <span class="text-slate-500 flex items-center gap-1">
+                <i class="fa-solid fa-wand-magic-sparkles text-amber-500"></i> 今日品种欧气指数
+            </span>
+            <span class="font-mono text-base font-black ${colorClass.split(' ')[0]}">${scoreText}</span>
+        </div>
+
+        <button onclick="this.closest('.fixed').remove()" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 shadow-md">
+            收下战报，继续高歌猛进
+        </button>
+    </div>`;
+    
+    document.body.appendChild(reportModal);
+}
+
+
+// 🚀 核心重构：支持时空双轨（记录日期 + 睡眠轨道）高级分组排版渲染器
+function renderTodayReportUI() {
+    const panel = document.getElementById('today-report-panel');
+    const chipsContainer = document.getElementById('today-report-chips');
+    const dateEl = document.getElementById('today-report-date');
+    if (!panel || !chipsContainer) return;
+
+    // 1. 跨日自动判定与销毁算法
+    const todayStr = new Date().toISOString().split('T')[0];
+    const savedDate = localStorage.getItem(TODAY_DATE_KEY);
+    if (savedDate !== todayStr) {
+        todayCheckIns = [];
+        localStorage.setItem(TODAY_LOG_KEY, JSON.stringify(todayCheckIns));
+        localStorage.setItem(TODAY_DATE_KEY, todayStr);
+    }
+
+    // 2. 状态控制：无打卡数据时完全隐退
+    if (todayCheckIns.length === 0) {
+        panel.classList.remove('flex'); panel.classList.add('hidden'); return;
+    }
+    panel.classList.remove('hidden'); panel.classList.add('flex');
+
+    // 3. 核心分流：按照 “记录日期 + 睡眠轨道(一觉/二觉)” 拼装 compositeKey 进行联合交叉分组
+    let grouped = {};
+    todayCheckIns.forEach(item => {
+        let dKey = item.date || todayStr;
+        let sKey = item.session || "一觉";
+        let compositeKey = `${dKey}___${sKey}`;
+        if (!grouped[compositeKey]) grouped[compositeKey] = [];
+        grouped[compositeKey].push(item);
+    });
+
+    const resultBadges = {
+        none: { text: "没货", cls: "bg-rose-50 text-rose-700 border-rose-200" },
+        tied: { text: "🔸和解", cls: "bg-amber-50 text-amber-800 border-amber-200/60" },
+        grad: { text: "🟩毕业", cls: "bg-slate-900 text-white border-slate-950" },
+        bigGrad: { text: "🔮大毕业", cls: "bg-purple-50 text-purple-700 border-purple-200" },
+        goldGrad: { text: "👑金帮", cls: "bg-red-50 text-red-600 border-red-200" }
+    };
+
+    // 4. 嵌套遍历：渲染带有日历分块质变感的分组排版布局
+    let finalHTML = "";
+    
+    // 对分组键排序，确保日期近的或批次清晰的按顺序排布
+    Object.keys(grouped).sort().reverse().forEach(batchKey => {
+        let parts = batchKey.split('___');
+        let logDate = parts[0];
+        let logSession = parts[1];
+
+        // 绘制当前睡眠批次内部包含的宠物胶囊卡片
+        let chipsHTML = grouped[batchKey].map(item => {
+            let badge = resultBadges[item.result] || { text: "未知", cls: "bg-slate-100 text-slate-600" };
+            let trackText = item.track ? `(${item.track})` : "";
+            return `
+            <div onclick="openEditDailyCheckInModal(${item.id})" class="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-bold shadow-xs transition hover:bg-slate-50 cursor-pointer duration-150 active:scale-95 ${badge.cls}" title="点击重新唤醒该记录，可修改日期/睡眠班次等所有明细">
+                <span>${item.name} · ${badge.text}${trackText}</span>
+                <button onclick="event.stopPropagation(); revokeDailyCheckIn(${item.id})" class="text-slate-400 hover:text-rose-600 ml-1 transition" title="点击撤销此条捕捉，回滚大仓资产">
+                    <i class="fa-solid fa-circle-xmark"></i>
+                </button>
+            </div>`;
+        }).join('');
+
+        finalHTML += `
+        <div class="bg-slate-50/60 p-3.5 rounded-2xl border border-slate-200/40 flex flex-col gap-2.5">
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-lg flex items-center gap-1 shadow-2xs">
+                    <i class="fa-solid fa-calendar-day text-[10px]"></i> ${logDate}
+                </span>
+                <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-lg bg-purple-50 border border-purple-100/60 text-purple-700 shadow-2xs">
+                    💤 ${logSession} 睡眠捕获
+                </span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                ${chipsHTML}
+            </div>
+        </div>`;
+    });
+
+    chipsContainer.innerHTML = finalHTML;
+}
+
+// 🚀 局部新增：因果律时空倒流（撤销打卡，完美回滚云端与本地大仓）
+function revokeDailyCheckIn(checkInId) {
+    let logIdx = todayCheckIns.findIndex(item => item.id === checkInId);
+    if (logIdx === -1) return;
+    
+    let item = todayCheckIns[logIdx];
+    let boxIdx = playerBox.findIndex(p => p.name === item.name);
+    
+    if (boxIdx > -1) {
+        let p = playerBox[boxIdx];
+        
+        // 核心回滚防呆：避免数量减到负数
+        if (p.count > 0) p.count -= 1;
+        
+        if (item.result !== 'none') {
+            if (item.track) { // 双轨食材宠回滚
+                let t = item.track;
+                if (p[`${item.result}Count_${t}`] > 0) p[`${item.result}Count_${t}`] -= 1;
+                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
+                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
+                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
+                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            } else { // 常规宠回滚
+                if (p[`${item.result}Count`] > 0) p[`${item.result}Count`] -= 1;
+            }
+        }
+        
+        // 如果 count 减到 0 了，说明是今天新开的格子，直接把整条记录注销掉
+        if (p.count === 0) {
+            playerBox.splice(boxIdx, 1);
+        }
+    }
+
+    // 从今日流水中拔除
+    todayCheckIns.splice(logIdx, 1);
+    localStorage.setItem(TODAY_LOG_KEY, JSON.stringify(todayCheckIns));
+
+    // 🚀 核心新增：同步从永久历史抽卡库中揪出并彻底销毁该痕迹
+    let histIdx = historyLogs.findIndex(h => h.id === checkInId);
+    if (histIdx > -1) {
+        historyLogs.splice(histIdx, 1);
+        saveHistoryToLocal();
+    }
+
+    // 同步刷新
+    updateBoxUI(true);
+    renderTodayReportUI();
+    showToast(`已成功撤销【${item.name}】的捕捉记录，资产已扣回！`);
+}
+
+// ==========================================
+// 🚀 局部新增：今日战报卡片专属【回显修改】与【因果律覆盖算法】
+// ==========================================
+
+// 1. 唤醒并精准回显之前录入的打卡面板（支持时空属性全要素精修）
+function openEditDailyCheckInModal(checkInId) {
+    let item = todayCheckIns.find(log => log.id === checkInId);
+    if (!item) return;
+
+    // 回显初始化：提取该宠物当时被锁定的明确日期与睡眠班次属性
+    let savedDate = item.date || new Date().toISOString().split('T')[0];
+    let savedSession = item.session || "一觉";
+
+    const modal = document.createElement('div');
+    modal.id = 'daily-checkin-modal'; 
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
+    
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('daily-checkin-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        
+        <div class="text-center">
+            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-pen-to-square text-indigo-500"></i> 二次精修捕捉记录</h3>
+            <p class="text-[10px] text-slate-400 font-medium mt-0.5">正在精确修正这条记录，提交后将跨日期全无损洗髓大仓</p>
+        </div>
+
+        <div class="space-y-3">
+            <div class="relative" onclick="event.stopPropagation()">
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">宝可梦名字</label>
+                <input type="text" id="checkin-name" oninput="handleCheckInNameInput()" onfocus="handleCheckInNameInput()" value="${item.name}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
+                <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-1">调整日期</label>
+                    <input type="date" id="checkin-date" value="${savedDate}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none text-slate-700">
+                </div>
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-1">调整轨道</label>
+                    <select id="checkin-session" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none text-slate-700">
+                        <option value="一觉" ${savedSession === '一觉' ? 'selected' : ''}>一觉 (首睡)</option>
+                        <option value="二觉" ${savedSession === '二觉' ? 'selected' : ''}>二觉 (补眠)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">40+级锁金策略</label>
+                <select id="checkin-lock" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none">
+                    <option value="two" ${item.lockMode === 'two' ? 'selected' : ''}>锁 2 金</option>
+                    <option value="one" ${item.lockMode === 'one' ? 'selected' : ''}>锁 1 金</option>
+                    <option value="none" ${item.lockMode === 'none' ? 'selected' : ''}>不锁金</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">这只捕捉的出货评估</label>
+                <select id="checkin-result" onchange="toggleCheckInFoodTrack()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-slate-700">
+                    <option value="none" ${item.result === 'none' ? 'selected' : ''} class="text-slate-400 font-bold">❌ 没货/白条 (给大盘做慈善)</option>
+                    <option value="tied" ${item.result === 'tied' ? 'selected' : ''} class="text-amber-600 font-bold">🔸 和解 (能当个过渡帮手)</option>
+                    <option value="grad" ${item.result === 'grad' ? 'selected' : ''} class="text-slate-800 font-bold">🟩 毕业 (核心功能完全解锁)</option>
+                    <option value="bigGrad" ${item.result === 'bigGrad' ? 'selected' : ''} class="text-purple-600 font-bold">🔮 大毕业 (双技能正性格神兵)</option>
+                    <option value="goldGrad" ${item.result === 'goldGrad' ? 'selected' : ''} class="text-red-600 font-bold">👑 金帮毕业 (自带光环图腾)</option>
+                </select>
+            </div>
+            <div id="checkin-food-track-zone" class="hidden">
+                <label class="block text-[10px] font-bold text-indigo-500 mb-1">食材产出档位</label>
+                <select id="checkin-food-track" class="w-full bg-indigo-50/50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-indigo-900">
+                    <option value="ABB" ${item.track === 'ABB' ? 'selected' : ''}>ABB 多产档 (1.5倍加权)</option>
+                    <option value="AAA" ${item.track === 'AAA' ? 'selected' : ''}>AAA 纯净档 (3.0倍加权)</option>
+                </select>
+            </div>
+        </div>
+
+        <button onclick="submitEditDailyCheckIn(${checkInId})" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md">
+            <i class="fa-solid fa-check"></i> 确认更正，重新编排因果时空
+        </button>
+    </div>`;
+    
+    document.body.appendChild(modal);
+    toggleCheckInFoodTrack();
+}
+
+// 2. 覆盖提交算法：无损回滚大仓旧状态 $\rightarrow$ 融入新数据 $\rightarrow$ 同步更新时光库
+function submitEditDailyCheckIn(checkInId) {
+    const nameInput = document.getElementById('checkin-name');
+    const lockInput = document.getElementById('checkin-lock');
+    const resultSelect = document.getElementById('checkin-result');
+    const dateInput = document.getElementById('checkin-date');
+    const sessionSelect = document.getElementById('checkin-session');
+    
+    let rawName = nameInput.value.trim();
+    let lockMode = lockInput.value;
+    let result = resultSelect.value;
+
+    if (!rawName) { alert("请输入宝可梦名字！"); return; }
+    let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
+    
+    let logIdx = todayCheckIns.findIndex(log => log.id === checkInId);
+    if (logIdx === -1) return;
+    let oldItem = todayCheckIns[logIdx];
+    
+    // 【A. 逆向因果抹除】：把大仓里之前录的老东西彻底退除
+    let oldBoxIdx = playerBox.findIndex(p => p.name === oldItem.name);
+    if (oldBoxIdx > -1) {
+        let p = playerBox[oldBoxIdx]; if (p.count > 0) p.count -= 1;
+        if (oldItem.result !== 'none') {
+            if (oldItem.track) {
+                let t = oldItem.track; if (p[`${oldItem.result}Count_${t}`] > 0) p[`${oldItem.result}Count_${t}`] -= 1;
+                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
+                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
+                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
+                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            } else {
+                if (p[`${oldItem.result}Count`] > 0) p[`${oldItem.result}Count`] -= 1;
+            }
+        }
+        if (p.count === 0) playerBox.splice(oldBoxIdx, 1);
+    }
+    
+    // 【B. 运势对撞重算】：获取并融入前的新基准击败率
+    let newBoxIdx = playerBox.findIndex(p => p.name === standardName);
+    let beforeRate = null;
+    if (newBoxIdx > -1) {
+        let metrics = getPokemonLuckMetrics(playerBox[newBoxIdx]); if (metrics) beforeRate = metrics.rate;
+    }
+    
+    // 【C. 正向高维注入】：将精修后的新明细全量重记入大仓
+    newBoxIdx = playerBox.findIndex(p => p.name === standardName);
+    if (newBoxIdx > -1) {
+        let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
+        if (result !== 'none') {
+            if (FOOD_MODE_BOTH.includes(standardName)) {
+                let track = document.getElementById('checkin-food-track').value;
+                if (result === 'tied') p[`tiedCount_${track}`] = (p[`tiedCount_${track}`] || 0) + 1;
+                if (result === 'grad') p[`gradCount_${track}`] = (p[`gradCount_${track}`] || 0) + 1;
+                if (result === 'bigGrad') p[`bigGradCount_${track}`] = (p[`bigGradCount_${track}`] || 0) + 1;
+                if (result === 'goldGrad') p[`goldGradCount_${track}`] = (p[`goldGradCount_${track}`] || 0) + 1;
+                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
+                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
+                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
+                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            } else {
+                if (result === 'tied') p.tiedCount += 1;
+                if (result === 'grad') p.gradCount += 1;
+                if (result === 'bigGrad') p.bigGradCount += 1;
+                if (result === 'goldGrad') p.goldGradCount += 1;
+            }
+        }
+    } else {
+        let newRecord = {
+            name: standardName, count: 1, lockMode: lockMode,
+            tiedCount: 0, gradCount: 0, bigGradCount: 0, goldGradCount: 0,
+            tiedCount_AAA: 0, tiedCount_ABB: 0, gradCount_AAA: 0, gradCount_ABB: 0,
+            bigGradCount_AAA: 0, bigGradCount_ABB: 0, goldGradCount_AAA: 0, goldGradCount_ABB: 0
+        };
+        if (result !== 'none') {
+            if (FOOD_MODE_BOTH.includes(standardName)) {
+                let track = document.getElementById('checkin-food-track').value; newRecord[`${result}Count_${track}`] = 1;
+            }
+            newRecord[`${result}Count`] = 1;
+        }
+        playerBox.unshift(newRecord); newBoxIdx = 0;
+    }
+    
+    // 【D. 时空粘性更新】：提取玩家在本次修改弹窗中最后敲定的日期与睡眠轨道
+    let trackMode = FOOD_MODE_BOTH.includes(standardName) ? document.getElementById('checkin-food-track').value : null;
+    if (dateInput && sessionSelect) {
+        stickyCheckInDate = dateInput.value;
+        stickyCheckInSession = sessionSelect.value;
+    }
+
+    // 精确覆写流水与时光大库的各项时空标签
+    oldItem.name = standardName; oldItem.lockMode = lockMode; oldItem.result = result; oldItem.track = trackMode;
+    oldItem.date = stickyCheckInDate; oldItem.session = stickyCheckInSession;
+    localStorage.setItem(TODAY_LOG_KEY, JSON.stringify(todayCheckIns));
+
+    let histItem = historyLogs.find(h => h.id === checkInId);
+    if (histItem) {
+        histItem.name = standardName; histItem.lockMode = lockMode; histItem.result = result; histItem.track = trackMode;
+        histItem.date = stickyCheckInDate; histItem.session = stickyCheckInSession;
+        saveHistoryToLocal();
+    }
+    
+    let metricsAfter = getPokemonLuckMetrics(playerBox[newBoxIdx]);
+    let afterRate = metricsAfter ? metricsAfter.rate : 50;
+    
+    document.getElementById('daily-checkin-modal').remove();
+    updateBoxUI(true); renderTodayReportUI();
+    showDailyReportModal(standardName, result, beforeRate, afterRate);
+}
+
+
+    // 🚀 局部新增：历史抽卡时光库全景视窗渲染引擎
+function openHistoryModal() {
+    loadHistoryFromLocal(); // 强行拉取最新快照
+
+    const modal = document.createElement('div');
+    modal.id = 'history-logs-modal';
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
+    
+    // 按日期将扁平流水账进行联合高维分组
+    let grouped = {};
+    historyLogs.forEach(log => {
+        if (!grouped[log.date]) grouped[log.date] = [];
+        grouped[log.date].push(log);
+    });
+    
+    let historyHTML = "";
+    const resultNames = { none: "没货", tied: "🔸和解", grad: "🟩毕业", bigGrad: "🔮大毕业", goldGrad: "👑金帮" };
+    const resultColors = {
+        none: "bg-slate-50 text-slate-400 border-slate-200 font-normal",
+        tied: "bg-amber-50/50 text-amber-700 border-amber-200/60",
+        grad: "bg-slate-900 text-white border-slate-950",
+        bigGrad: "bg-purple-50 text-purple-600 border-purple-200",
+        goldGrad: "bg-red-50 text-red-600 border-red-200"
+    };
+    
+    if (historyLogs.length === 0) {
+        historyHTML = `<div class="text-center py-12 text-slate-400 text-xs font-medium"><i class="fa-solid fa-hourglass block text-2xl mb-2 text-slate-300"></i>时光书卷空无一字，快去完成你的第一发打卡开箱吧！</div>`;
+    } else {
+        // 遍历生成按天分块的优雅时间线布局
+        for (let date in grouped) {
+            let chips = grouped[date].map(it => {
+                let trackText = it.track ? `(${it.track})` : "";
+                let cls = resultColors[it.result] || "bg-slate-100 text-slate-600 border-slate-200";
+                // 🚀 长卷小芯片里完美透出当时打卡的分流轨道
+                let sessionLabel = it.session ? `[${it.session}] ` : "";
+                return `<span class="inline-block px-2.5 py-1 rounded-xl border text-[11px] font-bold shadow-2xs ${cls}">${sessionLabel}${it.name} · ${resultNames[it.result]}${trackText}</span>`;            }).join('');
+            
+            historyHTML += `
+            <div class="border-b border-slate-100/80 pb-3.5 last:border-0">
+                <div class="text-[11px] font-black text-indigo-600 font-mono mb-2 flex items-center gap-1 bg-indigo-50/40 px-2 py-0.5 rounded-lg w-max">
+                    <i class="fa-solid fa-clock text-[10px]"></i> ${date}
+                </div>
+                <div class="flex flex-wrap gap-1.5 pl-1">
+                    ${chips}
+                </div>
+            </div>`;
+        }
+    }
+    
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 relative max-h-[85vh]" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('history-logs-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        
+        <div class="text-center border-b border-slate-50 pb-2">
+            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-book-open text-indigo-500"></i> 历史抽卡时光长卷</h3>
+            <p class="text-[10px] text-slate-400 font-medium mt-0.5">这里如实封存了你过去每一天喂饼干收菜时的欧非交织史</p>
+        </div>
+
+        <div class="flex-1 overflow-y-auto pr-1 space-y-4 max-h-[55vh]">
+            ${historyHTML}
+        </div>
+
+        <button onclick="document.getElementById('history-logs-modal').remove()" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 shadow-md">
+            合上时光书卷
+        </button>
+    </div>`;
+    
+    document.body.appendChild(modal);
+}
     </script>
 </body>
 </html>
