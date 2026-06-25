@@ -1804,6 +1804,9 @@ function updateAuthUI() {
             // 🚀 核心新增：加载网页时，自动恢复并执行跨日过期的今日战报审计
             todayCheckIns = JSON.parse(localStorage.getItem(TODAY_LOG_KEY)) || [];
             renderTodayReportUI();
+
+            // 🛡️ 核心安全新增：网页大门一打开，立刻将该账号历史抽卡时光库载入内存，防止直接打卡时发生历史清空覆写！
+            loadHistoryFromLocal();
             
         };
 
@@ -2511,8 +2514,8 @@ function openHistoryModal() {
                 let cls = resultColors[it.result] || "bg-slate-100 text-slate-600 border-slate-200";
                 // 🚀 长卷小芯片里完美透出当时打卡的分流轨道
                 let sessionLabel = it.session ? `[${it.session}] ` : "";
-                return `<span class="inline-block px-2.5 py-1 rounded-xl border text-[11px] font-bold shadow-2xs ${cls}">${sessionLabel}${it.name} · ${resultNames[it.result]}${trackText}</span>`;            }).join('');
-            
+            // 🚀 核心升级：让历史长卷中的每一个静态标签也彻底拥有点击唤醒历史精修的因果管道！
+            return `<span onclick="openEditHistoryLogModal(${it.id})" class="inline-block px-2.5 py-1 rounded-xl border text-[11px] font-bold shadow-2xs cursor-pointer transition hover:scale-105 active:scale-95 duration-150 ${cls}" title="时间锚点 ID: ${it.id}，点击无损溯源精修这笔历史捕捉">${sessionLabel}${it.name} · ${resultNames[it.result]}${trackText}</span>`;            }).join('');            
             historyHTML += `
             <div class="border-b border-slate-100/80 pb-3.5 last:border-0">
                 <div class="text-[11px] font-black text-indigo-600 font-mono mb-2 flex items-center gap-1 bg-indigo-50/40 px-2 py-0.5 rounded-lg w-max">
@@ -2544,6 +2547,189 @@ function openHistoryModal() {
     </div>`;
     
     document.body.appendChild(modal);
+}
+
+    // ==========================================
+// 🚀 局部新增：时光长卷专属【历史记录回显精修】与【资产因果链溯源重算】引擎
+// ==========================================
+
+// 1. 唤醒任意历史卡片的专属精修弹窗
+function openEditHistoryLogModal(logId) {
+    let item = historyLogs.find(log => log.id === logId);
+    if (!item) return;
+
+    let savedDate = item.date || new Date().toISOString().split('T')[0];
+    let savedSession = item.session || "一觉";
+
+    const modal = document.createElement('div');
+    modal.id = 'daily-checkin-modal'; // 复用相同 ID 承接已有动画与模糊下拉框样式
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
+    
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('daily-checkin-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        
+        <div class="text-center">
+            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-clock-rotate-left text-indigo-500"></i> 深度精修历史资产</h3>
+            <p class="text-[10px] text-slate-400 font-medium mt-0.5">您正在精修过去某天记录的盲盒，保存后将完美追溯并更正大仓数据</p>
+        </div>
+
+        <div class="space-y-3">
+            <div class="relative" onclick="event.stopPropagation()">
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">宝可梦名字</label>
+                <input type="text" id="checkin-name" oninput="handleCheckInNameInput()" onfocus="handleCheckInNameInput()" value="${item.name}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
+                <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-1">调整历史日期</label>
+                    <input type="date" id="checkin-date" value="${savedDate}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none text-slate-700">
+                </div>
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-1">换绑睡眠轨道</label>
+                    <select id="checkin-session" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none text-slate-700">
+                        <option value="一觉" ${savedSession === '一觉' ? 'selected' : ''}>一觉 (首睡)</option>
+                        <option value="二觉" ${savedSession === '二觉' ? 'selected' : ''}>二觉 (补眠)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">40+级锁金策略</label>
+                <select id="checkin-lock" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none">
+                    <option value="two" ${item.lockMode === 'two' ? 'selected' : ''}>锁 2 金</option>
+                    <option value="one" ${item.lockMode === 'one' ? 'selected' : ''}>锁 1 金</option>
+                    <option value="none" ${item.lockMode === 'none' ? 'selected' : ''}>不锁金</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">此发捕捉的出货评估</label>
+                <select id="checkin-result" onchange="toggleCheckInFoodTrack()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-slate-700">
+                    <option value="none" ${item.result === 'none' ? 'selected' : ''} class="text-slate-400 font-bold">❌ 没货/白条 (给大盘做慈善)</option>
+                    <option value="tied" ${item.result === 'tied' ? 'selected' : ''} class="text-amber-600 font-bold">🔸 和解 (能当个过渡帮手)</option>
+                    <option value="grad" ${item.result === 'grad' ? 'selected' : ''} class="text-slate-800 font-bold">🟩 毕业 (核心功能完全解锁)</option>
+                    <option value="bigGrad" ${item.result === 'bigGrad' ? 'selected' : ''} class="text-purple-600 font-bold">🔮 大毕业 (双技能正性格神兵)</option>
+                    <option value="goldGrad" ${item.result === 'goldGrad' ? 'selected' : ''} class="text-red-600 font-bold">👑 金帮毕业 (自带光环图腾)</option>
+                </select>
+            </div>
+            <div id="checkin-food-track-zone" class="hidden">
+                <label class="block text-[10px] font-bold text-indigo-500 mb-1">食材产出档位</label>
+                <select id="checkin-food-track" class="w-full bg-indigo-50/50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-indigo-900">
+                    <option value="ABB" ${item.track === 'ABB' ? 'selected' : ''}>ABB 多产档 (1.5倍加权)</option>
+                    <option value="AAA" ${item.track === 'AAA' ? 'selected' : ''}>AAA 纯净档 (3.0倍加权)</option>
+                </select>
+            </div>
+        </div>
+
+        <button onclick="submitEditHistoryLog(${logId})" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md">
+            <i class="fa-solid fa-cloud-arrow-up"></i> 溯源重算，洗髓历史大仓
+        </button>
+    </div>`;
+    
+    document.body.appendChild(modal);
+    toggleCheckInFoodTrack();
+}
+
+// 2. 覆盖提交：无损回滚老资产 -> 注入新修改 -> 智能联动本地活跃账本与历史时间线
+function submitEditHistoryLog(logId) {
+    const nameInput = document.getElementById('checkin-name');
+    const lockInput = document.getElementById('checkin-lock');
+    const resultSelect = document.getElementById('checkin-result');
+    const dateInput = document.getElementById('checkin-date');
+    const sessionSelect = document.getElementById('checkin-session');
+    
+    let rawName = nameInput.value.trim();
+    let lockMode = lockInput.value;
+    let result = resultSelect.value;
+
+    if (!rawName) { alert("请输入宝可梦名字！"); return; }
+    let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
+    
+    let histIdx = historyLogs.findIndex(h => h.id === logId);
+    if (histIdx === -1) return;
+    let oldItem = historyLogs[histIdx];
+    
+    // 【A. 逆向因果因退扣除】
+    let oldBoxIdx = playerBox.findIndex(p => p.name === oldItem.name);
+    if (oldBoxIdx > -1) {
+        let p = playerBox[oldBoxIdx]; if (p.count > 0) p.count -= 1;
+        if (oldItem.result !== 'none') {
+            if (oldItem.track) {
+                let t = oldItem.track; if (p[`${oldItem.result}Count_${t}`] > 0) p[`${oldItem.result}Count_${t}`] -= 1;
+                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
+                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
+                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
+                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            } else {
+                if (p[`${oldItem.result}Count`] > 0) p[`${oldItem.result}Count`] -= 1;
+            }
+        }
+        if (p.count === 0) playerBox.splice(oldBoxIdx, 1);
+    }
+    
+    // 【B. 正向新资产注入】
+    let newBoxIdx = playerBox.findIndex(p => p.name === standardName);
+    if (newBoxIdx > -1) {
+        let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
+        if (result !== 'none') {
+            if (FOOD_MODE_BOTH.includes(standardName)) {
+                let track = document.getElementById('checkin-food-track').value;
+                if (result === 'tied') p[`tiedCount_${track}`] = (p[`tiedCount_${track}`] || 0) + 1;
+                if (result === 'grad') p[`gradCount_${track}`] = (p[`gradCount_${track}`] || 0) + 1;
+                if (result === 'bigGrad') p[`bigGradCount_${track}`] = (p[`bigGradCount_${track}`] || 0) + 1;
+                if (result === 'goldGrad') p[`goldGradCount_${track}`] = (p[`goldGradCount_${track}`] || 0) + 1;
+                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
+                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
+                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
+                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            } else {
+                if (result === 'tied') p.tiedCount += 1;
+                if (result === 'grad') p.gradCount += 1;
+                if (result === 'bigGrad') p.bigGradCount += 1;
+                if (result === 'goldGrad') p.goldGradCount += 1;
+            }
+        }
+    } else {
+        let newRecord = {
+            name: standardName, count: 1, lockMode: lockMode,
+            tiedCount: 0, gradCount: 0, bigGradCount: 0, goldGradCount: 0,
+            tiedCount_AAA: 0, tiedCount_ABB: 0, gradCount_AAA: 0, gradCount_ABB: 0,
+            bigGradCount_AAA: 0, bigGradCount_ABB: 0, goldGradCount_AAA: 0, goldGradCount_ABB: 0
+        };
+        if (result !== 'none') {
+            if (FOOD_MODE_BOTH.includes(standardName)) {
+                let track = document.getElementById('checkin-food-track').value; newRecord[`${result}Count_${track}`] = 1;
+            }
+            newRecord[`${result}Count`] = 1;
+        }
+        playerBox.unshift(newRecord);
+    }
+    
+    // 【C. 覆盖持久化属性】
+    let trackMode = FOOD_MODE_BOTH.includes(standardName) ? document.getElementById('checkin-food-track').value : null;
+    oldItem.name = standardName; oldItem.lockMode = lockMode; oldItem.result = result; oldItem.track = trackMode;
+    oldItem.date = dateInput.value; oldItem.session = sessionSelect.value;
+    saveHistoryToLocal();
+
+    // 联动更新今日活跃卡槽账本（如果在记录在当前的流水墙内）
+    let todayItem = todayCheckIns.find(t => t.id === logId);
+    if (todayItem) {
+        todayItem.name = standardName; todayItem.lockMode = lockMode; todayItem.result = result; todayItem.track = trackMode;
+        todayItem.date = dateInput.value; todayItem.session = sessionSelect.value;
+        localStorage.setItem(TODAY_LOG_KEY, JSON.stringify(todayCheckIns));
+    }
+    
+    document.getElementById('daily-checkin-modal').remove();
+    
+    // 卸载旧历史弹窗并原地即时重新召唤
+    const histModal = document.getElementById('history-logs-modal');
+    if (histModal) histModal.remove();
+    
+    updateBoxUI(true); 
+    renderTodayReportUI();
+    openHistoryModal(); // 🚀 原地刷新完成时空排列组合的时光长卷
+    showToast(`该笔历史捕捉已完成溯源精修，大仓资产洗髓成功！`);
 }
     </script>
 </body>
