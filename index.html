@@ -75,6 +75,171 @@
                 </button>
             </div>
         </div>
+        
+        
+
+        <!-- 🚀 局部更正：纯净无废话版 网站功能使用说明与注意事项（Pluto丶出品） -->
+        <div class="bg-white rounded-3xl border border-slate-200/70 shadow-sm overflow-hidden transition-all duration-300 mt-2">
+            <button onclick="document.getElementById('guide-content').classList.toggle('hidden')" class="w-full px-6 py-4 bg-slate-50 flex items-center justify-between hover:bg-slate-100/70 transition text-left">
+                <span class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <i class="fa-solid fa-circle-question text-indigo-500"></i> 💡 查看网站使用说明与注意事项 (点击展开)
+                </span>
+                <i class="fa-solid fa-chevron-down text-slate-400 text-xs"></i>
+            </button>
+            <div id="guide-content" class="hidden p-6 border-t border-slate-100 bg-white flex flex-col gap-5 text-xs leading-relaxed">
+                
+                <!-- 使用方法 -->
+                <div>
+                    <h4 class="font-bold text-slate-800 mb-1.5 flex items-center gap-1 text-xs">
+                        <i class="fa-solid fa-gears text-slate-600"></i> 使用方法
+                    </h4>
+                    <p class="text-slate-600 pl-5">
+                        通过输入<strong>宝可梦名字</strong>（支持模糊联想提示）、<strong>捕捉数</strong>、<strong>40级后锁金策略</strong>，以及该宝可梦的<strong>合计出货情况</strong>（和解/毕业/大毕业/金帮毕业的具体数量），输入完成后即可录入一种宝可梦。请特别注意：<strong>不同的进化型在此算作不同的宝可梦</strong>，需要分开独立录入资产。
+                    </p>
+                </div>
+
+                <!-- 展示效果 -->
+                <div>
+                    <h4 class="font-bold text-slate-800 mb-1.5 flex items-center gap-1 text-xs">
+                        <i class="fa-solid fa-chart-simple text-slate-600"></i> 展示效果
+                    </h4>
+                    <p class="text-slate-600 pl-5">
+                        成功录入后，页面会立刻重绘并展示每一种宝可梦独立的<strong>欧非分数</strong>。同时，上方大盘会<strong>实时展现当前大仓的综合运势分数</strong>，以及树果、食材、技能三种品类的相对欧非程度。
+                    </p>
+                </div>
+
+                <!-- 注意事项 -->
+                <div class="border-t border-slate-100 pt-4">
+                    <h4 class="font-bold text-rose-800 mb-2 flex items-center gap-1 text-xs">
+                        <i class="fa-solid fa-triangle-exclamation text-rose-500"></i> 注意事项与防虚高指南
+                    </h4>
+                    <ul class="list-disc pl-9 space-y-1.5 text-slate-600">
+                        <li><strong>切勿只录出货宠（防总分虚高）</strong>：大盘分数是实时展示的，但<strong>只有录入的 Box 足够完整，这个综合分数才更加真实有效</strong>。如果一直抱有选择性，只录入已经出货的宝可梦，会导致你的综合大盘分<strong>严重虚高</strong>！请务必把那些捕捉量很大、但颗粒无收完全没出货的非酋宠、进化型等如实全部记入。</li>
+                        <li><strong>特异品种暂离</strong>：由于技术原因，有许多宝可梦目前无法参与运气和气运计算，对此深表抱歉。这类无法参与计算的宝可梦<strong>均为特殊技能型宝可梦</strong>。</li>
+                        <li><strong>毕业线参考</strong>：关于各个梯度具体的毕业标准、副技能搭配以及对应的效率增幅，可随时参照本站隔壁的<strong>【审计标准与极限特征值】</strong>说明面板。</li>
+                    </ul>
+                </div>
+
+                <!-- 联络渠道 -->
+                <div class="bg-indigo-50/40 p-3 rounded-2xl border border-indigo-100/50 text-[11px] text-indigo-950 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mt-1">
+                    <p>
+                        💬 <strong>意见与建议</strong>：如果对于本网站有任何改进意见、功能建议，或是任何想唠的话，都随时欢迎联系作者本人。
+                    </p>
+                    <span class="font-bold bg-white px-2.5 py-1 rounded-xl shadow-sm border border-indigo-100 flex items-center gap-1 text-slate-700 flex-shrink-0">
+                        <i class="fa-solid fa-hashtag text-rose-500 text-[10px]"></i> 小红书：<span class="text-indigo-600 font-extrabold">Pluto丶</span>（头像为水跃鱼）
+                    </span>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- 🚀 局部新增：折叠式大仓核心审计标准与效率特征值说明（致谢 Leo & Kolin） -->
+        <div class="bg-white rounded-3xl border border-slate-200/70 shadow-sm overflow-hidden transition-all duration-300">
+            <button onclick="document.getElementById('docs-content').classList.toggle('hidden')" class="w-full px-6 py-4 bg-slate-50 flex items-center justify-between hover:bg-slate-100/70 transition text-left">
+                <span class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <i class="fa-solid fa-book-bookmark text-indigo-500"></i> 📖 查看 Box 核心审计标准与极限效率特征值 (点击展开)
+                </span>
+                <i class="fa-solid fa-chevron-down text-slate-400 text-xs"></i>
+            </button>
+            <div id="docs-content" class="hidden p-6 border-t border-slate-100 bg-white flex flex-col gap-5">
+                <!-- 致谢高光卡片 -->
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 bg-indigo-50/50 p-3 rounded-2xl border border-indigo-100/40">
+                    <p class="text-[11px] text-indigo-950 font-medium leading-relaxed">
+                        💡 <strong>数据贡献致谢</strong>：本大仓全品种相对效率模型及底层极限特征值，由谜之玩家 <span class="text-indigo-600 font-extrabold">Leo</span> 和 <span class="text-indigo-600 font-extrabold">Kolin</span> 联袂精确计算得出，特此特此鸣谢！
+                    </p>
+                </div>
+                
+                <!-- 三轨道横向效率说明矩阵 -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- 树果型 -->
+                    <div class="bg-amber-50/30 border border-amber-200/60 rounded-2xl p-4 flex flex-col gap-3">
+                        <h4 class="text-xs font-black text-amber-800 flex items-center gap-1">
+                            <i class="fa-solid fa-seedling"></i> 树果型审计基准
+                        </h4>
+                        <div class="space-y-2 text-[11px]">
+                            <div class="flex justify-between items-center border-b border-amber-100 pb-1.5">
+                                <span class="font-bold text-slate-600">和解线</span>
+                                <span class="text-slate-400 font-medium">果s 性格帮</span>
+                                <span class="font-mono font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">1.667</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-amber-100 pb-1.5">
+                                <span class="font-bold text-slate-600">毕业线</span>
+                                <span class="text-slate-400 font-medium">果s 性格帮帮s</span>
+                                <span class="font-mono font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">1.792</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-amber-100 pb-1.5">
+                                <span class="font-bold text-slate-600">大毕业线</span>
+                                <span class="text-slate-400 font-medium">果s 帮m性格帮(2帮)</span>
+                                <span class="font-mono font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">1.938</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-slate-600">金帮毕业线</span>
+                                <span class="text-slate-400 font-medium">果s 金帮</span>
+                                <span class="font-mono font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">1.579</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 食材型 -->
+                    <div class="bg-emerald-50/30 border border-emerald-200/60 rounded-2xl p-4 flex flex-col gap-3">
+                        <h4 class="text-xs font-black text-emerald-800 flex items-center gap-1">
+                            <i class="fa-solid fa-carrot"></i> 食材型审计基准
+                        </h4>
+                        <div class="space-y-2 text-[11px]">
+                            <div class="flex justify-between items-center border-b border-emerald-100 pb-1.5">
+                                <span class="font-bold text-slate-600">和解线</span>
+                                <span class="text-slate-400 font-medium">概m 帮m</span>
+                                <span class="font-mono font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">1.581</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-emerald-100 pb-1.5">
+                                <span class="font-bold text-slate-600">毕业线</span>
+                                <span class="text-slate-400 font-medium">概m 性格概(2概)</span>
+                                <span class="font-mono font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">1.632</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-emerald-100 pb-1.5">
+                                <span class="font-bold text-slate-600">大毕业线</span>
+                                <span class="text-slate-400 font-medium">概m 性格概帮s</span>
+                                <span class="font-mono font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">1.755</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-slate-600">金帮毕业线</span>
+                                <span class="text-slate-400 font-medium">金帮 性格概帮m</span>
+                                <span class="font-mono font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">1.481</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 技能型 -->
+                    <div class="bg-purple-50/30 border border-purple-200/60 rounded-2xl p-4 flex flex-col gap-3">
+                        <h4 class="text-xs font-black text-purple-800 flex items-center gap-1">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> 技能型审计基准
+                        </h4>
+                        <div class="space-y-2 text-[11px]">
+                            <div class="flex justify-between items-center border-b border-purple-100 pb-1.5">
+                                <span class="font-bold text-slate-600">和解线</span>
+                                <span class="text-slate-400 font-medium">概m 性格概(2概)</span>
+                                <span class="font-mono font-black text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">1.632</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-purple-100 pb-1.5">
+                                <span class="font-bold text-slate-600">毕业线</span>
+                                <span class="text-slate-400 font-medium">概m 性格概帮s</span>
+                                <span class="font-mono font-black text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">1.755</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-purple-100 pb-1.5">
+                                <span class="font-bold text-slate-600">大毕业线</span>
+                                <span class="text-slate-400 font-medium">概m 概s 性格概</span>
+                                <span class="font-mono font-black text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">1.848</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-slate-600">金帮毕业线</span>
+                                <span class="text-slate-400 font-medium">金帮 概m 帮s</span>
+                                <span class="font-mono font-black text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">1.545</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- 顶栏七列统计卡片 -->
         <div class="grid grid-cols-2 md:grid-cols-7 gap-4">
@@ -420,6 +585,9 @@ function normalizePlayerBox() {
             '利欧路': { standard: '利欧路', type: 'skill', defaultLock: 'none' }, '利歐路': { standard: '利欧路', type: 'skill', defaultLock: 'none' },
             '路卡利欧': { standard: '路卡利欧', type: 'skill', defaultLock: 'none' }, '路卡利歐': { standard: '路卡利欧', type: 'skill', defaultLock: 'none' },
             '咚咚鼠': { standard: '咚咚鼠', type: 'skill', defaultLock: 'none' },
+            '卡蒂狗': { standard: '卡蒂狗', type: 'special_skill', defaultLock: 'none' },
+            '呆呆兽': { standard: '呆呆兽', type: 'skill', defaultLock: 'none' },
+            '呆壳兽': { standard: '呆壳兽', type: 'skill', defaultLock: 'none' },
 
             '木守宫': { standard: '木守宫', type: 'special_skill', defaultLock: 'none' }, '木守宮': { standard: '木守宫', type: 'special_skill', defaultLock: 'none' },
             '森林蜥蜴': { standard: '森林蜥蜴', type: 'special_skill', defaultLock: 'none' },
@@ -430,7 +598,7 @@ function normalizePlayerBox() {
             '音波龙': { standard: '音波龙', type: 'special_skill', defaultLock: 'none' }, '音波龍': { standard: '音波龙', type: 'special_skill', defaultLock: 'none' },
             '谜拟Q': { standard: '谜拟Q', type: 'special_skill', defaultLock: 'none' }, '謎擬Q': { standard: '谜拟Q', type: 'special_skill', defaultLock: 'none' },
             '咩利羊': { standard: '咩利羊', type: 'special_skill', defaultLock: 'none' },
-            '茸茸': { standard: '茸茸', type: 'special_skill', defaultLock: 'none' }, '茸茸羊': { standard: '茸茸', type: 'special_skill', defaultLock: 'none' },
+            '茸茸羊': { standard: '茸茸羊', type: 'special_skill', defaultLock: 'none' }, '茸茸羊': { standard: '茸茸羊', type: 'special_skill', defaultLock: 'none' },
             '电龙': { standard: '电龙', type: 'special_skill', defaultLock: 'none' }, '電龍': { standard: '电龙', type: 'special_skill', defaultLock: 'none' },
             '可达鸭': { standard: '可达鸭', type: 'special_skill', defaultLock: 'none' }, '可達鴨': { standard: '可达鸭', type: 'special_skill', defaultLock: 'none' },
             '哥达鸭': { standard: '哥达鸭', type: 'special_skill', defaultLock: 'none' }, '哥達鴨': { standard: '哥达鸭', type: 'special_skill', defaultLock: 'none' },
