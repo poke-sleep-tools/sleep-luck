@@ -3244,7 +3244,7 @@ function rollbackCheckInAsset(item) {
     }
 }
 
-function deleteHistoryLog(logId, e) {
+async function deleteHistoryLog(logId, e) {
     if (e) e.stopPropagation();
 
     let histIdx = historyLogs.findIndex(h => String(h.id) === String(logId));
@@ -3259,6 +3259,10 @@ function deleteHistoryLog(logId, e) {
 
     historyLogs.splice(histIdx, 1);
     saveHistoryToLocal();
+
+    // 删除是“减法操作”，不能等 500ms 的防抖同步；否则重新打开历史库时会先从旧云端把它合并回来。
+    // 所以这里立刻把删减后的 historyLogs 写回 Supabase。
+    await saveHistoryToCloudNow();
 
     // 如果这条历史记录曾经自动进入毕业库，也一起移除对应档案。
     // 只移除 sourceId 相同的自动档案，不会影响手动补录的毕业库记录。
@@ -3278,7 +3282,7 @@ function deleteHistoryLog(logId, e) {
     const histModal = document.getElementById('history-logs-modal');
     if (histModal) histModal.remove();
 
-    openHistoryModal();
+    openHistoryModal(true);
     showToast(`已删除【${item.name}】历史记录，并从大仓扣回该次捕捉。`);
 }
 
@@ -3741,9 +3745,11 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
 }
 
 // 🚀 局部新增：历史抽卡时光库全景视窗渲染引擎
-async function openHistoryModal() {
-    // 登录状态优先拉云端最新历史；游客状态读取本地专属历史
-    if (currentCloudUser) {
+async function openHistoryModal(skipCloudRefresh = false) {
+    // 登录状态优先拉云端最新历史；但删除/编辑后本地已是最新时，可跳过云端刷新，避免旧云端数据被合并回画面。
+    if (skipCloudRefresh) {
+        // 保持当前内存中的 historyLogs，不重新读取。
+    } else if (currentCloudUser) {
         await loadHistoryFromCloud();
     } else {
         loadHistoryFromLocal();
