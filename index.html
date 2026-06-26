@@ -527,6 +527,19 @@ function saveTodayCheckInsToLocal() {
     localStorage.setItem(getTodayLogStorageKey(), JSON.stringify(todayCheckIns));
 }
 
+function getCheckInDisplayShapeTag(item) {
+    // 小胶囊中优先展示“实际面板食材形态”，例如 ABC。
+    // item.track 是“大仓计入轨道”（AAA/ABB），不是这只宝可梦真实食材组合；
+    // 所以只有旧记录没有 foodCombo 时，才回退显示 track。
+    if (item && typeof item.foodCombo === 'string' && item.foodCombo.length === 3) {
+        return `(${item.foodCombo})`;
+    }
+    if (item && item.track) {
+        return `(${item.track})`;
+    }
+    return "";
+}
+
 function mergeTodayCheckIns(localLogs = [], historyTodayLogs = []) {
     const deletedIds = new Set(
         (Array.isArray(historyLogs) ? historyLogs : [])
@@ -3194,10 +3207,10 @@ function renderTodayReportUI() {
         // 绘制当前睡眠批次内部包含的宠物胶囊卡片
         let chipsHTML = grouped[batchKey].map(item => {
             let badge = resultBadges[item.result] || { text: "未知", cls: "bg-slate-100 text-slate-600" };
-            let trackText = item.track ? `(${item.track})` : "";
+            let shapeText = getCheckInDisplayShapeTag(item);
             return `
             <div onclick="openEditDailyCheckInModal(${item.id})" class="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-bold shadow-xs transition hover:bg-slate-50 cursor-pointer duration-150 active:scale-95 ${badge.cls}" title="点击重新唤醒该记录，可修改日期/睡眠班次等所有明细">
-                <span>${item.name} · ${badge.text}${trackText}</span>
+                <span>${item.name} · ${badge.text}${shapeText}</span>
                 <button onclick="event.stopPropagation(); revokeDailyCheckIn(${item.id})" class="text-slate-400 hover:text-rose-600 ml-1 transition" title="点击撤销此条捕捉，回滚大仓资产">
                     <i class="fa-solid fa-circle-xmark"></i>
                 </button>
@@ -3279,81 +3292,9 @@ function revokeDailyCheckIn(checkInId) {
 
 // 1. 唤醒并精准回显之前录入的打卡面板（支持时空属性全要素精修）
 function openEditDailyCheckInModal(checkInId) {
-    let item = todayCheckIns.find(log => log.id === checkInId);
-    if (!item) return;
-
-    // 回显初始化：提取该宠物当时被锁定的明确日期与睡眠班次属性
-    let savedDate = item.date || new Date().toISOString().split('T')[0];
-    let savedSession = item.session || "一觉";
-
-    const modal = document.createElement('div');
-    modal.id = 'daily-checkin-modal'; 
-    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
-    
-    modal.innerHTML = `
-    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
-        <button onclick="document.getElementById('daily-checkin-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
-        
-        <div class="text-center">
-            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-pen-to-square text-indigo-500"></i> 二次精修捕捉记录</h3>
-            <p class="text-[10px] text-slate-400 font-medium mt-0.5">正在精确修正这条记录，提交后将跨日期全无损洗髓大仓</p>
-        </div>
-
-        <div class="space-y-3">
-            <div class="relative" onclick="event.stopPropagation()">
-                <label class="block text-[10px] font-bold text-slate-500 mb-1">宝可梦名字</label>
-                <input type="text" id="checkin-name" oninput="handleCheckInNameInput()" onfocus="handleCheckInNameInput()" value="${item.name}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
-                <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-2">
-                <div>
-                    <label class="block text-[10px] font-bold text-slate-500 mb-1">调整日期</label>
-                    <input type="date" id="checkin-date" value="${savedDate}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none text-slate-700">
-                </div>
-                <div>
-                    <label class="block text-[10px] font-bold text-slate-500 mb-1">调整轨道</label>
-                    <select id="checkin-session" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none text-slate-700">
-                        <option value="一觉" ${savedSession === '一觉' ? 'selected' : ''}>一觉 (首睡)</option>
-                        <option value="二觉" ${savedSession === '二觉' ? 'selected' : ''}>二觉 (补眠)</option>
-                    </select>
-                </div>
-            </div>
-
-            <div>
-                <label class="block text-[10px] font-bold text-slate-500 mb-1">40+级锁金策略</label>
-                <select id="checkin-lock" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none">
-                    <option value="two" ${item.lockMode === 'two' ? 'selected' : ''}>锁 2 金</option>
-                    <option value="one" ${item.lockMode === 'one' ? 'selected' : ''}>锁 1 金</option>
-                    <option value="none" ${item.lockMode === 'none' ? 'selected' : ''}>不锁金</option>
-                </select>
-            </div>
-            <div>
-                <label class="block text-[10px] font-bold text-slate-500 mb-1">这只捕捉的出货评估</label>
-                <select id="checkin-result" onchange="toggleCheckInFoodTrack()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-slate-700">
-                    <option value="none" ${item.result === 'none' ? 'selected' : ''} class="text-slate-400 font-bold">❌ 没货/白条 (给大盘做慈善)</option>
-                    <option value="tied" ${item.result === 'tied' ? 'selected' : ''} class="text-amber-600 font-bold">🔸 和解 (能当个过渡帮手)</option>
-                    <option value="grad" ${item.result === 'grad' ? 'selected' : ''} class="text-slate-800 font-bold">🟩 毕业 (核心功能完全解锁)</option>
-                    <option value="bigGrad" ${item.result === 'bigGrad' ? 'selected' : ''} class="text-purple-600 font-bold">🔮 大毕业 (双技能正性格神兵)</option>
-                    <option value="goldGrad" ${item.result === 'goldGrad' ? 'selected' : ''} class="text-red-600 font-bold">👑 金帮毕业 (自带光环图腾)</option>
-                </select>
-            </div>
-            <div id="checkin-food-track-zone" class="hidden">
-                <label class="block text-[10px] font-bold text-indigo-500 mb-1">计入大仓食材轨道</label>
-                <select id="checkin-food-track" onchange="window.userManuallyOverrodeFoodTrack = true;" class="w-full bg-indigo-50/50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-indigo-900">
-                    <option value="ABB" selected>计入 ABB 出货</option>
-                    <option value="AAA">计入 AAA 出货</option>
-                </select>
-            </div>
-        </div>
-
-        <button onclick="submitEditDailyCheckIn(${checkInId})" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md">
-            <i class="fa-solid fa-check"></i> 确认更正，重新编排因果时空
-        </button>
-    </div>`;
-    
-    document.body.appendChild(modal);
-    toggleCheckInFoodTrack();
+    // 本次捕捉录入流水栏也统一复用新版“智能面板审计”编辑面板。
+    // 旧版这里曾经单独生成简化弹窗，导致副技能、性格、食材组合等新版字段无法编辑。
+    openEditHistoryLogModal(checkInId);
 }
 
 // 2. 覆盖提交算法：无损回滚大仓旧状态 $\rightarrow$ 融入新数据 $\rightarrow$ 同步更新时光库
@@ -4051,16 +3992,16 @@ async function openHistoryModal(skipCloudRefresh = false) {
         // 遍历生成按天分块的优雅时间线布局
         for (let date in grouped) {
             let chips = grouped[date].map(it => {
-                let trackText = it.track ? `(${it.track})` : "";
+                let shapeText = getCheckInDisplayShapeTag(it);
                 let cls = resultColors[it.result] || "bg-slate-100 text-slate-600 border-slate-200";
-                // 🚀 长卷小芯片里完美透出当时打卡的分流轨道
+                // 小芯片优先透出当时记录的实际面板食材形态，例如 ABC；旧记录没有 foodCombo 时才回退显示大仓轨道。
                 let sessionLabel = it.session ? `[${it.session}] ` : "";
             // 🚀 核心升级：让历史长卷中的每一个静态标签也彻底拥有点击唤醒历史精修的因果管道！
             let safeId = JSON.stringify(it.id);
             return `
             <span class="inline-flex items-center rounded-xl border shadow-2xs overflow-hidden ${cls}" title="时间锚点 ID: ${it.id}">
                 <button onclick="openEditHistoryLogModal(${safeId})" class="px-2.5 py-1 text-[11px] font-bold cursor-pointer transition hover:scale-105 active:scale-95 duration-150">
-                    ${sessionLabel}${it.name} · ${resultNames[it.result]}${trackText}
+                    ${sessionLabel}${it.name} · ${resultNames[it.result]}${shapeText}
                 </button>
                 <button onclick="deleteHistoryLog(${safeId}, event)" class="px-1.5 py-1 text-[10px] font-black border-l border-current/10 opacity-60 hover:opacity-100 hover:bg-red-500 hover:text-white transition" title="删除这条历史记录并扣回大仓">
                     <i class="fa-solid fa-trash-can"></i>
@@ -4107,6 +4048,9 @@ async function openHistoryModal(skipCloudRefresh = false) {
 // 1. 唤醒任意历史卡片：复用新版“智能面板审计 · 气运盲盒”弹窗
 function openEditHistoryLogModal(logId) {
     let item = getVisibleHistoryLogs(historyLogs).find(log => String(log.id) === String(logId));
+    if (!item) {
+        item = todayCheckIns.find(log => String(log.id) === String(logId));
+    }
     if (!item) return;
 
     // 直接复用新版每日打卡面板，避免历史编辑还停留在旧 UI
@@ -4184,6 +4128,8 @@ function submitEditHistoryLog(logId) {
     const dateInput = document.getElementById('checkin-date');
     const sessionSelect = document.getElementById('checkin-session');
     
+    syncNatureHiddenFromParts();
+
     let rawName = nameInput.value.trim();
     let lockMode = lockInput.value;
     let result = resultSelect.value;
@@ -4295,17 +4241,24 @@ function submitEditHistoryLog(logId) {
         todayItem.foodCombo = foodCombo;
         saveTodayCheckInsToLocal();
     }
-    
+    if (currentCloudUser) {
+        saveHistoryToCloudNow();
+        saveBoxToCloudNow();
+        saveGraduationDexToCloudNow();
+    }
+
     document.getElementById('daily-checkin-modal').remove();
-    
-    // 卸载旧历史弹窗并原地即时重新召唤
+
+    // 如果历史库弹窗本来开着，就刷新历史库；如果只是从今日流水点进来，则不强行打开历史库。
     const histModal = document.getElementById('history-logs-modal');
-    if (histModal) histModal.remove();
-    
+    if (histModal) {
+        histModal.remove();
+        openHistoryModal(true);
+    }
+
     updateBoxUI(true); 
     renderTodayReportUI();
-    openHistoryModal(); // 🚀 原地刷新完成时空排列组合的时光长卷
-    showToast(`该笔历史捕捉已完成溯源精修，大仓资产洗髓成功！`);
+    showToast(`该笔捕捉记录已完成新版面板精修，大仓资产洗髓成功！`);
 }
 
     // ========================================================
