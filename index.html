@@ -432,6 +432,9 @@
             </div>
         </div>
 
+        <!-- 三系大仓速览：按树果 / 食材 / 技能汇总捕捉与毕业情况 -->
+        <div id="type-summary-panel" class="hidden bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm"></div>
+
         <div id="today-report-panel" class="bg-white p-5 rounded-3xl border border-indigo-100 shadow-sm hidden flex-col gap-4">
             <div class="flex justify-between items-center border-b border-slate-100 pb-2">
                 <h3 class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
@@ -1397,6 +1400,124 @@ function normalizePlayerBox() {
             updateBoxUI();
         }
 
+
+        function getPokemonSummaryType(name) {
+            const dict = pokemonDictionary[name];
+            if (!dict) return null;
+            if (dict.type === 'berry') return 'berry';
+            if (dict.type === 'food') return 'food';
+            if (dict.type === 'skill' || dict.type === 'special_skill') return 'skill';
+            return null;
+        }
+
+        function renderTypeSummaryPanel() {
+            const panel = document.getElementById('type-summary-panel');
+            if (!panel) return;
+
+            if (!playerBox || playerBox.length === 0) {
+                panel.classList.add('hidden');
+                panel.innerHTML = '';
+                return;
+            }
+
+            const stats = {
+                berry: { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
+                food:  { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
+                skill: { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 }
+            };
+
+            playerBox.forEach(p => {
+                const type = getPokemonSummaryType(p.name);
+                if (!type || !stats[type]) return;
+
+                stats[type].species += 1;
+                stats[type].catches += Number(p.count || 0);
+                stats[type].tied += Number(p.tiedCount || 0);
+                stats[type].grad += Number(p.gradCount || 0);
+                stats[type].bigGrad += Number(p.bigGradCount || 0);
+                stats[type].goldGrad += Number(p.goldGradCount || 0);
+            });
+
+            const configs = [
+                {
+                    key: 'berry',
+                    label: '树果型',
+                    icon: 'fa-seedling',
+                    card: 'bg-amber-50/70 border-amber-200/70',
+                    title: 'text-amber-800',
+                    badge: 'bg-amber-500 text-slate-950',
+                    total: 'text-amber-700'
+                },
+                {
+                    key: 'food',
+                    label: '食材型',
+                    icon: 'fa-carrot',
+                    card: 'bg-emerald-50/70 border-emerald-200/70',
+                    title: 'text-emerald-800',
+                    badge: 'bg-emerald-500 text-white',
+                    total: 'text-emerald-700'
+                },
+                {
+                    key: 'skill',
+                    label: '技能型',
+                    icon: 'fa-wand-magic-sparkles',
+                    card: 'bg-purple-50/70 border-purple-200/70',
+                    title: 'text-purple-800',
+                    badge: 'bg-purple-500 text-white',
+                    total: 'text-purple-700'
+                }
+            ];
+
+            const makeMiniStat = (label, value, extraCls = 'text-slate-700') => `
+                <div class="flex items-center justify-between gap-2 bg-white/70 border border-white rounded-lg px-2 py-1">
+                    <span class="text-[9px] font-bold text-slate-400">${label}</span>
+                    <span class="text-[11px] font-black font-mono ${extraCls}">${value}</span>
+                </div>`;
+
+            const cards = configs.map(cfg => {
+                const s = stats[cfg.key];
+                const graduatedTotal = s.grad + s.bigGrad + s.goldGrad;
+
+                return `
+                <div class="rounded-2xl border ${cfg.card} p-3 flex flex-col gap-2">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-6 h-6 rounded-xl ${cfg.badge} flex items-center justify-center text-[10px] shadow-sm">
+                                <i class="fa-solid ${cfg.icon}"></i>
+                            </span>
+                            <div>
+                                <div class="text-xs font-black ${cfg.title}">${cfg.label}速览</div>
+                                <div class="text-[9px] text-slate-400 font-bold">${s.species} 种 · 毕业及以上 ${graduatedTotal}</div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-[9px] text-slate-400 font-bold">总捕捉</div>
+                            <div class="text-lg leading-none font-black font-mono ${cfg.total}">${s.catches}</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        ${makeMiniStat('和解', s.tied, 'text-amber-600')}
+                        ${makeMiniStat('毕业', s.grad, 'text-slate-700')}
+                        ${makeMiniStat('大毕业', s.bigGrad, 'text-purple-600')}
+                        ${makeMiniStat('金帮', s.goldGrad, 'text-red-600')}
+                    </div>
+                </div>`;
+            }).join('');
+
+            panel.classList.remove('hidden');
+            panel.innerHTML = `
+                <div class="flex items-center justify-between gap-2 mb-3">
+                    <h3 class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                        <i class="fa-solid fa-layer-group text-indigo-500"></i> 三系大仓速览
+                    </h3>
+                    <span class="text-[9px] text-slate-400 font-bold">统计当前大仓全部宝可梦，不受筛选按钮影响</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    ${cards}
+                </div>`;
+        }
+
         function triggerSearchFilter() {
             updateBoxUI();
         }
@@ -1429,6 +1550,8 @@ function normalizePlayerBox() {
             document.getElementById('total-grad').innerText = totalGrad;
             document.getElementById('total-big-grad').innerText = totalBigGrad;
             document.getElementById('total-gold-grad').innerText = totalGoldGrad;
+
+            renderTypeSummaryPanel();
 
             let searchKeyword = document.getElementById('search-box').value.trim().toLowerCase();
             if (pokemonDictionary[searchKeyword]) searchKeyword = pokemonDictionary[searchKeyword].standard.toLowerCase();
@@ -4047,47 +4170,70 @@ const ALL_AVAILABLE_SUBSKILLS = {
     berrySpeed: {
         title: '🍓 树果与帮速输出轨',
         skills: [
-            { key: 'bfs', name: '树果数量S', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'hb', name: '帮忙奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'hsm', name: '帮忙速度M', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' },
-            { key: 'hss', name: '帮忙速度S', color: 'bg-white text-slate-700 border-slate-200' }
+            { key: 'bfs', name: '树果数量S', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'hb', name: '帮忙奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'hsm', name: '帮忙速度M', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
+            { key: 'hss', name: '帮忙速度S', color: 'bg-white text-slate-700 border-slate-300 font-bold', tier: 'white' }
         ]
     },
     foodZone: {
         title: '🥕 食材概率输出轨',
         skills: [
-            { key: 'ifm', name: '食材几率M', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' },
-            { key: 'ifs', name: '食材几率S', color: 'bg-white text-slate-700 border-slate-200' }
+            { key: 'ifm', name: '食材几率M', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
+            { key: 'ifs', name: '食材几率S', color: 'bg-white text-slate-700 border-slate-300 font-bold', tier: 'white' }
         ]
     },
     skillZone: {
         title: '🔮 主技能概率输出轨',
         skills: [
-            { key: 'stm', name: '技能几率M', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' },
-            { key: 'sts', name: '技能几率S', color: 'bg-white text-slate-700 border-slate-200' }
+            { key: 'stm', name: '技能几率M', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
+            { key: 'sts', name: '技能几率S', color: 'bg-white text-slate-700 border-slate-300 font-bold', tier: 'white' }
         ]
     },
     inventoryZone: {
         title: '📦 持有与主技能等级轨',
         skills: [
-            { key: 'invl', name: '持有上限L', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' },
-            { key: 'invm', name: '持有上限M', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' },
-            { key: 'invs', name: '持有上限S', color: 'bg-white text-slate-700 border-slate-200' },
-            { key: 'slm', name: '主技能提升M', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'sls', name: '主技能提升S', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' }
+            { key: 'invl', name: '持有上限L', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
+            { key: 'invm', name: '持有上限M', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
+            { key: 'invs', name: '持有上限S', color: 'bg-white text-slate-700 border-slate-300 font-bold', tier: 'white' },
+            { key: 'slm', name: '主技能提升M', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'sls', name: '主技能提升S', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' }
         ]
     },
     utilityZone: {
         title: '⚙️ 团队与功能大礼包 (无关紧要技能库·完美兼容备份记录)',
         skills: [
-            { key: 'sexp', name: '睡眠EXP奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'rexp', name: '研究EXP奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'dshard', name: '梦之碎块奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'erec', name: '活力回复奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black' },
-            { key: 'echeer', name: '活力唤醒S', color: 'bg-slate-300 text-slate-900 border-slate-400 font-bold' }
+            { key: 'sexp', name: '睡眠EXP奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'rexp', name: '研究EXP奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'dshard', name: '梦之碎块奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'erec', name: '活力回复奖励', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'echeer', name: '活力唤醒S', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' }
         ]
     }
 };
+
+function getSubskillMeta(key) {
+    if (!key || key === 'none') {
+        return {
+            key: 'none',
+            name: '无技能',
+            tier: 'none',
+            color: 'bg-white text-slate-400 border-slate-200'
+        };
+    }
+
+    for (let cat in ALL_AVAILABLE_SUBSKILLS) {
+        const found = ALL_AVAILABLE_SUBSKILLS[cat].skills.find(s => s.key === key);
+        if (found) return found;
+    }
+
+    return {
+        key,
+        name: '未知',
+        tier: 'white',
+        color: 'bg-white text-slate-700 border-slate-300 font-bold'
+    };
+}
 
 function selectSubskillSlot(slotId) {
     window.activeSubskillSlot = slotId;
@@ -4098,15 +4244,28 @@ function handleGridSkillSelect(skillKey) {
     let currentSlot = window.activeSubskillSlot;
     let oldVal = window.checkinSubskills[currentSlot];
 
+    // 当前正在编辑的格子里已经是这个技能：再次点击 = 取消当前格子
     if (oldVal === skillKey) {
         window.checkinSubskills[currentSlot] = 'none';
-        refreshSubskillSlotsUI(); triggerLivePanelAudit(); return;
+        refreshSubskillSlotsUI();
+        triggerLivePanelAudit();
+        return;
     }
 
-    for (let slot in window.checkinSubskills) {
-        if (window.checkinSubskills[slot] === skillKey) window.checkinSubskills[slot] = 'none';
+    // 如果这个技能已经放在其他格子里：
+    // 不再把它挪到当前格，而是清空原格，并跳回原格继续编辑。
+    // 例如 Lv.10 已有树果数量S，当前编辑 Lv.25 时再点树果数量S：
+    // 结果是 Lv.10 清空，并自动回到 Lv.10。
+    let occupiedSlot = Object.keys(window.checkinSubskills).find(slot => window.checkinSubskills[slot] === skillKey);
+    if (occupiedSlot && occupiedSlot !== currentSlot) {
+        window.checkinSubskills[occupiedSlot] = 'none';
+        window.activeSubskillSlot = occupiedSlot;
+        refreshSubskillSlotsUI();
+        triggerLivePanelAudit();
+        return;
     }
 
+    // 正常选择：写入当前格，并跳到下一个空格
     window.checkinSubskills[currentSlot] = skillKey;
 
     let slotOrder = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'];
@@ -4126,28 +4285,40 @@ function refreshSubskillSlotsUI() {
 
     let slotLabels = { sub1: 'Lv.10', sub2: 'Lv.25', sub3: 'Lv.50', sub4: 'Lv.75', sub5: 'Lv.100' };
     let slotOrder = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'];
-    
-    let getSkillName = (key) => {
-        if (key === 'none') return '无技能';
-        for (let cat in ALL_AVAILABLE_SUBSKILLS) {
-            let found = ALL_AVAILABLE_SUBSKILLS[cat].skills.find(s => s.key === key);
-            if (found) return found.name;
-        }
-        return '未知';
-    };
 
     headerWrapper.innerHTML = slotOrder.map(slot => {
         let val = window.checkinSubskills[slot];
         let isFocused = window.activeSubskillSlot === slot;
-        let displayName = getSkillName(val);
-        
-        let focusCls = isFocused ? 'border-2 border-indigo-600 bg-indigo-50/70 shadow-md ring-2 ring-indigo-400/20' : 'border border-slate-200 bg-white hover:bg-slate-50';
-        let badgeColor = val.endsWith('m') || val === 'invl' || val === 'bfs' || val === 'hb' || val === 'slm' || val === 'sexp' || val === 'rexp' || val === 'dshard' || val === 'erec' ? 'text-amber-600' : (val === 'none' ? 'text-slate-400 font-normal' : 'text-slate-800');
+        let meta = getSubskillMeta(val);
+        let displayName = meta.name;
+
+        // 五个槽位按技能本身的金 / 蓝 / 白三类显示。
+        // 被选中的槽位只额外加蓝色外框，不改变技能本身颜色。
+        let toneCls = 'bg-white border-slate-200 text-slate-400';
+        let levelCls = 'text-slate-400';
+
+        if (meta.tier === 'gold') {
+            toneCls = 'bg-amber-50 border-amber-300 text-amber-700';
+            levelCls = 'text-amber-600';
+        } else if (meta.tier === 'blue') {
+            toneCls = 'bg-indigo-50 border-indigo-300 text-indigo-700';
+            levelCls = 'text-indigo-600';
+        } else if (meta.tier === 'white') {
+            toneCls = 'bg-white border-slate-300 text-slate-700';
+            levelCls = 'text-slate-500';
+        } else if (meta.tier === 'none') {
+            toneCls = 'bg-white border-slate-200 text-slate-400';
+            levelCls = 'text-slate-400';
+        }
+
+        let focusCls = isFocused
+            ? 'border-2 border-indigo-600 shadow-md ring-2 ring-indigo-400/20 scale-[1.02]'
+            : 'hover:shadow-sm';
 
         return `
-        <button onclick="selectSubskillSlot('${slot}')" class="p-1 rounded-xl flex flex-col items-center justify-center transition duration-150 group h-14 ${focusCls}">
-            <span class="text-[8px] font-bold block scale-90 ${isFocused ? 'text-indigo-600' : 'text-slate-400'}">${slotLabels[slot]}</span>
-            <span class="text-[10px] font-black mt-0.5 tracking-tight leading-tight line-clamp-2 ${badgeColor}">${displayName}</span>
+        <button onclick="selectSubskillSlot('${slot}')" class="p-1 rounded-xl flex flex-col items-center justify-center transition duration-150 group h-14 border ${toneCls} ${focusCls}">
+            <span class="text-[8px] font-bold block scale-90 ${isFocused ? 'text-indigo-700' : levelCls}">${slotLabels[slot]}</span>
+            <span class="text-[10px] font-black mt-0.5 tracking-tight leading-tight line-clamp-2 ${meta.tier === 'none' ? 'font-normal' : ''}">${displayName}</span>
         </button>`;
     }).join('');
 
@@ -4159,12 +4330,18 @@ function refreshSubskillSlotsUI() {
         let chipsHTML = block.skills.map(sk => {
             let isCurrentSelected = window.checkinSubskills[window.activeSubskillSlot] === sk.key;
             let isOccupiedElsewhere = occupiedValues.includes(sk.key) && !isCurrentSelected;
-            
+
             let btnClass = sk.color;
             if (isCurrentSelected) {
-                btnClass = 'bg-indigo-600 text-white border-indigo-700 shadow-inner ring-2 ring-indigo-400/30 font-black';
+                if (sk.tier === 'gold') {
+                    btnClass = 'bg-amber-600 text-white border-amber-700 shadow-inner ring-2 ring-amber-400/30 font-black';
+                } else if (sk.tier === 'blue') {
+                    btnClass = 'bg-indigo-600 text-white border-indigo-700 shadow-inner ring-2 ring-indigo-400/30 font-black';
+                } else {
+                    btnClass = 'bg-slate-900 text-white border-slate-950 shadow-inner ring-2 ring-slate-300/40 font-black';
+                }
             } else if (isOccupiedElsewhere) {
-                btnClass = 'bg-indigo-50/60 text-indigo-300 border-indigo-100 opacity-40 line-through font-normal';
+                btnClass = 'bg-slate-50 text-slate-300 border-slate-100 opacity-45 line-through font-normal';
             }
 
             return `
