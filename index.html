@@ -814,18 +814,22 @@ function buildGraduationDexEntry(payload = {}) {
 function normalizeGraduationDexEntry(item) {
     if (!item) return null;
 
-    // 新结构：已经拥有 capture/current
     if (item.capture && item.current) {
         const captureState = cloneGraduationPanelState(item.capture);
-        const currentState = cloneGraduationPanelState(item.current);
+        const currentStateRaw = cloneGraduationPanelState(item.current);
         const displayNickname = (
             item.nickname ||
             item.current.nickname ||
-            currentState.nickname ||
-            currentState.name ||
+            currentStateRaw.nickname ||
+            currentStateRaw.name ||
             captureState.name ||
             ''
         ).trim();
+        const currentState = reconcileCurrentStateWithCapture(captureState, Object.assign({}, currentStateRaw, {
+            nickname: displayNickname,
+            note: item.current.note || '',
+            updatedAt: item.current.updatedAt || item.updatedAt || item.createdAt || new Date().toISOString()
+        }));
 
         return {
             id: item.id || (Date.now() + Math.floor(Math.random() * 1000)),
@@ -834,22 +838,16 @@ function normalizeGraduationDexEntry(item) {
             createdAt: item.createdAt || new Date().toISOString(),
             nickname: displayNickname,
             capture: captureState,
-            current: Object.assign(currentState, {
-                nickname: displayNickname,
-                note: item.current.note || '',
-                updatedAt: item.current.updatedAt || item.updatedAt || item.createdAt || new Date().toISOString()
-            })
+            current: currentState
         };
     }
 
-    // 旧结构：扁平毕业库数据，自动升级成“捕捉时状态 + 当前状态”的孪生档案
     return buildGraduationDexEntry({
         id: item.id,
         source: item.source || 'manual',
         sourceId: item.sourceId || null,
         createdAt: item.createdAt,
         nickname: item.nickname || item.nickName || item.currentNickname || item.currentName || item.name || '',
-
         capture: {
             date: item.date,
             session: item.session,
@@ -861,7 +859,6 @@ function normalizeGraduationDexEntry(item) {
             nature: item.nature,
             foodCombo: item.foodCombo
         },
-
         current: {
             date: item.date,
             session: item.session,
@@ -1258,14 +1255,32 @@ function normalizePlayerBox() {
     playerBox.forEach(p => { 
         if (!p.lockMode) p.lockMode = getRecommendedLockModeForName(p.name); 
         if (!p.evalMode) p.evalMode = 'tied'; 
+        ensureFoodTrackCounts(p);
+
+        // 旧版双轨数据迁移：如果旧字段只有 AAA/ABB，保留；非主流从 0 开始。
         if (p.tiedCount_AAA === undefined) p.tiedCount_AAA = 0;
-        if (p.tiedCount_ABB === undefined) p.tiedCount_ABB = p.tiedCount || 0;
+        if (p.tiedCount_ABB === undefined) p.tiedCount_ABB = 0;
         if (p.gradCount_AAA === undefined) p.gradCount_AAA = 0;
-        if (p.gradCount_ABB === undefined) p.gradCount_ABB = p.gradCount || 0;
+        if (p.gradCount_ABB === undefined) p.gradCount_ABB = 0;
         if (p.bigGradCount_AAA === undefined) p.bigGradCount_AAA = 0;
-        if (p.bigGradCount_ABB === undefined) p.bigGradCount_ABB = p.bigGradCount || 0;
+        if (p.bigGradCount_ABB === undefined) p.bigGradCount_ABB = 0;
         if (p.goldGradCount_AAA === undefined) p.goldGradCount_AAA = 0;
-        if (p.goldGradCount_ABB === undefined) p.goldGradCount_ABB = p.goldGradCount || 0;
+        if (p.goldGradCount_ABB === undefined) p.goldGradCount_ABB = 0;
+
+        if (isFoodPokemonName(p.name)) {
+            // 兼容旧数据：只有总数、没有轨道明细时，按该品种默认主轨道补入。
+            const hasAnyTrackDetail = FOOD_TRACK_KEYS.some(track =>
+                ['tied', 'grad', 'bigGrad', 'goldGrad'].some(result => (Number(p[getFoodTrackCountKey(result, track)]) || 0) > 0)
+            );
+            if (!hasAnyTrackDetail) {
+                const defaultTrack = (FOOD_MODE_BOTH.includes(p.name) || FOOD_MODE_ABB_ONLY.includes(p.name)) ? 'ABB' : 'AAA';
+                p[`tiedCount_${defaultTrack}`] = Number(p.tiedCount) || 0;
+                p[`gradCount_${defaultTrack}`] = Number(p.gradCount) || 0;
+                p[`bigGradCount_${defaultTrack}`] = Number(p.bigGradCount) || 0;
+                p[`goldGradCount_${defaultTrack}`] = Number(p.goldGradCount) || 0;
+            }
+            recalcFoodTrackTotals(p);
+        }
     });
 }
 
@@ -1438,61 +1453,46 @@ function normalizePlayerBox() {
         };
 
         function updateAddPanelWeights() {
-            const nameInput = document.getElementById('input-name');
-            const container = document.getElementById('add-quantities-container');
-            if (!container) return;
+    const nameInput = document.getElementById('input-name');
+    const container = document.getElementById('add-quantities-container');
+    if (!container) return;
 
-            let rawName = nameInput.value.trim();
-            let standardName = rawName;
-            if (pokemonDictionary[rawName]) {
-                standardName = pokemonDictionary[rawName].standard;
-            }
+    let rawName = nameInput.value.trim();
+    let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
+    let dict = pokemonDictionary[standardName];
+    let isFood = dict && dict.type === 'food';
 
-            let isBoth = FOOD_MODE_BOTH.includes(standardName);
-
-            if (isBoth) {
-                container.innerHTML = `
-                <div class="flex flex-col gap-1 bg-slate-50 p-2 rounded-xl border border-slate-200 text-[10px] w-full">
-                    <div class="grid grid-cols-5 gap-1 items-center text-center font-bold text-slate-400 border-b border-slate-200/60 pb-1">
-                        <div class="text-left pl-1">追加食材</div><div>和解</div><div>毕业</div><div>大毕业</div><div>金帮毕业</div>
-                    </div>
-                    <div class="grid grid-cols-5 gap-1.5 items-center text-center">
-                        <div class="text-left font-black text-indigo-600 pl-1">AAA 纯净</div>
-                        <input type="number" id="num-tied-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
-                        <input type="number" id="num-grad-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
-                        <input type="number" id="num-big-grad-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
-                        <input type="number" id="num-gold-aaa" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
-                    </div>
-                    <div class="grid grid-cols-5 gap-1.5 items-center text-center">
-                        <div class="text-left font-black text-emerald-600 pl-1">ABB 多产</div>
-                        <input type="number" id="num-tied-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-amber-700 focus:outline-none focus:border-amber-400">
-                        <input type="number" id="num-grad-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-slate-700 focus:outline-none focus:border-slate-400">
-                        <input type="number" id="num-big-grad-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-purple-700 focus:outline-none focus:border-purple-400">
-                        <input type="number" id="num-gold-abb" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-red-700 focus:outline-none focus:border-red-700">
-                    </div>
-                </div>`;
-            } else {
-                container.innerHTML = `
-                <div class="grid grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
-                    <div class="text-center">
-                        <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
-                        <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
-                    </div>
-                    <div class="text-center">
-                        <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
-                        <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
-                    </div>
-                    <div class="text-center">
-                        <span class="block text-[10px] font-bold text-purple-600 mb-1">追加大毕业</span>
-                        <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
-                    </div>
-                    <div class="text-center">
-                        <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮毕业</span>
-                        <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
-                    </div>
-                </div>`;
-            }
-        }
+    if (isFood) {
+        container.innerHTML = `
+        <div class="flex flex-col gap-1 bg-slate-50 p-2 rounded-xl border border-slate-200 text-[10px] w-full">
+            <div class="grid grid-cols-5 gap-1 items-center text-center font-bold text-slate-400 border-b border-slate-200/60 pb-1">
+                <div class="text-left pl-1">追加食材轨道</div><div>和解</div><div>毕业</div><div>大毕业</div><div>金帮毕业</div>
+            </div>
+            ${getFoodTrackAddRowsHTML(standardName, 'num')}
+            <div class="text-[9px] text-slate-400 font-bold pt-1 border-t border-slate-200/50">非主流：用于玩家自行认可的非默认食材形态，算分暂按 ABB 轨道处理。</div>
+        </div>`;
+    } else {
+        container.innerHTML = `
+        <div class="grid grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
+            <div class="text-center">
+                <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
+                <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
+            </div>
+            <div class="text-center">
+                <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
+                <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
+            </div>
+            <div class="text-center">
+                <span class="block text-[10px] font-bold text-purple-600 mb-1">追加大毕业</span>
+                <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
+            </div>
+            <div class="text-center">
+                <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮毕业</span>
+                <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
+            </div>
+        </div>`;
+    }
+}
 
         function handleNameInput() {
             const inputEl = document.getElementById('input-name');
@@ -1939,11 +1939,11 @@ function normalizePlayerBox() {
 
             container.innerHTML = filteredBox.map((p) => {
                 let idx = playerBox.findIndex(item => item.name === p.name);
+                let dict = pokemonDictionary[p.name];
                 let isBoth = FOOD_MODE_BOTH.includes(p.name);
+                let isFoodType = dict && dict.type === 'food';
                 let isAbbOnly = FOOD_MODE_ABB_ONLY.includes(p.name);
                 let isSpecialDowngrade = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
-
-                let dict = pokemonDictionary[p.name];
                 let typeLabel = '未知';
                 if (dict) typeLabel = dict.type === 'berry' ? '树果' : (dict.type === 'food' ? '食材' : (dict.type === 'skill' ? '技能' : '特殊技能'));
                 if (isBoth) typeLabel += "·双轨模式";
@@ -1991,26 +1991,7 @@ function normalizePlayerBox() {
                                 </select>
                             </div>
                         </div>
-                        ${isBoth ? `
-                        <div class="flex flex-col gap-2 bg-white p-3 rounded-xl border border-slate-200 text-[11px]">
-                            <div class="grid grid-cols-5 gap-1 items-center text-center font-bold text-slate-400 border-b border-slate-100 pb-1">
-                                    <div class="text-left pl-1">食材档</div><div>和解</div><div>毕业</div><div>大毕业</div><div>金帮毕业</div>
-                                </div>
-                                <div class="grid grid-cols-5 gap-1.5 items-center text-center">
-                                    <div class="text-left font-black text-indigo-600 pl-1">AAA 纯净</div>
-                                    <input type="number" id="edit-tied-aaa-${idx}" value="${p.tiedCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-amber-600 font-bold focus:border-amber-400">
-                                    <input type="number" id="edit-grad-aaa-${idx}" value="${p.gradCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-slate-800 font-bold focus:border-slate-400">
-                                    <input type="number" id="edit-big-grad-aaa-${idx}" value="${p.bigGradCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-purple-600 font-bold focus:border-purple-400">
-                                    <input type="number" id="edit-gold-aaa-${idx}" value="${p.goldGradCount_AAA || 0}" class="border rounded text-center py-0.5 border-slate-200 text-red-600 font-bold focus:border-red-400">
-                                </div>
-                                <div class="grid grid-cols-5 gap-1.5 items-center text-center">
-                                    <div class="text-left font-black text-emerald-600 pl-1">ABB 多产</div>
-                                    <input type="number" id="edit-tied-abb-${idx}" value="${p.tiedCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-amber-700 font-bold focus:border-amber-400">
-                                    <input type="number" id="edit-grad-abb-${idx}" value="${p.gradCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-slate-700 font-bold focus:border-slate-700">
-                                    <input type="number" id="edit-big-grad-abb-${idx}" value="${p.bigGradCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-purple-700 font-bold focus:border-purple-700">
-                                    <input type="number" id="edit-gold-abb-${idx}" value="${p.goldGradCount_ABB || 0}" class="border rounded text-center py-0.5 border-slate-200 text-red-700 font-bold focus:border-red-700">
-                                </div>
-                        </div>` : `
+                        ${isFoodType ? getFoodTrackEditHTML(p, idx) : `
                         <div class="grid ${isSpecialDowngrade ? 'grid-cols-3' : 'grid-cols-4'} gap-1 text-center bg-white p-2 rounded-xl border border-slate-200">
                             ${isSpecialDowngrade ? '' : `
                                 <div><span class="block text-[9px] text-amber-600 font-bold mb-0.5">总和解</span><input type="number" id="edit-tied-${idx}" value="${p.tiedCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-amber-600"></div>
@@ -2051,20 +2032,20 @@ function normalizePlayerBox() {
                         ${isSpecialDowngrade ? '' : `
                         <div class="px-1 py-1 rounded-lg ${p.tiedCount > 0 ? 'bg-amber-50 text-amber-700 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">和解</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
-                            ${isBoth && p.tiedCount > 0 ? `<div class="text-[8px] text-amber-600/70 font-normal scale-90">${p.tiedCount_AAA || 0}AAA / ${p.tiedCount_ABB || 0}ABB</div>` : ''}
+                            ${isFoodType && p.tiedCount > 0 ? getFoodTrackBreakdownHTML(p, 'tied') : ''}
                         </div>
                         `}
                         <div class="px-1 py-1 rounded-lg ${p.gradCount > 0 ? 'bg-slate-100 text-slate-800 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">毕业</div><div class="text-xs font-mono mt-0.5">${p.gradCount}</div>
-                            ${isBoth && p.gradCount > 0 ? `<div class="text-[8px] text-slate-500 font-normal scale-90">${p.gradCount_AAA || 0}AAA / ${p.gradCount_ABB || 0}ABB</div>` : ''}
+                            ${isFoodType && p.gradCount > 0 ? getFoodTrackBreakdownHTML(p, 'grad') : ''}
                         </div>
                         <div class="px-1 py-1 rounded-lg ${p.bigGradCount > 0 ? 'bg-purple-50 text-purple-600 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">大毕业</div><div class="text-xs font-mono mt-0.5">${p.bigGradCount}</div>
-                            ${isBoth && p.bigGradCount > 0 ? `<div class="text-[8px] text-purple-500/70 font-normal scale-90">${p.bigGradCount_AAA || 0}AAA/ ${p.bigGradCount_ABB || 0}ABB</div>` : ''}
+                            ${isFoodType && p.bigGradCount > 0 ? getFoodTrackBreakdownHTML(p, 'bigGrad') : ''}
                         </div>
                         <div class="px-1 py-1 rounded-lg ${p.goldGradCount > 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">金帮毕业</div><div class="text-xs font-mono mt-0.5">${p.goldGradCount}</div>
-                            ${isBoth && p.goldGradCount > 0 ? `<div class="text-[8px] text-red-500/70 font-normal scale-90">${p.goldGradCount_AAA || 0}AAA / ${p.goldGradCount_ABB || 0}ABB</div>` : ''}
+                            ${isFoodType && p.goldGradCount > 0 ? getFoodTrackBreakdownHTML(p, 'goldGrad') : ''}
                         </div>
                     </div>
                     <div class="border-t border-slate-50 pt-2.5 text-[11px] flex items-center justify-between">
@@ -2087,117 +2068,94 @@ function normalizePlayerBox() {
         }
 
         function addPokemon() {
-            const nameInput = document.getElementById('input-name');
-            const countInput = document.getElementById('input-count');
-            const lockInput = document.getElementById('input-lock-mode');
-            
-            let rawName = nameInput.value.trim();
-            let addedCount = parseInt(countInput.value) || 0;
-            let lockMode = lockInput.value;
-            
-            if (!rawName) {
-                showToast("请输入宝可梦名字！");
-                return;
-            }
+    const nameInput = document.getElementById('input-name');
+    const countInput = document.getElementById('input-count');
+    const lockInput = document.getElementById('input-lock-mode');
+    
+    let rawName = nameInput.value.trim();
+    let addedCount = parseInt(countInput.value) || 0;
+    let lockMode = lockInput.value;
+    
+    if (!rawName) {
+        showToast("请输入宝可梦名字！");
+        return;
+    }
 
-            let standardName = rawName;
-            if (pokemonDictionary[rawName]) standardName = pokemonDictionary[rawName].standard;
+    let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
+    const isFood = isFoodPokemonName(standardName);
 
-            let isBoth = FOOD_MODE_BOTH.includes(standardName);
-            let addedTied = 0, addedGrad = 0, addedBigGrad = 0, addedGoldGrad = 0;
-            let tied_aaa = 0, tied_abb = 0, grad_aaa = 0, grad_abb = 0, big_aaa = 0, big_abb = 0, gold_aaa = 0, gold_abb = 0;
+    let addedTied = 0, addedGrad = 0, addedBigGrad = 0, addedGoldGrad = 0;
+    let trackCounts = null;
 
-            if (isBoth) {
-                tied_aaa = parseInt(document.getElementById('num-tied-aaa').value) || 0;
-                tied_abb = parseInt(document.getElementById('num-tied-abb').value) || 0;
-                addedTied = tied_aaa + tied_abb;
+    if (isFood) {
+        trackCounts = readFoodTrackCountsFromInputs('num');
+        const totals = sumFoodTrackCounts(trackCounts);
+        addedTied = totals.tied;
+        addedGrad = totals.grad;
+        addedBigGrad = totals.bigGrad;
+        addedGoldGrad = totals.goldGrad;
+    } else {
+        addedTied = parseInt(document.getElementById('num-tied').value) || 0;
+        addedGrad = parseInt(document.getElementById('num-grad').value) || 0;
+        addedBigGrad = parseInt(document.getElementById('num-big-grad').value) || 0;
+        addedGoldGrad = parseInt(document.getElementById('num-gold-grad').value) || 0;
+    }
 
-                grad_aaa = parseInt(document.getElementById('num-grad-aaa').value) || 0;
-                grad_abb = parseInt(document.getElementById('num-grad-abb').value) || 0;
-                addedGrad = grad_aaa + grad_abb;
+    let existingIndex = playerBox.findIndex(item => item.name === standardName);
 
-                big_aaa = parseInt(document.getElementById('num-big-grad-aaa').value) || 0;
-                big_abb = parseInt(document.getElementById('num-big-grad-abb').value) || 0;
-                addedBigGrad = big_aaa + big_abb;
+    if (existingIndex > -1) {
+        let p = playerBox[existingIndex];
+        ensureFoodTrackCounts(p);
+        let newTotalCount = p.count + addedCount;
+        let newTied = p.tiedCount + addedTied;
+        let newGrad = p.gradCount + addedGrad;
+        let newBigGrad = p.bigGradCount + addedBigGrad;
+        let newGoldGrad = p.goldGradCount + addedGoldGrad;
 
-                gold_aaa = parseInt(document.getElementById('num-gold-aaa').value) || 0;
-                gold_abb = parseInt(document.getElementById('num-gold-abb').value) || 0;
-                addedGoldGrad = gold_aaa + gold_abb;
-            } else {
-                addedTied = parseInt(document.getElementById('num-tied').value) || 0;
-                addedGrad = parseInt(document.getElementById('num-grad').value) || 0;
-                addedBigGrad = parseInt(document.getElementById('num-big-grad').value) || 0;
-                addedGoldGrad = parseInt(document.getElementById('num-gold-grad').value) || 0;
-            }
-
-            let existingIndex = playerBox.findIndex(item => item.name === standardName);
-
-            if (existingIndex > -1) {
-                let p = playerBox[existingIndex];
-                let newTotalCount = p.count + addedCount;
-                let newTied = p.tiedCount + addedTied;
-                let newGrad = p.gradCount + addedGrad;
-                let newBigGrad = p.bigGradCount + addedBigGrad;
-                let newGoldGrad = p.goldGradCount + addedGoldGrad;
-
-                if (newTied + newGrad + newBigGrad + newGoldGrad > newTotalCount) {
-                    showToast(`累加后矛盾！总出货数不能大于总捕捉数`);
-                    return;
-                }
-
-                p.count = newTotalCount;
-                p.lockMode = lockMode;
-                p.tiedCount = newTied;
-                p.gradCount = newGrad;
-                p.bigGradCount = newBigGrad;
-                p.goldGradCount = newGoldGrad;
-
-                if (isBoth) {
-                    p.tiedCount_AAA = (p.tiedCount_AAA || 0) + tied_aaa;
-                    p.tiedCount_ABB = (p.tiedCount_ABB || 0) + tied_abb;
-                    p.gradCount_AAA = (p.gradCount_AAA || 0) + grad_aaa;
-                    p.gradCount_ABB = (p.gradCount_ABB || 0) + grad_abb;
-                    p.bigGradCount_AAA = (p.bigGradCount_AAA || 0) + big_aaa;
-                    p.bigGradCount_ABB = (p.bigGradCount_ABB || 0) + big_abb;
-                    p.goldGradCount_AAA = (p.goldGradCount_AAA || 0) + gold_aaa;
-                    p.goldGradCount_ABB = (p.goldGradCount_ABB || 0) + gold_abb;
-                }
-                showToast(`已在【${standardName}】格中追加数据！`);
-            } else {
-                let totalGolds = addedTied + addedGrad + addedBigGrad + addedGoldGrad;
-                if (totalGolds > addedCount) {
-                    showToast(`数据矛盾！出货总数不能大于总捕捉数`);
-                    return;
-                }
-
-                let newRecord = {
-                    name: standardName,
-                    count: addedCount,
-                    lockMode: lockMode,
-                    tiedCount: addedTied,
-                    gradCount: addedGrad,
-                    bigGradCount: addedBigGrad,
-                    goldGradCount: addedGoldGrad,
-                    tiedCount_AAA: tied_aaa,
-                    tiedCount_ABB: tied_abb,
-                    gradCount_AAA: grad_aaa,
-                    gradCount_ABB: grad_abb,
-                    bigGradCount_AAA: big_aaa,
-                    bigGradCount_ABB: big_abb,
-                    goldGradCount_AAA: gold_aaa,
-                    goldGradCount_ABB: gold_abb
-                };
-                playerBox.unshift(newRecord);
-                showToast("成功创建【" + standardName + "】的官方种类资产格！");
-            }
-            
-            nameInput.value = '';
-            countInput.value = '0';
-            lockInput.value = 'two';
-
-            updateAddPanelWeights();
-            updateBoxUI();
+        if (newTied + newGrad + newBigGrad + newGoldGrad > newTotalCount) {
+            showToast(`累加后矛盾！总出货数不能大于总捕捉数`);
+            return;
         }
+
+        p.count = newTotalCount;
+        p.lockMode = lockMode;
+
+        if (isFood) {
+            addFoodTrackCountsToBoxRecord(p, trackCounts);
+        } else {
+            p.tiedCount = newTied;
+            p.gradCount = newGrad;
+            p.bigGradCount = newBigGrad;
+            p.goldGradCount = newGoldGrad;
+        }
+        showToast(`已在【${standardName}】格中追加数据！`);
+    } else {
+        let totalGolds = addedTied + addedGrad + addedBigGrad + addedGoldGrad;
+        if (totalGolds > addedCount) {
+            showToast(`数据矛盾！出货总数不能大于总捕捉数`);
+            return;
+        }
+
+        let newRecord = createEmptyBoxRecord(standardName, addedCount, lockMode);
+        if (isFood) {
+            addFoodTrackCountsToBoxRecord(newRecord, trackCounts);
+        } else {
+            newRecord.tiedCount = addedTied;
+            newRecord.gradCount = addedGrad;
+            newRecord.bigGradCount = addedBigGrad;
+            newRecord.goldGradCount = addedGoldGrad;
+        }
+        playerBox.unshift(newRecord);
+        showToast("成功创建【" + standardName + "】的官方种类资产格！");
+    }
+    
+    nameInput.value = '';
+    countInput.value = '0';
+    applyRecommendedLockModeForName('', 'input-lock-mode');
+
+    updateAddPanelWeights();
+    updateBoxUI();
+}
 
         function deletePokemon(index) {
             if (confirm("确定要彻底注销该宝可梦种类的资产数据吗？")) {
@@ -2446,144 +2404,350 @@ const FOOD_MODE_BOTH = [
             "杰尼龟", "卡咪龟", "水箭龟", "小猫怪", "勒克猫", "伦琴猫", "童偶熊", "穿着熊", "萌虻", "蝶结萌虻"
         ];
         const FOOD_MODE_ABB_ONLY = ["鬼斯", "鬼斯通", "耿鬼"];
+
+// ==========================================
+// 🥕 食材轨道统一工具：AAA / ABB / 非主流
+// ==========================================
+const FOOD_TRACK_KEYS = ['AAA', 'ABB', 'OTHER'];
+const FOOD_TRACK_META = {
+    AAA: { label: 'AAA 正统', short: 'AAA', color: 'text-indigo-600', probWeight: 1 },
+    ABB: { label: 'ABB 正统', short: 'ABB', color: 'text-emerald-600', probWeight: 2 },
+    OTHER: { label: '非主流', short: '非主流', color: 'text-rose-600', probWeight: 2 }
+};
+
+function getPokemonTypeByName(name) {
+    const dict = pokemonDictionary[name] || pokemonDictionary[pokemonDictionary[name]?.standard];
+    return dict ? dict.type : null;
+}
+
+function isFoodPokemonName(name) {
+    return getPokemonTypeByName(name) === 'food';
+}
+
+function getDefaultFoodTracksForName(name) {
+    if (!isFoodPokemonName(name)) return [];
+    if (FOOD_MODE_BOTH.includes(name)) return ['AAA', 'ABB'];
+    if (FOOD_MODE_ABB_ONLY.includes(name)) return ['ABB'];
+    return ['AAA'];
+}
+
+function getFoodTrackRowsForName(name) {
+    const base = getDefaultFoodTracksForName(name);
+    if (base.length === 0) return [];
+    return [...base, 'OTHER'];
+}
+
+function normalizeFoodTrack(track) {
+    return FOOD_TRACK_KEYS.includes(track) ? track : null;
+}
+
+function getFoodTrackForNameAndCombo(name, comboStr) {
+    if (!isFoodPokemonName(name)) return null;
+    const combo = typeof comboStr === 'string' ? comboStr.toUpperCase() : '';
+    if (FOOD_MODE_BOTH.includes(name)) {
+        return (combo === 'AAA' || combo === 'ABB') ? combo : 'OTHER';
+    }
+    if (FOOD_MODE_ABB_ONLY.includes(name)) {
+        return combo === 'ABB' ? 'ABB' : 'OTHER';
+    }
+    return combo === 'AAA' ? 'AAA' : 'OTHER';
+}
+
+function getFoodTrackDisplayName(track) {
+    return FOOD_TRACK_META[track]?.label || track || '';
+}
+
+function getFoodTrackShortName(track) {
+    return FOOD_TRACK_META[track]?.short || track || '';
+}
+
+function getFoodTrackCountKey(result, track) {
+    return `${result}Count_${track}`;
+}
+
+function ensureFoodTrackCounts(p) {
+    if (!p) return;
+    FOOD_TRACK_KEYS.forEach(track => {
+        ['tied', 'grad', 'bigGrad', 'goldGrad'].forEach(result => {
+            const key = getFoodTrackCountKey(result, track);
+            if (p[key] === undefined) p[key] = 0;
+        });
+    });
+}
+
+function recalcFoodTrackTotals(p) {
+    if (!p) return;
+    ensureFoodTrackCounts(p);
+    p.tiedCount = FOOD_TRACK_KEYS.reduce((sum, t) => sum + (Number(p[`tiedCount_${t}`]) || 0), 0);
+    p.gradCount = FOOD_TRACK_KEYS.reduce((sum, t) => sum + (Number(p[`gradCount_${t}`]) || 0), 0);
+    p.bigGradCount = FOOD_TRACK_KEYS.reduce((sum, t) => sum + (Number(p[`bigGradCount_${t}`]) || 0), 0);
+    p.goldGradCount = FOOD_TRACK_KEYS.reduce((sum, t) => sum + (Number(p[`goldGradCount_${t}`]) || 0), 0);
+}
+
+function createEmptyBoxRecord(name, count, lockMode) {
+    const p = {
+        name,
+        count,
+        lockMode,
+        tiedCount: 0,
+        gradCount: 0,
+        bigGradCount: 0,
+        goldGradCount: 0
+    };
+    ensureFoodTrackCounts(p);
+    return p;
+}
+
+function applyResultToBoxRecord(p, result, track, delta = 1) {
+    if (!p || !result || result === 'none') return;
+    const safeDelta = Number(delta) || 0;
+    if (track && normalizeFoodTrack(track)) {
+        ensureFoodTrackCounts(p);
+        const key = getFoodTrackCountKey(result, track);
+        p[key] = Math.max(0, (Number(p[key]) || 0) + safeDelta);
+        recalcFoodTrackTotals(p);
+        return;
+    }
+    const key = `${result}Count`;
+    p[key] = Math.max(0, (Number(p[key]) || 0) + safeDelta);
+}
+
+function readFoodTrackCountsFromInputs(prefix = 'num', index = null) {
+    const out = {};
+    FOOD_TRACK_KEYS.forEach(track => {
+        const suffix = track.toLowerCase();
+        const idxSuffix = index === null || index === undefined ? '' : `-${index}`;
+        out[track] = {
+            tied: parseInt(document.getElementById(`${prefix}-tied-${suffix}${idxSuffix}`)?.value) || 0,
+            grad: parseInt(document.getElementById(`${prefix}-grad-${suffix}${idxSuffix}`)?.value) || 0,
+            bigGrad: parseInt(document.getElementById(`${prefix}-big-grad-${suffix}${idxSuffix}`)?.value) || 0,
+            goldGrad: parseInt(document.getElementById(`${prefix}-gold-${suffix}${idxSuffix}`)?.value) || 0
+        };
+    });
+    return out;
+}
+
+function sumFoodTrackCounts(counts) {
+    const total = { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 };
+    FOOD_TRACK_KEYS.forEach(track => {
+        const row = counts[track] || {};
+        total.tied += Number(row.tied) || 0;
+        total.grad += Number(row.grad) || 0;
+        total.bigGrad += Number(row.bigGrad) || 0;
+        total.goldGrad += Number(row.goldGrad) || 0;
+    });
+    return total;
+}
+
+function addFoodTrackCountsToBoxRecord(p, counts) {
+    ensureFoodTrackCounts(p);
+    FOOD_TRACK_KEYS.forEach(track => {
+        const row = counts[track] || {};
+        p[`tiedCount_${track}`] = (Number(p[`tiedCount_${track}`]) || 0) + (Number(row.tied) || 0);
+        p[`gradCount_${track}`] = (Number(p[`gradCount_${track}`]) || 0) + (Number(row.grad) || 0);
+        p[`bigGradCount_${track}`] = (Number(p[`bigGradCount_${track}`]) || 0) + (Number(row.bigGrad) || 0);
+        p[`goldGradCount_${track}`] = (Number(p[`goldGradCount_${track}`]) || 0) + (Number(row.goldGrad) || 0);
+    });
+    recalcFoodTrackTotals(p);
+}
+
+function getFoodTrackAddRowsHTML(name, prefix = 'num', values = {}, index = null) {
+    const rows = getFoodTrackRowsForName(name);
+    const idxSuffix = index === null || index === undefined ? '' : `-${index}`;
+    return rows.map(track => {
+        const meta = FOOD_TRACK_META[track];
+        const suffix = track.toLowerCase();
+        const row = values[track] || {};
+        return `
+                    <div class="grid grid-cols-5 gap-1.5 items-center text-center">
+                        <div class="text-left font-black ${meta.color} pl-1">${meta.label}</div>
+                        <input type="number" id="${prefix}-tied-${suffix}${idxSuffix}" min="0" value="${row.tied || 0}" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
+                        <input type="number" id="${prefix}-grad-${suffix}${idxSuffix}" min="0" value="${row.grad || 0}" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
+                        <input type="number" id="${prefix}-big-grad-${suffix}${idxSuffix}" min="0" value="${row.bigGrad || 0}" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
+                        <input type="number" id="${prefix}-gold-${suffix}${idxSuffix}" min="0" value="${row.goldGrad || 0}" class="w-full bg-white border border-slate-200 rounded-lg py-0.5 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
+                    </div>`;
+    }).join('');
+}
+
+function getFoodTrackEditHTML(p, idx) {
+    ensureFoodTrackCounts(p);
+    const values = {};
+    FOOD_TRACK_KEYS.forEach(track => {
+        values[track] = {
+            tied: p[`tiedCount_${track}`] || 0,
+            grad: p[`gradCount_${track}`] || 0,
+            bigGrad: p[`bigGradCount_${track}`] || 0,
+            goldGrad: p[`goldGradCount_${track}`] || 0
+        };
+    });
+    return `
+        <div class="flex flex-col gap-2 bg-white p-3 rounded-xl border border-slate-200 text-[11px]">
+            <div class="grid grid-cols-5 gap-1 items-center text-center font-bold text-slate-400 border-b border-slate-100 pb-1">
+                <div class="text-left pl-1">食材档</div><div>和解</div><div>毕业</div><div>大毕业</div><div>金帮毕业</div>
+            </div>
+            ${getFoodTrackAddRowsHTML(p.name, 'edit', values, idx)}
+            <div class="text-[9px] text-slate-400 font-bold pt-1 border-t border-slate-100">非主流轨道暂按 ABB 出货概率参与算分。</div>
+        </div>`;
+}
+
+function getFoodTrackBreakdownHTML(p, result) {
+    if (!p || !isFoodPokemonName(p.name)) return '';
+    ensureFoodTrackCounts(p);
+    const pieces = FOOD_TRACK_KEYS
+        .map(track => {
+            const n = Number(p[getFoodTrackCountKey(result, track)]) || 0;
+            return n > 0 ? `${n}${getFoodTrackShortName(track)}` : '';
+        })
+        .filter(Boolean);
+    return pieces.length ? `<div class="text-[8px] text-slate-500 font-normal scale-90">${pieces.join(' / ')}</div>` : '';
+}
+
+function getFoodBadgeText(combo, track) {
+    if (!combo) return '';
+    const safeTrack = normalizeFoodTrack(track);
+    if (!safeTrack) return combo;
+    if (safeTrack === 'OTHER') return `${combo} · 非主流`;
+    return safeTrack === combo ? combo : `${combo} · ${safeTrack}`;
+}
+
+function getCheckInTrackMode(standardName, foodCombo) {
+    return getFoodTrackForNameAndCombo(standardName, foodCombo);
+}
+
+function hasAnyFoodTrackCount(p, track) {
+    if (!p) return false;
+    return ['tied', 'grad', 'bigGrad', 'goldGrad'].some(result => (Number(p[getFoodTrackCountKey(result, track)]) || 0) > 0);
+}
+
+function getActiveFoodTrackProbabilityRows(p) {
+    if (!p || !isFoodPokemonName(p.name)) return [];
+    const baseTracks = getDefaultFoodTracksForName(p.name);
+    const tracks = [...baseTracks];
+    if (hasAnyFoodTrackCount(p, 'OTHER') && !tracks.includes('OTHER')) tracks.push('OTHER');
+    const totalWeight = tracks.reduce((sum, t) => sum + (FOOD_TRACK_META[t]?.probWeight || 0), 0) || 1;
+    return tracks.map(track => ({
+        track,
+        probWeight: FOOD_TRACK_META[track].probWeight,
+        scoreFactor: totalWeight / FOOD_TRACK_META[track].probWeight
+    }));
+}
+
     
         const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
 
         function getPokemonLuckMetrics(p) {
-            if (!p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50 };
-            
-            let dict = pokemonDictionary[p.name];
-            if (!dict || dict.type === 'special_skill') return null;
-            
-            let pType = dict.type;
-            const matrix = {
-                berry: {
-                    none: { gold: 0.0025, bigGrad: 0.0056, grad: 0.0065, tied: 0.0251 },
-                    one:  { gold: 0.0124, bigGrad: 0.0207, grad: 0.0228, tied: 0.0752 },
-                    two:  { gold: 0.0526, bigGrad: 0.0592, grad: 0.0598, tied: 0.1197 }
-                },
-                food: {
-                    none: { gold: 0.0012, bigGrad: 0.0082, grad: 0.0127, tied: 0.0214 },
-                    one:  { gold: 0.0032, bigGrad: 0.0053, grad: 0.0083, tied: 0.0113 },
-                    two:  { gold: 0.0023, bigGrad: 0.0023, grad: 0.0039, tied: 0.0039 }
-                },
-                skill: {
-                    none: { gold: 0.0085, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
-                    one:  { gold: 0.0225, bigGrad: 0.0311, grad: 0.0412, tied: 0.0679 },
-                    two:  { gold: 0.0140, bigGrad: 0.0140, grad: 0.0140, tied: 0.0285 }
-                }
-            };
-            
-            let foodMultiplier = 1;
-            let foodMode = 'normal'; 
-            if (pType === 'food') {
-                if (FOOD_MODE_BOTH.includes(p.name)) {
-                    foodMultiplier = 3;
-                    foodMode = 'both';
-                } else if (FOOD_MODE_ABB_ONLY.includes(p.name)) {
-                    foodMultiplier = 2;
-                    foodMode = 'abb_only';
-                }
-            }
-
-            let sumGold = 0, sumBigGrad = 0, sumGrad = 0, sumTied = 0;
-            for (let i = 1; i <= p.count; i++) {
-                let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
-                let pr = matrix[pType][lockType];
-                sumGold += pr.gold * foodMultiplier; 
-                sumBigGrad += pr.bigGrad * foodMultiplier;
-                sumGrad += pr.grad * foodMultiplier;
-                sumTied += pr.tied * foodMultiplier;
-            }
-            
-            const W_gold = sumGold > 0 ? p.count / (sumGold / p.count) : 0;
-            const W_bigGrad = sumBigGrad > 0 ? p.count / (sumBigGrad / p.count) : 0;
-            const W_grad = sumGrad > 0 ? p.count / (sumGrad / p.count) : 0;
-            const W_tied = sumTied > 0 ? p.count / (sumTied / p.count) : 0;
-            
-            let isTiedIncluded = (p.evalMode !== 'grad');
-            if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
-                isTiedIncluded = true;
-            }
-            let expectedScore = 0;
-            let variance = 0;
-
-            for (let i = 1; i <= p.count; i++) {
-                let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
-                let pr = matrix[pType][lockType];
-
-                let p_gold = pr.gold * foodMultiplier;
-                let p_big = pr.bigGrad * foodMultiplier;
-                let p_gr = (pr.grad - pr.bigGrad) * foodMultiplier;
-                let p_ti = (pr.tied - pr.grad) * foodMultiplier;
-                
-                if (p_gr < 0) p_gr = 0;
-                if (p_ti < 0) p_ti = 0;
-                
-                let mu_i = 0, sq_i = 0;
-
-                if (foodMode === 'both') {
-                    let S_gold_aaa = W_gold * 3.0, S_gold_abb = W_gold * 1.5;
-                    let S_big_aaa = W_bigGrad * 3.0, S_big_abb = W_bigGrad * 1.5;
-                    let S_grad_aaa = W_grad * 3.0, S_grad_abb = W_grad * 1.5;
-                    let S_tied_aaa = isTiedIncluded ? W_tied * 3.0 : 0, S_tied_abb = isTiedIncluded ? W_tied * 1.5 : 0;
-
-                    mu_i = p_gold * (1/3 * S_gold_aaa + 2/3 * S_gold_abb) +
-                           p_big  * (1/3 * S_big_aaa + 2/3 * S_big_abb) +
-                           p_gr   * (1/3 * S_grad_aaa + 2/3 * S_grad_abb) +
-                           p_ti   * (1/3 * S_tied_aaa + 2/3 * S_tied_abb);
-
-                    sq_i = p_gold * (1/3 * Math.pow(S_gold_aaa, 2) + 2/3 * Math.pow(S_gold_abb, 2)) +
-                           p_big  * (1/3 * Math.pow(S_big_aaa, 2) + 2/3 * Math.pow(S_big_abb, 2)) +
-                           p_gr   * (1/3 * Math.pow(S_grad_aaa, 2) + 2/3 * Math.pow(S_grad_abb, 2)) +
-                           p_ti   * (1/3 * Math.pow(S_tied_aaa, 2) + 2/3 * Math.pow(S_tied_abb, 2));
-                } else {
-                    let S_tied = isTiedIncluded ? W_tied : 0;
-                    mu_i = p_gold * W_gold + p_big * W_bigGrad + p_gr * W_grad + p_ti * S_tied;
-                    sq_i = p_gold * Math.pow(W_gold, 2) + p_big * Math.pow(W_bigGrad, 2) + p_gr * Math.pow(W_grad, 2) + p_ti * Math.pow(S_tied, 2);
-                }
-                
-                expectedScore += mu_i;
-                variance += (sq_i - Math.pow(mu_i, 2));
-            }
-            
-            let actualScore = 0;
-            if (foodMode === 'both') {
-                let tied_aaa = p.tiedCount_AAA !== undefined ? p.tiedCount_AAA : 0;
-                let tied_abb = p.tiedCount_ABB !== undefined ? p.tiedCount_ABB : (p.tiedCount || 0);
-                let grad_aaa = p.gradCount_AAA !== undefined ? p.gradCount_AAA : 0;
-                let grad_abb = p.gradCount_ABB !== undefined ? p.gradCount_ABB : (p.gradCount || 0);
-                let big_aaa = p.bigGradCount_AAA !== undefined ? p.bigGradCount_AAA : 0;
-                let big_abb = p.bigGradCount_ABB !== undefined ? p.bigGradCount_ABB : (p.bigGradCount || 0);
-                let gold_aaa = p.goldGradCount_AAA !== undefined ? p.goldGradCount_AAA : 0;
-                let gold_abb = p.goldGradCount_ABB !== undefined ? p.goldGradCount_ABB : (p.goldGradCount || 0);
-
-                actualScore += gold_aaa * W_gold * 3.0 + gold_abb * W_gold * 1.5 +
-                               tied_aaa * W_tied * 3.0 + tied_abb * W_tied * 1.5 +
-                               grad_aaa * W_grad * 3.0 + grad_abb * W_grad * 1.5 +
-                               big_aaa * W_bigGrad * 3.0 + big_abb * W_bigGrad * 1.5;
-            } else {
-                if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
-                    actualScore += (p.goldGradCount || 0) * W_bigGrad +
-                                   (p.bigGradCount || 0) * W_grad +
-                                   (p.gradCount || 0) * W_tied;
-                } else {
-                    actualScore += (p.goldGradCount || 0) * W_gold +
-                                   (p.bigGradCount || 0) * W_bigGrad +
-                                   (p.gradCount || 0) * W_grad +
-                                   (p.tiedCount || 0) * (isTiedIncluded ? W_tied : 0);
-                }
-            }
-                              
-            let rate = 50;
-            if (variance > 0) {
-                let z = (actualScore - expectedScore) / Math.sqrt(variance);
-                let percentile = (0.5 * (1 + erf(z / Math.sqrt(2)))) * 100;
-                rate = Math.min(99.9, Math.max(0.1, Math.round(percentile * 10) / 10));
-            }
-            
-            return { actual: actualScore, expected: expectedScore, variance: variance, rate: rate };
+    if (!p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50 };
+    
+    let dict = pokemonDictionary[p.name];
+    if (!dict || dict.type === 'special_skill') return null;
+    
+    let pType = dict.type;
+    const matrix = {
+        berry: {
+            none: { gold: 0.0025, bigGrad: 0.0056, grad: 0.0065, tied: 0.0251 },
+            one:  { gold: 0.0124, bigGrad: 0.0207, grad: 0.0228, tied: 0.0752 },
+            two:  { gold: 0.0526, bigGrad: 0.0592, grad: 0.0598, tied: 0.1197 }
+        },
+        food: {
+            none: { gold: 0.0012, bigGrad: 0.0082, grad: 0.0127, tied: 0.0214 },
+            one:  { gold: 0.0032, bigGrad: 0.0053, grad: 0.0083, tied: 0.0113 },
+            two:  { gold: 0.0023, bigGrad: 0.0023, grad: 0.0039, tied: 0.0039 }
+        },
+        skill: {
+            none: { gold: 0.0085, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
+            one:  { gold: 0.0225, bigGrad: 0.0311, grad: 0.0412, tied: 0.0679 },
+            two:  { gold: 0.0140, bigGrad: 0.0140, grad: 0.0140, tied: 0.0285 }
         }
+    };
+
+    let foodRows = [];
+    let foodMultiplier = 1;
+    if (pType === 'food') {
+        ensureFoodTrackCounts(p);
+        foodRows = getActiveFoodTrackProbabilityRows(p);
+        foodMultiplier = foodRows.reduce((sum, row) => sum + row.probWeight, 0) || 1;
+    }
+
+    let sumGold = 0, sumBigGrad = 0, sumGrad = 0, sumTied = 0;
+    for (let i = 1; i <= p.count; i++) {
+        let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
+        let pr = matrix[pType][lockType];
+        sumGold += pr.gold * foodMultiplier; 
+        sumBigGrad += pr.bigGrad * foodMultiplier;
+        sumGrad += pr.grad * foodMultiplier;
+        sumTied += pr.tied * foodMultiplier;
+    }
+    
+    const W_gold = sumGold > 0 ? p.count / (sumGold / p.count) : 0;
+    const W_bigGrad = sumBigGrad > 0 ? p.count / (sumBigGrad / p.count) : 0;
+    const W_grad = sumGrad > 0 ? p.count / (sumGrad / p.count) : 0;
+    const W_tied = sumTied > 0 ? p.count / (sumTied / p.count) : 0;
+    
+    let isTiedIncluded = (p.evalMode !== 'grad');
+    if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) isTiedIncluded = true;
+
+    let expectedScore = 0;
+    let variance = 0;
+
+    for (let i = 1; i <= p.count; i++) {
+        let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
+        let pr = matrix[pType][lockType];
+
+        let p_gold = pr.gold * foodMultiplier;
+        let p_big = pr.bigGrad * foodMultiplier;
+        let p_gr = (pr.grad - pr.bigGrad) * foodMultiplier;
+        let p_ti = (pr.tied - pr.grad) * foodMultiplier;
+        if (p_gr < 0) p_gr = 0;
+        if (p_ti < 0) p_ti = 0;
+
+        let mu_i = 0, sq_i = 0;
+
+        if (pType === 'food') {
+            const avgScore = (baseW) => foodRows.reduce((sum, row) => sum + (row.probWeight / foodMultiplier) * (baseW * row.scoreFactor), 0);
+            const avgScoreSq = (baseW) => foodRows.reduce((sum, row) => sum + (row.probWeight / foodMultiplier) * Math.pow(baseW * row.scoreFactor, 2), 0);
+            const S_tied = isTiedIncluded ? W_tied : 0;
+            mu_i = p_gold * avgScore(W_gold) + p_big * avgScore(W_bigGrad) + p_gr * avgScore(W_grad) + p_ti * avgScore(S_tied);
+            sq_i = p_gold * avgScoreSq(W_gold) + p_big * avgScoreSq(W_bigGrad) + p_gr * avgScoreSq(W_grad) + p_ti * avgScoreSq(S_tied);
+        } else {
+            let S_tied = isTiedIncluded ? W_tied : 0;
+            mu_i = p_gold * W_gold + p_big * W_bigGrad + p_gr * W_grad + p_ti * S_tied;
+            sq_i = p_gold * Math.pow(W_gold, 2) + p_big * Math.pow(W_bigGrad, 2) + p_gr * Math.pow(W_grad, 2) + p_ti * Math.pow(S_tied, 2);
+        }
+        expectedScore += mu_i;
+        variance += (sq_i - Math.pow(mu_i, 2));
+    }
+
+    let actualScore = 0;
+    if (pType === 'food') {
+        FOOD_TRACK_KEYS.forEach(track => {
+            const row = foodRows.find(r => r.track === track);
+            const fallbackMultiplier = FOOD_TRACK_META[track]?.probWeight || 1;
+            const activeMultiplier = foodMultiplier || fallbackMultiplier;
+            const scoreFactor = row ? row.scoreFactor : (activeMultiplier / fallbackMultiplier);
+            actualScore += (Number(p[`goldGradCount_${track}`]) || 0) * W_gold * scoreFactor;
+            actualScore += (Number(p[`bigGradCount_${track}`]) || 0) * W_bigGrad * scoreFactor;
+            actualScore += (Number(p[`gradCount_${track}`]) || 0) * W_grad * scoreFactor;
+            actualScore += (Number(p[`tiedCount_${track}`]) || 0) * (isTiedIncluded ? W_tied : 0) * scoreFactor;
+        });
+    } else if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+        actualScore += (p.goldGradCount || 0) * W_bigGrad +
+                       (p.bigGradCount || 0) * W_grad +
+                       (p.gradCount || 0) * W_tied;
+    } else {
+        actualScore += (p.goldGradCount || 0) * W_gold +
+                       (p.bigGradCount || 0) * W_bigGrad +
+                       (p.gradCount || 0) * W_grad +
+                       (p.tiedCount || 0) * (isTiedIncluded ? W_tied : 0);
+    }
+                     
+    let rate = 50;
+    if (variance > 0) {
+        let z = (actualScore - expectedScore) / Math.sqrt(variance);
+        let percentile = (0.5 * (1 + erf(z / Math.sqrt(2)))) * 100;
+        rate = Math.min(99.9, Math.max(0.1, Math.round(percentile * 10) / 10));
+    }
+    return { actual: actualScore, expected: expectedScore, variance: variance, rate: rate };
+}
 
         function calculateLuckPercentile(p) {
             let metrics = getPokemonLuckMetrics(p);
@@ -2661,48 +2825,52 @@ const FOOD_MODE_BOTH = [
         }
 
         function saveInlineEdit(index) {
-            let count = parseInt(document.getElementById(`edit-count-${index}`).value) || 0;
-            let lockMode = document.getElementById(`edit-lock-${index}`).value;
-            let tiedCount = 0, gradCount = 0, bigGradCount = 0, goldGradCount = 0;
-            let tied_aaa = 0, tied_abb = 0, grad_aaa = 0, grad_abb = 0, big_aaa = 0, big_abb = 0, gold_aaa = 0, gold_abb = 0;
+    let count = parseInt(document.getElementById(`edit-count-${index}`).value) || 0;
+    let lockMode = document.getElementById(`edit-lock-${index}`).value;
+    let tiedCount = 0, gradCount = 0, bigGradCount = 0, goldGradCount = 0;
+    const p = playerBox[index];
+    const isFood = isFoodPokemonName(p.name);
 
-            if (FOOD_MODE_BOTH.includes(playerBox[index].name)) {
-                tied_aaa = parseInt(document.getElementById(`edit-tied-aaa-${index}`).value) || 0;
-                tied_abb = parseInt(document.getElementById(`edit-tied-abb-${index}`).value) || 0;
-                tiedCount = tied_aaa + tied_abb;
-                grad_aaa = parseInt(document.getElementById(`edit-grad-aaa-${index}`).value) || 0;
-                grad_abb = parseInt(document.getElementById(`edit-grad-abb-${index}`).value) || 0;
-                gradCount = grad_aaa + grad_abb;
-                big_aaa = parseInt(document.getElementById(`edit-big-grad-aaa-${index}`).value) || 0;
-                big_abb = parseInt(document.getElementById(`edit-big-grad-abb-${index}`).value) || 0;
-                bigGradCount = big_aaa + big_abb;
-                gold_aaa = parseInt(document.getElementById(`edit-gold-aaa-${index}`).value) || 0;
-                gold_abb = parseInt(document.getElementById(`edit-gold-abb-${index}`).value) || 0;
-                goldGradCount = gold_aaa + gold_abb;
-            } else {
-                if (SPECIAL_STANDARD_DOWNGRADE.includes(playerBox[index].name)) {
-                    tiedCount = 0;
-                } else {
-                    tiedCount = parseInt(document.getElementById(`edit-tied-${index}`).value) || 0;
-                }
-                gradCount = parseInt(document.getElementById(`edit-grad-${index}`).value) || 0;
-                bigGradCount = parseInt(document.getElementById(`edit-big-grad-${index}`).value) || 0;
-                goldGradCount = parseInt(document.getElementById(`edit-gold-grad-${index}`).value) || 0;
-            }
+    if (isFood) {
+        const trackCounts = readFoodTrackCountsFromInputs('edit', index);
+        const totals = sumFoodTrackCounts(trackCounts);
+        tiedCount = totals.tied;
+        gradCount = totals.grad;
+        bigGradCount = totals.bigGrad;
+        goldGradCount = totals.goldGrad;
 
-            let totalGolds = tiedCount + gradCount + bigGradCount + goldGradCount;
-            if (totalGolds > count) { alert("数据矛盾！出货总数不能大于总捕捉数"); return; }
-
-            playerBox[index].count = count; playerBox[index].lockMode = lockMode;
-            playerBox[index].tiedCount = tiedCount; playerBox[index].gradCount = gradCount;
-            playerBox[index].bigGradCount = bigGradCount; playerBox[index].goldGradCount = goldGradCount;
-            playerBox[index].tiedCount_AAA = tied_aaa; playerBox[index].tiedCount_ABB = tied_abb;
-            playerBox[index].gradCount_AAA = grad_aaa; playerBox[index].gradCount_ABB = grad_abb;
-            playerBox[index].bigGradCount_AAA = big_aaa; playerBox[index].bigGradCount_ABB = big_abb;
-            playerBox[index].goldGradCount_AAA = gold_aaa; playerBox[index].goldGradCount_ABB = gold_abb;
-
-            delete editingIndices[index]; updateBoxUI(); showToast("已成功同步修改数据明细！");
+        ensureFoodTrackCounts(p);
+        FOOD_TRACK_KEYS.forEach(track => {
+            const row = trackCounts[track] || {};
+            p[`tiedCount_${track}`] = Number(row.tied) || 0;
+            p[`gradCount_${track}`] = Number(row.grad) || 0;
+            p[`bigGradCount_${track}`] = Number(row.bigGrad) || 0;
+            p[`goldGradCount_${track}`] = Number(row.goldGrad) || 0;
+        });
+    } else {
+        if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+            tiedCount = 0;
+        } else {
+            tiedCount = parseInt(document.getElementById(`edit-tied-${index}`).value) || 0;
         }
+        gradCount = parseInt(document.getElementById(`edit-grad-${index}`).value) || 0;
+        bigGradCount = parseInt(document.getElementById(`edit-big-grad-${index}`).value) || 0;
+        goldGradCount = parseInt(document.getElementById(`edit-gold-grad-${index}`).value) || 0;
+    }
+
+    let totalGolds = tiedCount + gradCount + bigGradCount + goldGradCount;
+    if (totalGolds > count) { alert("数据矛盾！出货总数不能大于总捕捉数"); return; }
+
+    p.count = count;
+    p.lockMode = lockMode;
+    p.tiedCount = tiedCount;
+    p.gradCount = gradCount;
+    p.bigGradCount = bigGradCount;
+    p.goldGradCount = goldGradCount;
+    if (isFood) recalcFoodTrackTotals(p);
+
+    delete editingIndices[index]; updateBoxUI(); showToast("已成功同步修改数据明细！");
+}
 
         function erf(x) {
             let a1 =  0.254829592; let a2 = -0.284496736; let a3 =  1.421413741; let a4 = -1.453152027; let a5 =  1.061405429; let p  =  0.3275911;
@@ -2962,14 +3130,14 @@ function openDailyCheckInModal() {
                     </div>
                     <div>
                         <label class="block text-[9px] font-bold text-emerald-700 mb-0.5">Slot 2 (30级)</label>
-                            <select id="checkin-slot2" onchange="window.userManuallyOverrodeFoodTrack = false; triggerLivePanelAudit(); toggleCheckInFoodTrack();" class="w-full bg-white border border-emerald-200 rounded-lg p-1 text-xs font-black text-center text-slate-800 focus:outline-none">
+                            <select id="checkin-slot2" onchange="triggerLivePanelAudit(); toggleCheckInFoodTrack();" class="w-full bg-white border border-emerald-200 rounded-lg p-1 text-xs font-black text-center text-slate-800 focus:outline-none">
                             <option value="A">A </option>
                             <option value="B" selected>B </option>
                         </select>
                     </div>
                     <div>
                         <label class="block text-[9px] font-bold text-emerald-700 mb-0.5">Slot 3 (60级)</label>
-                            <select id="checkin-slot3" onchange="window.userManuallyOverrodeFoodTrack = false; triggerLivePanelAudit(); toggleCheckInFoodTrack();" class="w-full bg-white border border-emerald-200 rounded-lg p-1 text-xs font-black text-center text-slate-800 focus:outline-none">
+                            <select id="checkin-slot3" onchange="triggerLivePanelAudit(); toggleCheckInFoodTrack();" class="w-full bg-white border border-emerald-200 rounded-lg p-1 text-xs font-black text-center text-slate-800 focus:outline-none">
                             <option value="A">A </option>
                             <option value="B" selected>B </option>
                             <option value="C">C </option>
@@ -2990,11 +3158,10 @@ function openDailyCheckInModal() {
                     </select>
                 </div>
                 <div id="checkin-food-track-zone" class="hidden">
-                    <label class="block text-[10px] font-bold text-indigo-500 mb-1">计入大仓食材轨道</label>
-                    <select id="checkin-food-track" onchange="window.userManuallyOverrodeFoodTrack = true;" class="w-full bg-indigo-50/50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-indigo-900">
-                        <option value="ABB" selected>计入 ABB 出货</option>
-                        <option value="AAA">计入 AAA 出货</option>
-                    </select>
+                    <label class="block text-[10px] font-bold text-indigo-500 mb-1">自动归档食材轨道</label>
+                    <input type="hidden" id="checkin-food-track" value="ABB">
+                    <div id="checkin-food-track-label" class="w-full bg-indigo-50/50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-black text-indigo-900">ABB → ABB 正统</div>
+                    <p class="text-[9px] text-indigo-500/70 font-bold mt-1">食材轨道由食材形态自动决定；非默认路线会归入「非主流」。</p>
                 </div>
             </div>
 
@@ -3097,37 +3264,34 @@ function selectCheckInSuggestion(name) {
 
 function autoSetCheckInFoodTrackByCombo() {
     const trackEl = document.getElementById('checkin-food-track');
+    const labelEl = document.getElementById('checkin-food-track-label');
+    const nameEl = document.getElementById('checkin-name');
     const slot1El = document.getElementById('checkin-slot1');
     const slot2El = document.getElementById('checkin-slot2');
     const slot3El = document.getElementById('checkin-slot3');
+    if (!trackEl || !nameEl || !slot1El || !slot2El || !slot3El) return;
 
-    if (!trackEl || !slot1El || !slot2El || !slot3El) return;
-
-    // 玩家已经手动改过轨道时，不再自动覆盖
-    if (window.userManuallyOverrodeFoodTrack) return;
-
+    const rawName = nameEl.value.trim();
+    const standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
     const comboStr = slot1El.value + slot2El.value + slot3El.value;
-
-    if (comboStr === 'AAA') {
-        trackEl.value = 'AAA';
-    } else if (comboStr === 'ABB') {
-        trackEl.value = 'ABB';
+    const track = getFoodTrackForNameAndCombo(standardName, comboStr);
+    if (track) trackEl.value = track;
+    if (labelEl) {
+        labelEl.textContent = track ? `${comboStr} → ${getFoodTrackDisplayName(track)}` : '非食材型，不计入食材轨道';
     }
 }
 
 // 针对双轨食材宠的响应式显隐
 function toggleCheckInFoodTrack() {
     const nameInput = document.getElementById('checkin-name');
-    const resultSelect = document.getElementById('checkin-result');
     const zone = document.getElementById('checkin-food-track-zone');
-    if (!nameInput || !resultSelect || !zone) return;
+    if (!nameInput || !zone) return;
 
     let rawName = nameInput.value.trim();
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
-    let isBoth = FOOD_MODE_BOTH.includes(standardName);
-    let is出货 = resultSelect.value !== 'none';
+    let isFood = isFoodPokemonName(standardName);
 
-    if (isBoth && is出货) {
+    if (isFood) {
         zone.classList.remove('hidden');
         autoSetCheckInFoodTrackByCombo();
     } else {
@@ -3170,43 +3334,18 @@ function submitDailyCheckIn() {
     if (idx > -1) {
         let p = playerBox[idx]; p.count += 1; p.lockMode = lockMode;
         if (result !== 'none') {
-            if (FOOD_MODE_BOTH.includes(standardName)) {
-                let track = document.getElementById('checkin-food-track').value;
-                if (result === 'tied') p[`tiedCount_${track}`] = (p[`tiedCount_${track}`] || 0) + 1;
-                if (result === 'grad') p[`gradCount_${track}`] = (p[`gradCount_${track}`] || 0) + 1;
-                if (result === 'bigGrad') p[`bigGradCount_${track}`] = (p[`bigGradCount_${track}`] || 0) + 1;
-                if (result === 'goldGrad') p[`goldGradCount_${track}`] = (p[`goldGradCount_${track}`] || 0) + 1;
-                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
-            } else {
-                if (result === 'tied') p.tiedCount += 1;
-                if (result === 'grad') p.gradCount += 1;
-                if (result === 'bigGrad') p.bigGradCount += 1;
-                if (result === 'goldGrad') p.goldGradCount += 1;
-            }
+            applyResultToBoxRecord(p, result, getCheckInTrackMode(standardName, foodCombo), 1);
         }
     } else {
-        let newRecord = {
-            name: standardName, count: 1, lockMode: lockMode,
-            tiedCount: 0, gradCount: 0, bigGradCount: 0, goldGradCount: 0,
-            tiedCount_AAA: 0, tiedCount_ABB: 0, gradCount_AAA: 0, gradCount_ABB: 0,
-            bigGradCount_AAA: 0, bigGradCount_ABB: 0, goldGradCount_AAA: 0, goldGradCount_ABB: 0
-        };
-        if (result !== 'none') {
-            if (FOOD_MODE_BOTH.includes(standardName)) {
-                let track = document.getElementById('checkin-food-track').value; newRecord[`${result}Count_${track}`] = 1;
-            }
-            newRecord[`${result}Count`] = 1;
-        }
+        let newRecord = createEmptyBoxRecord(standardName, 1, lockMode);
+        if (result !== 'none') applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
         playerBox.unshift(newRecord); idx = 0;
     }
 
     let metricsAfter = getPokemonLuckMetrics(playerBox[idx]);
     let afterRate = metricsAfter ? metricsAfter.rate : 50;
 
-    let trackMode = FOOD_MODE_BOTH.includes(standardName) ? document.getElementById('checkin-food-track').value : null;
+    let trackMode = getCheckInTrackMode(standardName, foodCombo);
     let checkInId = Date.now();
 
     // 🚀 全备份：深拷贝当前网格面板状态
@@ -3431,10 +3570,7 @@ function revokeDailyCheckIn(checkInId) {
             if (item.track) { // 双轨食材宠回滚
                 let t = item.track;
                 if (p[`${item.result}Count_${t}`] > 0) p[`${item.result}Count_${t}`] -= 1;
-                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+                recalcFoodTrackTotals(p);
             } else { // 常规宠回滚
                 if (p[`${item.result}Count`] > 0) p[`${item.result}Count`] -= 1;
             }
@@ -3500,10 +3636,7 @@ function submitEditDailyCheckIn(checkInId) {
         if (oldItem.result !== 'none') {
             if (oldItem.track) {
                 let t = oldItem.track; if (p[`${oldItem.result}Count_${t}`] > 0) p[`${oldItem.result}Count_${t}`] -= 1;
-                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+                recalcFoodTrackTotals(p);
             } else {
                 if (p[`${oldItem.result}Count`] > 0) p[`${oldItem.result}Count`] -= 1;
             }
@@ -3523,41 +3656,16 @@ function submitEditDailyCheckIn(checkInId) {
     if (newBoxIdx > -1) {
         let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
         if (result !== 'none') {
-            if (FOOD_MODE_BOTH.includes(standardName)) {
-                let track = document.getElementById('checkin-food-track').value;
-                if (result === 'tied') p[`tiedCount_${track}`] = (p[`tiedCount_${track}`] || 0) + 1;
-                if (result === 'grad') p[`gradCount_${track}`] = (p[`gradCount_${track}`] || 0) + 1;
-                if (result === 'bigGrad') p[`bigGradCount_${track}`] = (p[`bigGradCount_${track}`] || 0) + 1;
-                if (result === 'goldGrad') p[`goldGradCount_${track}`] = (p[`goldGradCount_${track}`] || 0) + 1;
-                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
-            } else {
-                if (result === 'tied') p.tiedCount += 1;
-                if (result === 'grad') p.gradCount += 1;
-                if (result === 'bigGrad') p.bigGradCount += 1;
-                if (result === 'goldGrad') p.goldGradCount += 1;
-            }
+            applyResultToBoxRecord(p, result, getCheckInTrackMode(standardName, foodCombo), 1);
         }
     } else {
-        let newRecord = {
-            name: standardName, count: 1, lockMode: lockMode,
-            tiedCount: 0, gradCount: 0, bigGradCount: 0, goldGradCount: 0,
-            tiedCount_AAA: 0, tiedCount_ABB: 0, gradCount_AAA: 0, gradCount_ABB: 0,
-            bigGradCount_AAA: 0, bigGradCount_ABB: 0, goldGradCount_AAA: 0, goldGradCount_ABB: 0
-        };
-        if (result !== 'none') {
-            if (FOOD_MODE_BOTH.includes(standardName)) {
-                let track = document.getElementById('checkin-food-track').value; newRecord[`${result}Count_${track}`] = 1;
-            }
-            newRecord[`${result}Count`] = 1;
-        }
+        let newRecord = createEmptyBoxRecord(standardName, 1, lockMode);
+        if (result !== 'none') applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
         playerBox.unshift(newRecord); newBoxIdx = 0;
     }
     
     // 【D. 时空粘性更新】：提取玩家在本次修改弹窗中最后敲定的日期与睡眠轨道
-    let trackMode = FOOD_MODE_BOTH.includes(standardName) ? document.getElementById('checkin-food-track').value : null;
+    let trackMode = getCheckInTrackMode(standardName, foodCombo);
     if (dateInput && sessionSelect) {
         stickyCheckInDate = dateInput.value;
         stickyCheckInSession = sessionSelect.value;
@@ -3603,10 +3711,7 @@ function rollbackCheckInAsset(item) {
             let key = `${item.result}Count_${t}`;
             if ((p[key] || 0) > 0) p[key] -= 1;
 
-            p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-            p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-            p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-            p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+            recalcFoodTrackTotals(p);
         } else {
             let key = `${item.result}Count`;
             if ((p[key] || 0) > 0) p[key] -= 1;
@@ -3809,8 +3914,8 @@ function renderGraduationDexList() {
         const displayNickname = getGraduationDexNickname(item);
         const curNatureName = ALL_AUDIT_NATURES[cur.nature]?.name || '无性格修正';
         const capNatureName = ALL_AUDIT_NATURES[cap.nature]?.name || '无性格修正';
-        const curTrackText = cur.track ? ` · ${cur.track}` : '';
-        const capTrackText = cap.track ? ` · ${cap.track}` : '';
+        const curFoodBadge = getFoodBadgeText(cur.foodCombo, cur.track);
+        const capFoodBadge = getFoodBadgeText(cap.foodCombo, cap.track);
         const sourceText = item.source === 'daily' ? '每日打卡自动归档' : '手动补录';
 
         const skillChips = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'].map((slot, idx) => {
@@ -3837,7 +3942,7 @@ function renderGraduationDexList() {
                         <span class="px-2 py-0.5 rounded-lg border text-[10px] font-black ${resultClass}">
                             ${getGraduationResultName(cur.result)}
                         </span>
-                        ${cur.foodCombo ? `<span class="px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-[10px] font-bold text-slate-500">${cur.foodCombo}${curTrackText}</span>` : ''}
+                        ${curFoodBadge ? `<span class="px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-[10px] font-bold text-slate-500">${curFoodBadge}</span>` : ''}
                         ${currentNameChip}
                     </div>
 
@@ -3872,7 +3977,7 @@ function renderGraduationDexList() {
                 <summary class="cursor-pointer text-[10px] font-black text-slate-500 flex flex-wrap gap-2 items-center">
                     <span>捕捉时原始档案</span>
                     <span class="px-2 py-0.5 rounded-md border ${capResultClass}">${getGraduationResultName(cap.result)}</span>
-                    ${cap.foodCombo ? `<span class="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-500">${cap.foodCombo}${capTrackText}</span>` : ''}
+                    ${capFoodBadge ? `<span class="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-500">${capFoodBadge}</span>` : ''}
                     <span>性格：${capNatureName}</span>
                 </summary>
                 <div class="flex flex-wrap gap-1.5 mt-2">${capSkillChips}</div>
@@ -3972,9 +4077,7 @@ function readCurrentCheckInPanelState() {
     let s2 = document.getElementById('checkin-slot2') ? document.getElementById('checkin-slot2').value : 'B';
     let s3 = document.getElementById('checkin-slot3') ? document.getElementById('checkin-slot3').value : 'B';
 
-    let trackMode = FOOD_MODE_BOTH.includes(standardName) && document.getElementById('checkin-food-track')
-        ? document.getElementById('checkin-food-track').value
-        : null;
+    let trackMode = getCheckInTrackMode(standardName, s1 + s2 + s3);
 
     return {
         date: dateInput ? dateInput.value : getTodayLocalDateString(),
@@ -4054,7 +4157,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     if (desc) {
         desc.textContent = mode === 'capture'
             ? '这里修改的是出货库里的原始捕捉档案。为了避免误改大仓，本操作不会自动重算历史抽卡库或 Box。'
-            : '这里修改的是玩家看到的当前状态，例如进化后的名字、升级后的副技能、当前毕业档位等。';
+            : '当前状态只允许改当前名字、爱称，以及合法的 S→M 副技能升级；食材、性格、锁金和捕捉时副技能会自动锁定。';
     }
 
     window.checkinSubskills = Object.assign(
@@ -4103,6 +4206,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     if (resultEl) resultEl.value = state.result || 'grad';
     if (trackEl && state.track) trackEl.value = state.track;
     toggleCheckInFoodTrack();
+    if (mode === 'current') applyCurrentStateEditRestrictions(item);
 
     const submitBtn = modal.querySelector('button[onclick="submitDailyCheckIn()"]');
     if (submitBtn) {
@@ -4117,6 +4221,71 @@ function openEditGraduationDexModal(id, mode = 'current') {
     }
 }
 
+
+
+const SUBSKILL_UPGRADE_MAP = { hss: 'hsm', ifs: 'ifm', sts: 'stm' };
+const SUBSKILL_DOWNGRADE_MAP = { hsm: 'hss', ifm: 'ifs', stm: 'sts' };
+
+function canUpgradeCapturedSubskill(captureSubskills, slot) {
+    const original = captureSubskills?.[slot];
+    const target = SUBSKILL_UPGRADE_MAP[original];
+    if (!target) return false;
+    return !Object.values(captureSubskills || {}).includes(target);
+}
+
+function reconcileCurrentSubskillsWithCapture(captureSubskills = {}, proposedSubskills = {}) {
+    const out = {};
+    ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'].forEach(slot => {
+        const original = captureSubskills?.[slot] || 'none';
+        const proposed = proposedSubskills?.[slot] || original;
+        const target = SUBSKILL_UPGRADE_MAP[original];
+        if (target && proposed === target && canUpgradeCapturedSubskill(captureSubskills, slot)) {
+            out[slot] = target;
+        } else {
+            out[slot] = original;
+        }
+    });
+    return out;
+}
+
+function reconcileCurrentStateWithCapture(captureState, proposedCurrent = {}) {
+    const cap = cloneGraduationPanelState(captureState || {});
+    return Object.assign({}, cap, {
+        name: proposedCurrent.name || cap.name,
+        nickname: proposedCurrent.nickname || cap.nickname || proposedCurrent.name || cap.name,
+        result: proposedCurrent.result || cap.result,
+        subskills: reconcileCurrentSubskillsWithCapture(cap.subskills, proposedCurrent.subskills),
+        note: proposedCurrent.note || '',
+        updatedAt: proposedCurrent.updatedAt || new Date().toISOString()
+    });
+}
+
+function applyCurrentStateEditRestrictions(item) {
+    const cap = getGraduationCapture(item);
+    const immutableIds = ['checkin-year', 'checkin-month', 'checkin-day', 'checkin-session', 'checkin-lock', 'checkin-slot2', 'checkin-slot3'];
+    immutableIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = true;
+            el.classList.add('opacity-60', 'cursor-not-allowed');
+        }
+    });
+
+    const trackZone = document.getElementById('checkin-food-track-zone');
+    if (trackZone) trackZone.classList.add('opacity-60');
+
+    const natureZone = document.getElementById('nature-picker-zone');
+    if (natureZone) natureZone.classList.add('pointer-events-none', 'opacity-60');
+
+    const auditBox = document.getElementById('audit-result-box');
+    if (auditBox) {
+        auditBox.insertAdjacentHTML('afterbegin', `
+            <div class="bg-amber-50 border border-amber-200 text-amber-900 p-2 rounded-xl text-[10px] font-bold leading-relaxed">
+                当前状态只允许修改：① 当前宝可梦名字；② 未卡 M 的 S→M 副技能升级；③ 爱称。食材形态、性格、捕捉日期、锁金策略等会保持捕捉时档案不变。
+            </div>
+        `);
+    }
+}
 function submitEditGraduationDexEntry(id, mode = 'current') {
     normalizeGraduationDex();
 
@@ -4140,14 +4309,16 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
         if (!ok) return;
 
         item.capture = cloneGraduationPanelState(state);
-        setGraduationDexNickname(item, state.nickname || item.nickname || getGraduationCurrent(item).name || state.name);
+        item.current = reconcileCurrentStateWithCapture(item.capture, item.current || state);
+        setGraduationDexNickname(item, state.nickname || item.nickname || item.current.name || state.name);
     } else {
-        const finalNickname = state.nickname || state.name;
-        item.current = Object.assign(cloneGraduationPanelState(state), {
+        const cap = getGraduationCapture(item);
+        const finalNickname = state.nickname || item.nickname || state.name || cap.name;
+        item.current = reconcileCurrentStateWithCapture(cap, Object.assign({}, state, {
             nickname: finalNickname,
             note: item.current?.note || '',
             updatedAt: new Date().toISOString()
-        });
+        }));
         setGraduationDexNickname(item, finalNickname);
     }
 
@@ -4164,7 +4335,7 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
     }
 
     updateBoxUI(false);
-    showToast(mode === 'capture' ? "已保存捕捉时状态" : "已保存当前养成状态");
+    showToast(mode === 'capture' ? "已保存捕捉时状态" : "已保存当前养成状态（已自动锁定不可变字段）");
 }
 
 // 🚀 局部新增：历史抽卡时光库全景视窗渲染引擎
@@ -4376,10 +4547,7 @@ function submitEditHistoryLog(logId) {
         if (oldItem.result !== 'none') {
             if (oldItem.track) {
                 let t = oldItem.track; if (p[`${oldItem.result}Count_${t}`] > 0) p[`${oldItem.result}Count_${t}`] -= 1;
-                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
+                recalcFoodTrackTotals(p);
             } else {
                 if (p[`${oldItem.result}Count`] > 0) p[`${oldItem.result}Count`] -= 1;
             }
@@ -4392,41 +4560,16 @@ function submitEditHistoryLog(logId) {
     if (newBoxIdx > -1) {
         let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
         if (result !== 'none') {
-            if (FOOD_MODE_BOTH.includes(standardName)) {
-                let track = document.getElementById('checkin-food-track').value;
-                if (result === 'tied') p[`tiedCount_${track}`] = (p[`tiedCount_${track}`] || 0) + 1;
-                if (result === 'grad') p[`gradCount_${track}`] = (p[`gradCount_${track}`] || 0) + 1;
-                if (result === 'bigGrad') p[`bigGradCount_${track}`] = (p[`bigGradCount_${track}`] || 0) + 1;
-                if (result === 'goldGrad') p[`goldGradCount_${track}`] = (p[`goldGradCount_${track}`] || 0) + 1;
-                p.tiedCount = (p.tiedCount_AAA || 0) + (p.tiedCount_ABB || 0);
-                p.gradCount = (p.gradCount_AAA || 0) + (p.gradCount_ABB || 0);
-                p.bigGradCount = (p.bigGradCount_AAA || 0) + (p.bigGradCount_ABB || 0);
-                p.goldGradCount = (p.goldGradCount_AAA || 0) + (p.goldGradCount_ABB || 0);
-            } else {
-                if (result === 'tied') p.tiedCount += 1;
-                if (result === 'grad') p.gradCount += 1;
-                if (result === 'bigGrad') p.bigGradCount += 1;
-                if (result === 'goldGrad') p.goldGradCount += 1;
-            }
+            applyResultToBoxRecord(p, result, getCheckInTrackMode(standardName, foodCombo), 1);
         }
     } else {
-        let newRecord = {
-            name: standardName, count: 1, lockMode: lockMode,
-            tiedCount: 0, gradCount: 0, bigGradCount: 0, goldGradCount: 0,
-            tiedCount_AAA: 0, tiedCount_ABB: 0, gradCount_AAA: 0, gradCount_ABB: 0,
-            bigGradCount_AAA: 0, bigGradCount_ABB: 0, goldGradCount_AAA: 0, goldGradCount_ABB: 0
-        };
-        if (result !== 'none') {
-            if (FOOD_MODE_BOTH.includes(standardName)) {
-                let track = document.getElementById('checkin-food-track').value; newRecord[`${result}Count_${track}`] = 1;
-            }
-            newRecord[`${result}Count`] = 1;
-        }
+        let newRecord = createEmptyBoxRecord(standardName, 1, lockMode);
+        if (result !== 'none') applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
         playerBox.unshift(newRecord);
     }
     
     // 【C. 覆盖持久化属性】
-    let trackMode = FOOD_MODE_BOTH.includes(standardName) ? document.getElementById('checkin-food-track').value : null;
+    let trackMode = getCheckInTrackMode(standardName, foodCombo);
     oldItem.name = standardName;
     oldItem.lockMode = lockMode;
     oldItem.result = result;
@@ -4553,9 +4696,105 @@ function selectSubskillSlot(slotId) {
     refreshSubskillSlotsUI();
 }
 
+function getCurrentGraduationEditContext() {
+    const modal = document.getElementById('daily-checkin-modal');
+    if (!modal || modal.dataset.editGraduationDexMode !== 'current') return null;
+
+    const id = modal.dataset.editGraduationDexId;
+    normalizeGraduationDex();
+    const item = graduationDex.find(x => String(x.id) === String(id));
+    if (!item) return null;
+
+    return {
+        modal,
+        item,
+        capture: getGraduationCapture(item),
+        current: getGraduationCurrent(item)
+    };
+}
+
+function getAllowedCurrentSubskillValues(captureSubskills = {}, slot) {
+    const original = captureSubskills?.[slot] || 'none';
+    const values = new Set([original]);
+    const target = SUBSKILL_UPGRADE_MAP[original];
+    if (target && canUpgradeCapturedSubskill(captureSubskills, slot)) {
+        values.add(target);
+    }
+    return values;
+}
+
+function isLegalCurrentSubskillValue(captureSubskills = {}, slot, proposedSkill) {
+    return getAllowedCurrentSubskillValues(captureSubskills, slot).has(proposedSkill || 'none');
+}
+
+function getIllegalCurrentSubskillMessage(captureSubskills = {}, slot, proposedSkill) {
+    const original = captureSubskills?.[slot] || 'none';
+    const originalName = getSubskillDisplayName(original);
+    const proposedName = getSubskillDisplayName(proposedSkill);
+    const target = SUBSKILL_UPGRADE_MAP[original];
+
+    if (target && canUpgradeCapturedSubskill(captureSubskills, slot)) {
+        return `当前状态只允许把该槽位从【${originalName}】升级为【${getSubskillDisplayName(target)}】，不能改成【${proposedName}】。`;
+    }
+
+    if (target && !canUpgradeCapturedSubskill(captureSubskills, slot)) {
+        return `【${originalName}】被同系 M 技能卡住，当前状态不能升级，也不能改成【${proposedName}】。`;
+    }
+
+    return `当前状态不能把捕捉时的【${originalName}】改成【${proposedName}】。只有宝可梦名字、爱称，以及未卡 M 的 S→M 副技能升级可以改变。`;
+}
+
+function rejectIllegalCurrentSubskillChange(slot, proposedSkill) {
+    const ctx = getCurrentGraduationEditContext();
+    if (!ctx) return false;
+
+    const capSubs = ctx.capture?.subskills || {};
+    if (isLegalCurrentSubskillValue(capSubs, slot, proposedSkill)) return false;
+
+    const msg = getIllegalCurrentSubskillMessage(capSubs, slot, proposedSkill);
+    alert(msg);
+    showToast('非法副技能改动已拒绝');
+    refreshSubskillSlotsUI();
+    triggerLivePanelAudit();
+    return true;
+}
+
 function handleGridSkillSelect(skillKey) {
     let currentSlot = window.activeSubskillSlot;
     let oldVal = window.checkinSubskills[currentSlot];
+    const currentEditContext = getCurrentGraduationEditContext();
+
+    // 当前状态编辑模式：只能保留捕捉时副技能，或进行合法的 S→M 升级。
+    // 非法改动必须当场拒绝，不能等保存后静默回滚。
+    if (currentEditContext) {
+        const capSubs = currentEditContext.capture?.subskills || {};
+
+        // 当前格再次点击同一个技能，在普通录入里是清空；但当前状态编辑里清空属于非法改动。
+        if (oldVal === skillKey) {
+            rejectIllegalCurrentSubskillChange(currentSlot, 'none');
+            return;
+        }
+
+        // 点击已经存在于其他格的技能：只跳转到该格，不清空、不挪位。
+        const occupiedSlot = Object.keys(window.checkinSubskills).find(slot => window.checkinSubskills[slot] === skillKey);
+        if (occupiedSlot && occupiedSlot !== currentSlot) {
+            window.activeSubskillSlot = occupiedSlot;
+            showToast('该副技能属于原槽位，已跳转到对应槽位');
+            refreshSubskillSlotsUI();
+            triggerLivePanelAudit();
+            return;
+        }
+
+        if (!isLegalCurrentSubskillValue(capSubs, currentSlot, skillKey)) {
+            rejectIllegalCurrentSubskillChange(currentSlot, skillKey);
+            return;
+        }
+
+        window.checkinSubskills[currentSlot] = skillKey;
+        refreshSubskillSlotsUI();
+        triggerLivePanelAudit();
+        return;
+    }
 
     // 当前正在编辑的格子里已经是这个技能：再次点击 = 取消当前格子
     if (oldVal === skillKey) {
@@ -4643,6 +4882,11 @@ function refreshSubskillSlotsUI() {
         let chipsHTML = block.skills.map(sk => {
             let isCurrentSelected = window.checkinSubskills[window.activeSubskillSlot] === sk.key;
             let isOccupiedElsewhere = occupiedValues.includes(sk.key) && !isCurrentSelected;
+            const currentEditContext = getCurrentGraduationEditContext();
+            let isIllegalCurrentEditChoice = false;
+            if (currentEditContext && !isOccupiedElsewhere) {
+                isIllegalCurrentEditChoice = !isLegalCurrentSubskillValue(currentEditContext.capture?.subskills || {}, window.activeSubskillSlot, sk.key);
+            }
 
             let btnClass = sk.color;
             if (isCurrentSelected) {
@@ -4655,10 +4899,16 @@ function refreshSubskillSlotsUI() {
                 }
             } else if (isOccupiedElsewhere) {
                 btnClass = 'bg-slate-50 text-slate-300 border-slate-100 opacity-45 line-through font-normal';
+            } else if (isIllegalCurrentEditChoice) {
+                btnClass = 'bg-rose-50 text-rose-300 border-rose-100 opacity-55 line-through font-normal';
             }
 
+            const titleText = isIllegalCurrentEditChoice
+                ? sk.name + '（当前状态不可改成这个副技能）'
+                : sk.name;
+
             return `
-            <button onclick="handleGridSkillSelect('${sk.key}')" class="px-1 py-1.5 rounded-xl border text-[10px] transition duration-150 truncate hover:scale-[1.02] active:scale-95 text-center ${btnClass}" title="${sk.name}">
+            <button onclick="handleGridSkillSelect('${sk.key}')" class="px-1 py-1.5 rounded-xl border text-[10px] transition duration-150 truncate hover:scale-[1.02] active:scale-95 text-center ${btnClass}" title="${titleText}">
                 ${sk.name}
             </button>`;
         }).join('');
