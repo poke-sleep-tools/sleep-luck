@@ -2578,6 +2578,8 @@ function openDailyCheckInModal() {
     window.currentSystemRecommendValue = "none";
     window.checkinSubskills = { sub1: 'none', sub2: 'none', sub3: 'none', sub4: 'none', sub5: 'none' };
     window.userManuallyOverrodeFoodTrack = false;
+    window.checkinNatureUp = null;
+    window.checkinNatureDown = null;
     window.activeSubskillSlot = 'sub1';
 
     const modal = document.createElement('div');
@@ -2624,31 +2626,36 @@ function openDailyCheckInModal() {
             </div>
 
             <div>
-                <label class="block text-[10px] font-bold text-slate-500 mb-1">宝可梦性格</label>
-                <select id="checkin-nature" onchange="triggerLivePanelAudit()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none text-slate-700">
-                    <option value="blank">无增减性格 (全面平衡)</option>
-                    <option value="brave">勇敢 (帮速↑ / EXP↓)</option>
-                    <option value="adamant">固执 (帮速↑ / 食材↓)</option>
-                    <option value="lonely">怕寂寞 (帮速↑ / 活力↓)</option>
-                    <option value="naughty">顽皮 (帮速↑ / 技能↓)</option>
-                    <option value="modest">内敛 (食材↑ / 帮速↓)</option>
-                    <option value="quiet">冷静 (食材↑ / EXP↓)</option>
-                    <option value="mild">慢吞吞 (食材↑ / 活力↓)</option>
-                    <option value="rash">马虎 (食材↑ / 技能↓)</option>
-                    <option value="careful">慎重 (技能↑ / 食材↓)</option>
-                    <option value="calm">温和 (技能↑ / 帮速↓)</option>
-                    <option value="gentle">温顺 (技能↑ / 活力↓)</option>
-                    <option value="sassy">自大 (技能↑ / EXP↓)</option>
-                    <option value="bold">大胆 (活力↑ / 帮速↓)</option>
-                    <option value="relaxed">悠闲 (活力↑ / EXP↓)</option>
-                    <option value="lax">乐天 (活力↑ / 技能↓)</option>
-                    <option value="impish">淘气 (活力↑ / 食材↓)</option>
-                    <option value="timid">胆小 (EXP↑ / 帮速↓)</option>
-                    <option value="hasty">急躁 (EXP↑ / 活力↓)</option>
-                    <option value="jolly">爽朗 (EXP↑ / 食材↓)</option>
-                    <option value="naive">天真 (EXP↑ / 技能↓)</option>
-                </select>
-            </div>
+                <div id="nature-picker-zone" class="bg-slate-50/80 p-3 rounded-2xl border border-slate-200/60 space-y-2.5">
+                    <div class="flex items-center justify-between gap-2">
+                        <label class="block text-[10px] font-bold text-slate-500">宝可梦性格</label>
+                        <span id="nature-current-label" class="text-[10px] font-black text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-lg">白板性格</span>
+                    </div>
+
+                    <input type="hidden" id="checkin-nature" value="blank">
+
+                    <button type="button" id="nature-blank-btn" onclick="setBlankNature()" class="w-full px-3 py-1.5 rounded-xl border text-xs font-black transition bg-white text-slate-700 border-slate-300 hover:bg-slate-100">
+                        白板性格 / 无增减
+                    </button>
+
+                    <div>
+                        <div class="text-[9px] font-black text-emerald-600 mb-1 flex items-center gap-1">
+                            <i class="fa-solid fa-arrow-up"></i> 上升属性
+                        </div>
+                        <div id="nature-up-buttons" class="grid grid-cols-5 gap-1"></div>
+                    </div>
+
+                    <div>
+                        <div class="text-[9px] font-black text-rose-600 mb-1 flex items-center gap-1">
+                            <i class="fa-solid fa-arrow-down"></i> 下降属性
+                        </div>
+                        <div id="nature-down-buttons" class="grid grid-cols-5 gap-1"></div>
+                    </div>
+
+                    <p class="text-[9px] text-slate-400 leading-relaxed">
+                        先选一个上升属性，再选一个下降属性。同一属性不能同时作为上升和下降；点击白板可清空选择。
+                    </p>
+                </div>
 
             <div id="checkin-food-slots-zone" class="hidden bg-emerald-50/40 p-3 rounded-2xl border border-emerald-100/50 space-y-1.5">
                 <span class="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-0.5"><i class="fa-solid fa-basket-shopping text-emerald-600"></i> 食材型产出槽位形态学录入</span>
@@ -2727,6 +2734,7 @@ function openDailyCheckInModal() {
     }
 
     refreshSubskillSlotsUI();
+    refreshNaturePickerUI();
     triggerLivePanelAudit();
 }
 
@@ -3676,6 +3684,8 @@ function readCurrentCheckInPanelState() {
     let rawName = nameInput ? nameInput.value.trim() : '';
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
 
+    syncNatureHiddenFromParts();
+
     let s1 = document.getElementById('checkin-slot1') ? document.getElementById('checkin-slot1').value : 'A';
     let s2 = document.getElementById('checkin-slot2') ? document.getElementById('checkin-slot2').value : 'B';
     let s3 = document.getElementById('checkin-slot3') ? document.getElementById('checkin-slot3').value : 'B';
@@ -3785,7 +3795,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     if (dateEl) dateEl.value = state.date || getTodayLocalDateString();
     if (sessionEl) sessionEl.value = state.session || '一觉';
     if (lockEl) lockEl.value = state.lockMode || 'two';
-    if (natureEl) natureEl.value = state.nature || 'blank';
+    if (natureEl) setNatureHiddenValue(state.nature || 'blank', false);
 
     let combo = state.foodCombo || 'ABB';
     if (typeof combo !== 'string' || combo.length !== 3) combo = 'ABB';
@@ -3999,7 +4009,7 @@ function openEditHistoryLogModal(logId) {
     if (dateEl) dateEl.value = item.date || getLocalDateString();
     if (sessionEl) sessionEl.value = item.session || '一觉';
     if (lockEl) lockEl.value = item.lockMode || 'two';
-    if (natureEl) natureEl.value = item.nature || 'blank';
+    if (natureEl) setNatureHiddenValue(item.nature || 'blank', false);
 
     // 旧历史记录没有 foodCombo 时，默认按 ABB 打开；保存后会补成新格式
     let combo = item.foodCombo || 'ABB';
@@ -4468,6 +4478,172 @@ const ALL_AUDIT_NATURES = {
     'jolly': { name: '爽朗 (EXP↑ / 食材↓)', speed: 0, food: -0.20, skill: 0 },
     'naive': { name: '天真 (EXP↑ / 技能↓)', speed: 0, food: 0, skill: -0.20 }
 };
+
+const AUDIT_NATURE_ATTRS = [
+    { key: 'speed', label: '帮速', icon: '⚡' },
+    { key: 'food', label: '食材', icon: '🥕' },
+    { key: 'skill', label: '技能', icon: '🔮' },
+    { key: 'energy', label: '活力', icon: '💚' },
+    { key: 'exp', label: 'EXP', icon: '📘' }
+];
+
+const AUDIT_NATURE_MATRIX = {
+    speed:  { food: 'adamant', skill: 'naughty', energy: 'lonely', exp: 'brave' },
+    food:   { speed: 'modest', skill: 'rash', energy: 'mild', exp: 'quiet' },
+    skill:  { speed: 'calm', food: 'careful', energy: 'gentle', exp: 'sassy' },
+    energy: { speed: 'bold', food: 'impish', skill: 'lax', exp: 'relaxed' },
+    exp:    { speed: 'timid', food: 'jolly', skill: 'naive', energy: 'hasty' }
+};
+
+function getNaturePartsFromKey(natureKey) {
+    if (!natureKey || natureKey === 'blank') return { up: null, down: null };
+
+    for (const upKey in AUDIT_NATURE_MATRIX) {
+        for (const downKey in AUDIT_NATURE_MATRIX[upKey]) {
+            if (AUDIT_NATURE_MATRIX[upKey][downKey] === natureKey) {
+                return { up: upKey, down: downKey };
+            }
+        }
+    }
+
+    return { up: null, down: null };
+}
+
+function getNatureKeyFromParts(upKey, downKey) {
+    if (!upKey || !downKey || upKey === downKey) return 'blank';
+    return AUDIT_NATURE_MATRIX[upKey]?.[downKey] || 'blank';
+}
+
+function syncNatureHiddenFromParts() {
+    const natureEl = document.getElementById('checkin-nature');
+    if (!natureEl) return 'blank';
+
+    const upKey = window.checkinNatureUp || null;
+    const downKey = window.checkinNatureDown || null;
+    const natureKey = getNatureKeyFromParts(upKey, downKey);
+
+    natureEl.value = natureKey;
+    return natureKey;
+}
+
+function setNatureHiddenValue(natureKey, shouldAudit = true) {
+    const natureEl = document.getElementById('checkin-nature');
+    if (!natureEl) return;
+
+    const safeKey = natureKey || 'blank';
+    natureEl.value = safeKey;
+
+    const parts = getNaturePartsFromKey(safeKey);
+    window.checkinNatureUp = parts.up;
+    window.checkinNatureDown = parts.down;
+
+    refreshNaturePickerUI();
+
+    if (shouldAudit) {
+        triggerLivePanelAudit();
+    }
+}
+
+function setBlankNature() {
+    window.checkinNatureUp = null;
+    window.checkinNatureDown = null;
+
+    const natureEl = document.getElementById('checkin-nature');
+    if (natureEl) natureEl.value = 'blank';
+
+    refreshNaturePickerUI();
+    triggerLivePanelAudit();
+}
+
+function selectNatureAxis(axis, attrKey) {
+    // 同一个属性不能同时作为上升和下降。
+    // 例如上升已经选了“帮速”，下降里的“帮速”按钮会被禁用；
+    // 即使意外触发点击，也在这里兜底忽略。
+    if (axis === 'up' && window.checkinNatureDown === attrKey) return;
+    if (axis === 'down' && window.checkinNatureUp === attrKey) return;
+
+    // 已经选中的按钮再点一下 = 取消这一侧选择
+    if (axis === 'up') {
+        window.checkinNatureUp = window.checkinNatureUp === attrKey ? null : attrKey;
+    } else {
+        window.checkinNatureDown = window.checkinNatureDown === attrKey ? null : attrKey;
+    }
+
+    syncNatureHiddenFromParts();
+    refreshNaturePickerUI();
+    triggerLivePanelAudit();
+}
+
+function refreshNaturePickerUI() {
+    const natureEl = document.getElementById('checkin-nature');
+    const upWrap = document.getElementById('nature-up-buttons');
+    const downWrap = document.getElementById('nature-down-buttons');
+    const labelEl = document.getElementById('nature-current-label');
+    const blankBtn = document.getElementById('nature-blank-btn');
+
+    if (!natureEl || !upWrap || !downWrap || !labelEl || !blankBtn) return;
+
+    // 关键修复：
+    // 上升/下降属性必须分开暂存。只靠 natureEl.value 会导致只点一边时立刻回到 blank，
+    // 看起来像按钮完全没有反应。
+    if (window.checkinNatureUp === undefined || window.checkinNatureDown === undefined) {
+        const parts = getNaturePartsFromKey(natureEl.value || 'blank');
+        window.checkinNatureUp = parts.up;
+        window.checkinNatureDown = parts.down;
+    }
+
+    const upKey = window.checkinNatureUp || null;
+    const downKey = window.checkinNatureDown || null;
+    const natureKey = getNatureKeyFromParts(upKey, downKey);
+    natureEl.value = natureKey;
+
+    const isBlank = natureKey === 'blank' && !upKey && !downKey;
+    const isIncomplete = natureKey === 'blank' && (upKey || downKey);
+    const natureName = ALL_AUDIT_NATURES[natureKey]?.name || '白板性格';
+
+    if (isBlank) {
+        labelEl.textContent = '白板性格';
+        labelEl.className = 'text-[10px] font-black text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-lg';
+    } else if (isIncomplete) {
+        const upLabel = AUDIT_NATURE_ATTRS.find(a => a.key === upKey)?.label || '未选';
+        const downLabel = AUDIT_NATURE_ATTRS.find(a => a.key === downKey)?.label || '未选';
+        labelEl.textContent = `${upLabel}↑ / ${downLabel}↓`;
+        labelEl.className = 'text-[10px] font-black text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg';
+    } else {
+        labelEl.textContent = natureName;
+        labelEl.className = 'text-[10px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg';
+    }
+
+    blankBtn.className = isBlank
+        ? 'w-full px-3 py-1.5 rounded-xl border text-xs font-black transition bg-slate-900 text-white border-slate-950 shadow-sm'
+        : 'w-full px-3 py-1.5 rounded-xl border text-xs font-black transition bg-white text-slate-700 border-slate-300 hover:bg-slate-100';
+
+    const renderAxisButton = (axis, attr) => {
+        const active = axis === 'up' ? upKey === attr.key : downKey === attr.key;
+        const disabledByOpposite = axis === 'up' ? downKey === attr.key : upKey === attr.key;
+
+        const base = axis === 'up'
+            ? 'border-emerald-200 text-emerald-700 bg-white hover:bg-emerald-50'
+            : 'border-rose-200 text-rose-700 bg-white hover:bg-rose-50';
+        const activeCls = axis === 'up'
+            ? 'border-emerald-500 text-white bg-emerald-500 shadow-sm'
+            : 'border-rose-500 text-white bg-rose-500 shadow-sm';
+
+        const disabledCls = 'border-slate-100 text-slate-300 bg-slate-50 opacity-50 cursor-not-allowed';
+
+        return `
+            <button type="button"
+                ${disabledByOpposite ? 'disabled' : `onclick="selectNatureAxis('${axis}', '${attr.key}')"` }
+                class="px-1 py-1.5 rounded-lg border text-[10px] font-black transition ${disabledByOpposite ? disabledCls : (active ? activeCls : base)}"
+                title="${disabledByOpposite ? '同一属性不能同时上升和下降' : attr.label}">
+                <span class="block leading-none">${attr.icon}</span>
+                <span class="block mt-0.5">${attr.label}</span>
+            </button>`;
+    };
+
+    upWrap.innerHTML = AUDIT_NATURE_ATTRS.map(attr => renderAxisButton('up', attr)).join('');
+    downWrap.innerHTML = AUDIT_NATURE_ATTRS.map(attr => renderAxisButton('down', attr)).join('');
+}
 
 function runPanelAuditMath(type, name, subskillsObj, natureKey, comboStr) {
     const nature = ALL_AUDIT_NATURES[natureKey] || { speed: 0, food: 0, skill: 0 };
