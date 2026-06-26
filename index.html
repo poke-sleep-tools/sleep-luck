@@ -527,6 +527,57 @@ function saveTodayCheckInsToLocal() {
     localStorage.setItem(getTodayLogStorageKey(), JSON.stringify(todayCheckIns));
 }
 
+function mergeTodayCheckIns(localLogs = [], historyTodayLogs = []) {
+    const deletedIds = new Set(
+        (Array.isArray(historyLogs) ? historyLogs : [])
+            .filter(log => log && (log.__deleted === true || log.type === 'delete_marker') && log.deletedId !== undefined && log.deletedId !== null)
+            .map(log => String(log.deletedId))
+    );
+
+    const mergedMap = new Map();
+
+    // 先放本地，再放云端历史重建结果；同 id 时云端历史作为更完整来源。
+    // 但如果这个 id 已经有删除墓碑，就不能再进入今日流水。
+    localLogs
+        .filter(log => log && !deletedIds.has(String(log.id)))
+        .forEach(log => mergedMap.set(String(log.id), log));
+
+    historyTodayLogs
+        .filter(log => log && !deletedIds.has(String(log.id)))
+        .forEach(log => mergedMap.set(String(log.id), log));
+
+    return Array.from(mergedMap.values()).sort((a, b) => {
+        const dateCompare = String(b.date || '').localeCompare(String(a.date || ''));
+        if (dateCompare !== 0) return dateCompare;
+        return Number(b.id || 0) - Number(a.id || 0);
+    });
+}
+
+function rebuildTodayCheckInsFromHistory() {
+    // 今日流水是“当天操作看板”，本地仍然保留；
+    // 登录账号时，再从云端 historyLogs 里把今天的记录重建出来。
+    // 这样手机上打卡后，电脑登录同账号也能看到今日流水。
+    const activeDate = getTodayLocalDateString();
+
+    const historyTodayLogs = getVisibleHistoryLogs(historyLogs)
+        .filter(log => log && log.date === activeDate)
+        .map(log => ({
+            id: log.id,
+            date: log.date,
+            session: log.session || '一觉',
+            name: log.name,
+            result: log.result,
+            lockMode: log.lockMode,
+            track: log.track || null,
+            subskills: log.subskills || { sub1: 'none', sub2: 'none', sub3: 'none', sub4: 'none', sub5: 'none' },
+            nature: log.nature || 'blank',
+            foodCombo: log.foodCombo || 'ABB'
+        }));
+
+    todayCheckIns = mergeTodayCheckIns(todayCheckIns, historyTodayLogs);
+    saveTodayCheckInsToLocal();
+}
+
 // 🚀 历史时光库多账号核心控制轨：本地按账号隔离，登录账号额外同步到 Supabase
 let historyLogs = [];
 function getHistoryStorageKey() {
@@ -534,7 +585,8 @@ function getHistoryStorageKey() {
 }
 function loadHistoryFromLocal() {
     try {
-        historyLogs = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
+        const raw = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
+        historyLogs = mergeHistoryLogs([], raw);
     } catch (e) {
         console.error('历史抽卡库读取失败，已重置：', e);
         historyLogs = [];
@@ -545,15 +597,66 @@ function saveHistoryToLocal() {
     scheduleSaveHistoryToCloud();
 }
 
+function isHistoryDeleteMarker(log) {
+    return !!(log && (log.__deleted === true || log.type === 'delete_marker') && log.deletedId !== undefined && log.deletedId !== null);
+}
+
+function getVisibleHistoryLogs(logs = []) {
+    const deletedIds = new Set(
+        (Array.isArray(logs) ? logs : [])
+            .filter(isHistoryDeleteMarker)
+            .map(log => String(log.deletedId))
+    );
+
+    return (Array.isArray(logs) ? logs : [])
+        .filter(log => log && !isHistoryDeleteMarker(log))
+        .filter(log => !deletedIds.has(String(log.id)));
+}
+
+function makeHistoryDeleteMarker(deletedId) {
+    return {
+        id: `deleted_${deletedId}`,
+        type: 'delete_marker',
+        __deleted: true,
+        deletedId: deletedId,
+        deletedAt: new Date().toISOString()
+    };
+}
+
 function mergeHistoryLogs(cloudLogs = [], localLogs = []) {
+    const allLogs = [
+        ...(Array.isArray(cloudLogs) ? cloudLogs : []),
+        ...(Array.isArray(localLogs) ? localLogs : [])
+    ];
+
+    // 删除墓碑优先级最高：
+    // 任意设备删过的 id，之后任何设备 localStorage 里的旧记录都不能再复活。
+    const deletedIds = new Set(
+        allLogs
+            .filter(isHistoryDeleteMarker)
+            .map(log => String(log.deletedId))
+    );
+
     const mergedMap = new Map();
 
-    // 先放云端，再用本机同 id 记录覆盖，避免本机刚编辑但尚未同步时被旧云端冲掉
-    cloudLogs.forEach(log => mergedMap.set(String(log.id), log));
-    localLogs.forEach(log => mergedMap.set(String(log.id), log));
+    // 先合并正常记录，过滤掉已经被墓碑删除的记录
+    allLogs.forEach(log => {
+        if (!log || isHistoryDeleteMarker(log)) return;
+        if (deletedIds.has(String(log.id))) return;
+        mergedMap.set(String(log.id), log);
+    });
+
+    // 再保留墓碑本身，让其他设备也知道“这个 id 不要再复活”
+    allLogs
+        .filter(isHistoryDeleteMarker)
+        .forEach(log => mergedMap.set(String(log.id), log));
 
     return Array.from(mergedMap.values()).sort((a, b) => {
-        const dateCompare = String(b.date || '').localeCompare(String(a.date || ''));
+        // 墓碑放在末尾，不参与 UI 展示，但继续保存在同步数据里
+        if (isHistoryDeleteMarker(a) && !isHistoryDeleteMarker(b)) return 1;
+        if (!isHistoryDeleteMarker(a) && isHistoryDeleteMarker(b)) return -1;
+
+        const dateCompare = String(b.date || b.deletedAt || '').localeCompare(String(a.date || a.deletedAt || ''));
         if (dateCompare !== 0) return dateCompare;
         return Number(b.id || 0) - Number(a.id || 0);
     });
@@ -585,6 +688,11 @@ async function loadHistoryFromCloud() {
         // 如果本机有云端没有的旧历史，顺手补回云端，避免换设备丢失
         if (historyLogs.length !== data.history_logs.length) {
             await saveHistoryToCloudNow();
+        }
+
+        if (currentCloudUser) {
+            rebuildTodayCheckInsFromHistory();
+            renderTodayReportUI();
         }
         return;
     }
@@ -2089,6 +2197,8 @@ async function saveBoxToCloudNow() {
         .upsert({
             user_id: currentCloudUser.id,
             box_data: playerBox,
+            history_logs: historyLogs,
+            graduation_dex: graduationDex,
             updated_at: new Date().toISOString()
         }, {
             onConflict: 'user_id'
@@ -2164,6 +2274,7 @@ async function signInUser() {
     await loadHistoryFromCloud();
     await loadGraduationDexFromCloud();
     loadTodayCheckInsFromLocal();
+    rebuildTodayCheckInsFromHistory();
     renderTodayReportUI();
     showToast("登录成功，已切换到账号 Box");
 }
@@ -2538,8 +2649,10 @@ function updateAuthUI() {
                 loadGraduationDexFromLocal();
             }
 
-            // 🚀 加载网页时，自动恢复当前账号/游客自己的今日流水，并执行跨日过期审计
+            // 🚀 加载网页时，自动恢复当前账号/游客自己的今日流水。
+            // 登录账号时，再用云端历史库重建今天的流水，保证手机/电脑同账号一致。
             loadTodayCheckInsFromLocal();
+            if (currentCloudUser) rebuildTodayCheckInsFromHistory();
             renderTodayReportUI();
             
         };
@@ -2923,6 +3036,13 @@ function submitDailyCheckIn() {
         subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo
     });
     saveHistoryToLocal();
+
+    // 手机端打卡后用户可能很快切走页面，所以这里不要只依赖 500ms 防抖；
+    // 立即把历史库写入云端，电脑端登录后才能立刻读取到。
+    if (currentCloudUser) {
+        saveHistoryToCloudNow();
+    }
+
         // 🏆 每日真实捕捉如果盖章为毕业 / 大毕业 / 金帮毕业，自动归档进毕业库
     if (isGraduationResult(result)) {
         addGraduationDexEntry({
@@ -2938,6 +3058,11 @@ function submitDailyCheckIn() {
             nature: natureKey,
             foodCombo: foodCombo
         });
+    }
+
+    if (currentCloudUser) {
+        saveGraduationDexToCloudNow();
+        saveBoxToCloudNow();
     }
 
     document.getElementById('daily-checkin-modal').remove();
@@ -3378,27 +3503,35 @@ function rollbackCheckInAsset(item) {
 async function deleteHistoryLog(logId, e) {
     if (e) e.stopPropagation();
 
-    let histIdx = historyLogs.findIndex(h => String(h.id) === String(logId));
-    if (histIdx === -1) return;
-
-    let item = historyLogs[histIdx];
+    const visibleLogs = getVisibleHistoryLogs(historyLogs);
+    let item = visibleLogs.find(h => String(h.id) === String(logId));
+    if (!item) return;
 
     const ok = confirm(`确定删除这条历史捕捉记录吗？\n\n${item.date || '未知日期'} ${item.session || ''} · ${item.name}\n\n删除后会同步从 Box 大仓里扣回这一次捕捉。`);
     if (!ok) return;
 
     rollbackCheckInAsset(item);
 
-    historyLogs.splice(histIdx, 1);
+    // 删除正常记录，同时追加隐藏删除墓碑。
+    // 墓碑会同步到云端，防止其他设备的旧 localStorage 再把它复活。
+    historyLogs = (Array.isArray(historyLogs) ? historyLogs : [])
+        .filter(h => !(h && !isHistoryDeleteMarker(h) && String(h.id) === String(logId)));
+
+    if (!historyLogs.some(h => isHistoryDeleteMarker(h) && String(h.deletedId) === String(logId))) {
+        historyLogs.push(makeHistoryDeleteMarker(logId));
+    }
+
+    historyLogs = mergeHistoryLogs([], historyLogs);
     saveHistoryToLocal();
 
-    // 删除是“减法操作”，不能等 500ms 的防抖同步；否则重新打开历史库时会先从旧云端把它合并回来。
-    // 所以这里立刻把删减后的 historyLogs 写回 Supabase。
+    // 删除是“减法操作”，不能等 500ms 的防抖同步；否则其他设备可能把旧记录合并回来。
     await saveHistoryToCloudNow();
 
     // 如果这条历史记录曾经自动进入毕业库，也一起移除对应档案。
     // 只移除 sourceId 相同的自动档案，不会影响手动补录的毕业库记录。
     if (removeGraduationDexBySourceId(logId)) {
         saveGraduationDexToLocal();
+        await saveGraduationDexToCloudNow();
     }
 
     let todayIdx = todayCheckIns.findIndex(t => String(t.id) === String(logId));
@@ -3409,6 +3542,7 @@ async function deleteHistoryLog(logId, e) {
     }
 
     updateBoxUI(true);
+    await saveBoxToCloudNow();
 
     const histModal = document.getElementById('history-logs-modal');
     if (histModal) histModal.remove();
@@ -3892,9 +4026,11 @@ async function openHistoryModal(skipCloudRefresh = false) {
     modal.id = 'history-logs-modal';
     modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
     
-    // 按日期将扁平流水账进行联合高维分组
+    // 按日期将扁平流水账进行联合高维分组。
+    // historyLogs 可能包含跨设备删除用的隐藏墓碑，UI 只展示可见记录。
+    const visibleHistoryLogs = getVisibleHistoryLogs(historyLogs);
     let grouped = {};
-    historyLogs.forEach(log => {
+    visibleHistoryLogs.forEach(log => {
         if (!grouped[log.date]) grouped[log.date] = [];
         grouped[log.date].push(log);
     });
@@ -3909,7 +4045,7 @@ async function openHistoryModal(skipCloudRefresh = false) {
         goldGrad: "bg-red-50 text-red-600 border-red-200"
     };
     
-    if (historyLogs.length === 0) {
+    if (visibleHistoryLogs.length === 0) {
         historyHTML = `<div class="text-center py-12 text-slate-400 text-xs font-medium"><i class="fa-solid fa-hourglass block text-2xl mb-2 text-slate-300"></i>时光书卷空无一字，快去完成你的第一发打卡开箱吧！</div>`;
     } else {
         // 遍历生成按天分块的优雅时间线布局
@@ -3970,7 +4106,7 @@ async function openHistoryModal(skipCloudRefresh = false) {
 // 1. 唤醒任意历史卡片的专属精修弹窗
 // 1. 唤醒任意历史卡片：复用新版“智能面板审计 · 气运盲盒”弹窗
 function openEditHistoryLogModal(logId) {
-    let item = historyLogs.find(log => String(log.id) === String(logId));
+    let item = getVisibleHistoryLogs(historyLogs).find(log => String(log.id) === String(logId));
     if (!item) return;
 
     // 直接复用新版每日打卡面板，避免历史编辑还停留在旧 UI
@@ -4068,7 +4204,7 @@ function submitEditHistoryLog(logId) {
     if (!rawName) { alert("请输入宝可梦名字！"); return; }
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
     
-    let histIdx = historyLogs.findIndex(h => String(h.id) === String(logId));
+    let histIdx = historyLogs.findIndex(h => h && !isHistoryDeleteMarker(h) && String(h.id) === String(logId));
     if (histIdx === -1) return;
     let oldItem = historyLogs[histIdx];
     
