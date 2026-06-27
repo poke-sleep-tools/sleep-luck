@@ -160,7 +160,7 @@
                         <li><strong>老玩家可启用总捕捉数校准</strong>：如果历史捕捉太多无法全部补录，可以填写游戏内总捕捉数与三系体感比例，系统会把未录入捕捉作为未毕业背景样本进行近似补正。</li>
                         <li><strong>大仓和毕业库分工不同</strong>：大仓负责统计总捕捉与出货数量；毕业库负责保存具体出货个体面板。补录毕业库不会自动增加大仓捕捉数。</li>
                         <li><strong>编辑历史记录会影响大仓</strong>：历史抽卡库是真实流水，修改或删除历史记录可能改变大仓统计；出货库里的“编辑当前”只改展示档案，不会影响大仓。</li>
-                        <li><strong>特殊技能型暂定评分</strong>：特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后，除伊布及伊布进化型外暂按树果宝概率映射参与运气测评；拉帝欧斯/拉帝亚斯使用专用三线。</li>
+                        <li><strong>特殊技能型暂定评分</strong>：部分特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后暂按树果宝概率映射参与运气测评；拉帝欧斯/拉帝亚斯和伊布家族使用各自专用口径。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
                         <li><strong>和解口径说明</strong>：默认主评分不要求完整记录所有和解；已录入的少量和解会按“自用和解”处理，理解为该品种至少曾出现过可留用的和解个体，而不是完整和解总数。</li>
                         <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，已录入的闪光和解及以上个体会作为额外稀有加成参与评分。</li>
@@ -1507,7 +1507,7 @@ function getRecordedCatchesBySummaryType() {
 }
 
 function getRecordedEvaluableCatchesBySummaryType() {
-    // 用于评分校准：普通三系 + 暂定参与评分的特殊技能宝纳入测评；拉帝/伊布系等特殊技能仍排除。
+    // 用于评分校准：普通三系 + 暂定参与评分的特殊技能宝 + 拉帝/伊布家族专用口径纳入测评。
     const out = { berry: 0, food: 0, skill: 0 };
     (playerBox || []).forEach(p => {
         const dict = pokemonDictionary[p.name];
@@ -3390,8 +3390,9 @@ function getEvolutionCatchWeight(name) {
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
     let dict = pokemonDictionary[standardName];
     let isFood = dict && dict.type === 'food';
-    let isSpecialThreeTier = dict && dict.type === 'special_skill';
+    let isSpecialThreeTier = dict && isSpecialSkillThreeTierDisplay(standardName);
     let isLatiosLine = isLatiCustomScoringName(standardName);
+    let isThreeColumnResultGrid = isSpecialThreeTier || isLatiosLine;
     let latiLabel = getLatiCustomLabel(standardName);
 
     if (isFood) {
@@ -3405,7 +3406,7 @@ function getEvolutionCatchWeight(name) {
         </div>`;
     } else {
         container.innerHTML = `
-        <div class="grid ${isSpecialThreeTier ? 'grid-cols-3' : 'grid-cols-4'} gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
+        <div class="grid ${isThreeColumnResultGrid ? 'grid-cols-3' : 'grid-cols-4'} gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
                 <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
@@ -3901,7 +3902,12 @@ function getEvolutionCatchWeight(name) {
                 let isSpecialDowngrade = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
                 let isSpecialThreeTier = isSpecialSkillThreeTierDisplay(p.name);
                 let isLatiosLine = isLatiCustomScoringName(p.name);
+                let isThreeColumnResultGrid = isSpecialDowngrade || isSpecialThreeTier || isLatiosLine;
                 let latiLabel = getLatiCustomLabel(p.name);
+                let isEeveeBase = isEeveeBaseScoringName(p.name);
+                let isEspeon = isEspeonScoringName(p.name);
+                let isEeveeNormalSkillEvo = isEeveeNormalSkillEvolutionName(p.name);
+                let isEeveeOtherEvo = isEeveeOtherEvolutionName(p.name);
                 let isSpecialScored = isSpecialSkillScoredByBerryModel(p.name);
                 let isSpecialExcluded = isSpecialSkillPokemonName(p.name) && !isSpecialSkillScoredForLuck(p.name);
                 let typeLabel = '未知';
@@ -3956,7 +3962,7 @@ function getEvolutionCatchWeight(name) {
                             <span class="block text-[9px] text-yellow-700 font-black mb-0.5">✨ 闪光出货总数</span>
                             <input type="number" id="edit-shiny-${idx}" value="${p.shinyUsefulCount || 0}" class="w-full border border-yellow-200 rounded text-center text-xs font-mono py-0.5 text-yellow-700 bg-white">
                         </div>` : `
-                        <div class="grid ${isSpecialDowngrade || isSpecialThreeTier ? 'grid-cols-3' : 'grid-cols-4'} gap-1 text-center bg-white p-2 rounded-xl border border-slate-200">
+                        <div class="grid ${isThreeColumnResultGrid ? 'grid-cols-3' : 'grid-cols-4'} gap-1 text-center bg-white p-2 rounded-xl border border-slate-200">
                             ${isSpecialDowngrade ? '' : `
                                 <div><span class="block text-[9px] text-amber-600 font-bold mb-0.5">总和解</span><input type="number" id="edit-tied-${idx}" value="${p.tiedCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-amber-600"></div>
                             `}
@@ -3993,7 +3999,7 @@ function getEvolutionCatchWeight(name) {
                         </div>
                     </div>
                     ${graduationDexAuditHTML}
-                    <div class="grid ${isSpecialDowngrade || isSpecialThreeTier ? 'grid-cols-3' : 'grid-cols-4'} gap-2 text-center bg-slate-50/50 p-2 rounded-xl border border-slate-100">
+                    <div class="grid ${isThreeColumnResultGrid ? 'grid-cols-3' : 'grid-cols-4'} gap-2 text-center bg-slate-50/50 p-2 rounded-xl border border-slate-100">
                         ${isSpecialDowngrade ? '' : `
                         <div class="px-1 py-1 rounded-lg ${p.tiedCount > 0 ? 'bg-amber-50 text-amber-700 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">${isSpecialThreeTier ? '和解' : '自用和解'}</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
@@ -4021,6 +4027,10 @@ function getEvolutionCatchWeight(name) {
                     <div class="border-t border-slate-50 pt-2.5 text-[11px] flex items-center justify-between">
                         <div class="flex items-center gap-1">${adviceHTML}</div>
                         ${isLatiosLine ? `<div class="text-[10px] text-cyan-600 font-bold bg-cyan-50 px-2 py-0.5 rounded-lg border border-cyan-200/50"><i class="fa-solid fa-dragon mr-0.5"></i> ${latiLabel}专用三线：和解/毕业/大毕业，无金帮线</div>` : ''}
+                        ${isEeveeBase ? `<div class="text-[10px] text-purple-600 font-bold bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-200/50"><i class="fa-solid fa-paw mr-0.5"></i> 伊布专用判定</div>` : ''}
+                        ${isEspeon ? `<div class="text-[10px] text-violet-600 font-bold bg-violet-50 px-2 py-0.5 rounded-lg border border-violet-200/50"><i class="fa-solid fa-sun mr-0.5"></i> 太阳伊布专用判定</div>` : ''}
+                        ${isEeveeNormalSkillEvo ? `<div class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200/50"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 按普通技能型标准</div>` : ''}
+                        ${isEeveeOtherEvo ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-user-pen mr-0.5"></i> 该进化型暂不提供系统推荐，请自行选择档位</div>` : ''}
                         ${isSpecialScored ? `<div class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200/50"><i class="fa-solid fa-flask mr-0.5"></i> 特殊技能暂定三档评分：按树果毕业/大毕业/金帮概率映射</div>` : ''}
                         ${isSpecialExcluded ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-shield-halved text-slate-400 mr-0.5"></i> 暂不计入运气计算</div>` : ''}
                         ${SPECIAL_STANDARD_DOWNGRADE.includes(p.name) ? `<div class="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/40"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 毕业标准降级，一般的和解即视为毕业</div>` : ''}
@@ -4631,10 +4641,16 @@ function getActiveFoodTrackProbabilityRows(p) {
 
     
         const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
-        const SPECIAL_SKILL_LUCK_EXCLUDED = ["伊布", "水伊布", "雷伊布", "火伊布", "太阳伊布", "月亮伊布", "叶伊布", "冰伊布", "仙子伊布"];
+        // 目前伊布家族、拉帝欧斯/拉帝亚斯已拆出专用或普通技能型口径，不再整体排除评分。
+        const SPECIAL_SKILL_LUCK_EXCLUDED = [];
         const LEGENDARY_FIRST_FIXED_BAD_NAMES = ["雷公", "炎帝", "水君", "克雷色利亚", "拉帝欧斯", "拉帝亚斯"];
         const LATIOS_CUSTOM_NAME = "拉帝欧斯";
         const LATIAS_CUSTOM_NAME = "拉帝亚斯";
+        const EEVEE_BASE_NAME = "伊布";
+        const ESPEON_NAME = "太阳伊布";
+        const EEVEE_NORMAL_SKILL_EVOLUTIONS = ["火伊布", "冰伊布", "仙子伊布"];
+        const EEVEE_OTHER_EVOLUTIONS = ["水伊布", "雷伊布", "月亮伊布", "叶伊布"];
+        const EEVEE_FAMILY_NAMES = [EEVEE_BASE_NAME, ESPEON_NAME, ...EEVEE_NORMAL_SKILL_EVOLUTIONS, ...EEVEE_OTHER_EVOLUTIONS];
 
 function normalizeStandardName(name) {
     return pokemonDictionary[name]?.standard || name;
@@ -4655,6 +4671,30 @@ function isLatiCustomScoringName(name) {
 
 function getLatiCustomLabel(name) {
     return isLatiasCustomScoringName(name) ? '拉帝亚斯' : '拉帝欧斯';
+}
+
+function isEeveeFamilyName(name) {
+    return EEVEE_FAMILY_NAMES.includes(normalizeStandardName(name));
+}
+
+function isEeveeBaseScoringName(name) {
+    return normalizeStandardName(name) === EEVEE_BASE_NAME;
+}
+
+function isEspeonScoringName(name) {
+    return normalizeStandardName(name) === ESPEON_NAME;
+}
+
+function isEeveeNormalSkillEvolutionName(name) {
+    return EEVEE_NORMAL_SKILL_EVOLUTIONS.includes(normalizeStandardName(name));
+}
+
+function isEeveeOtherEvolutionName(name) {
+    return EEVEE_OTHER_EVOLUTIONS.includes(normalizeStandardName(name));
+}
+
+function isEeveeFamilyScoredForLuck(name) {
+    return isEeveeFamilyName(name);
 }
 
 function isLegendaryFirstFixedBadName(name) {
@@ -4682,16 +4722,19 @@ function isSpecialSkillExcludedFromLuck(name) {
 
 function isSpecialSkillScoredByBerryModel(name) {
     const standard = normalizeStandardName(name);
-    return isSpecialSkillPokemonName(standard) && !isSpecialSkillExcludedFromLuck(standard) && !isLatiCustomScoringName(standard);
+    return isSpecialSkillPokemonName(standard)
+        && !isSpecialSkillExcludedFromLuck(standard)
+        && !isLatiCustomScoringName(standard)
+        && !isEeveeFamilyName(standard);
 }
 
 function isSpecialSkillScoredForLuck(name) {
-    return isLatiCustomScoringName(name) || isSpecialSkillScoredByBerryModel(name);
+    return isLatiCustomScoringName(name) || isEeveeFamilyScoredForLuck(name) || isSpecialSkillScoredByBerryModel(name);
 }
 
 function isSpecialSkillThreeTierDisplay(name) {
-    const standard = normalizeStandardName(name);
-    return isSpecialSkillPokemonName(standard);
+    // 仅“暂定特殊技能宝”使用三档：和解 / 毕业 / 金帮；拉帝、伊布家族走各自口径。
+    return isSpecialSkillScoredByBerryModel(name);
 }
 
 function isLatiosThreeLineDisplay(name) {
@@ -4699,7 +4742,12 @@ function isLatiosThreeLineDisplay(name) {
 }
 
 function isTiedLineScoredDirectly(name) {
-    return SPECIAL_STANDARD_DOWNGRADE.includes(normalizeStandardName(name)) || isSpecialSkillScoredByBerryModel(name) || isLatiCustomScoringName(name);
+    const standard = normalizeStandardName(name);
+    return SPECIAL_STANDARD_DOWNGRADE.includes(standard)
+        || isSpecialSkillScoredByBerryModel(standard)
+        || isLatiCustomScoringName(standard)
+        || isEeveeBaseScoringName(standard)
+        || isEspeonScoringName(standard);
 }
 
 function getLuckScoringTypeForPokemon(name) {
@@ -4707,6 +4755,9 @@ function getLuckScoringTypeForPokemon(name) {
     if (!dict) return null;
     if (isLatiosCustomScoringName(name)) return 'latios';
     if (isLatiasCustomScoringName(name)) return 'latias';
+    if (isEeveeBaseScoringName(name)) return 'eevee';
+    if (isEspeonScoringName(name)) return 'espeon';
+    if (isEeveeFamilyName(name)) return 'skill';
     if (dict.type === 'special_skill') {
         return isSpecialSkillScoredByBerryModel(name) ? 'special_skill' : null;
     }
@@ -4761,6 +4812,19 @@ const LUCK_PROB_MATRIX = {
         none: { gold: 0, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
         one:  { gold: 0, bigGrad: 0.0311, grad: 0.0412, tied: 0.0833 },
         two:  { gold: 0, bigGrad: 0.0619, grad: 0.0788, tied: 0.1197 }
+    },
+    // 伊布本体：普通技能型四线 + 蜥蜴王参考表 Rank≤64 和解、Rank≤36 金帮的并集口径。
+    // 概率为当前模型下的近似累计概率，用于大仓运气分布评分。
+    eevee: {
+        none: { gold: 0.0374, bigGrad: 0.0456, grad: 0.0581, tied: 0.1029 },
+        one:  { gold: 0.0564, bigGrad: 0.0589, grad: 0.0632, tied: 0.1011 },
+        two:  { gold: 0.0850, bigGrad: 0.0850, grad: 0.0850, tied: 0.1088 }
+    },
+    // 太阳伊布：使用蜥蜴王参考表 Rank≤64 / Rank≤36 两条线；页面保留四档手动录入。
+    espeon: {
+        none: { gold: 0.0247, bigGrad: 0.0247, grad: 0.0247, tied: 0.0531 },
+        one:  { gold: 0.0431, bigGrad: 0.0431, grad: 0.0431, tied: 0.0734 },
+        two:  { gold: 0.0767, bigGrad: 0.0767, grad: 0.0767, tied: 0.0971 }
     }
 };
 
@@ -5200,6 +5264,32 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
                 totalKey += event.scoreKey || 0;
             });
         }
+        if (includeShinyLuckBonus) {
+            getShinyUsefulEvents(p, pType).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
+        }
+        return totalKey;
+    }
+
+    // 伊布本体：普通技能型四线 + 特殊参考线并集。
+    if (isEeveeBaseScoringName(p.name)) {
+        addCount('tied', p.tiedCount || 0);
+        addCount('grad', p.gradCount || 0);
+        addCount('bigGrad', p.bigGradCount || 0);
+        addCount('goldGrad', p.goldGradCount || 0);
+        if (includeShinyLuckBonus) {
+            getShinyUsefulEvents(p, pType).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
+        }
+        return totalKey;
+    }
+
+    // 太阳伊布：页面保留四档记录；内部评分使用参考线的和解/金帮两级证据。
+    if (isEspeonScoringName(p.name)) {
+        addCount('tied', (Number(p.tiedCount) || 0) + (Number(p.gradCount) || 0) + (Number(p.bigGradCount) || 0));
+        addCount('goldGrad', p.goldGradCount || 0);
         if (includeShinyLuckBonus) {
             getShinyUsefulEvents(p, pType).forEach(event => {
                 totalKey += event.scoreKey || 0;
@@ -7886,6 +7976,131 @@ function runLatiasPanelAudit(subskillsObj = {}, natureKey = 'blank') {
     };
 }
 
+
+// ==========================================
+// 🦎 蜥蜴王参考表：供伊布/太阳伊布专用判定使用
+// Rank≤64 作为参考和解线；Rank≤36 作为参考金帮线。
+// 表内“▲速/▲技/▲速▼技/▲技▼速”按帮速/技能性格方向归类；副技能沿用本站前三格与种子代换逻辑。
+// ==========================================
+const SCEPTILE_REFERENCE_RANK_ROWS = [
+    { rank: 1, skills: ['bfs','hb','hsm'], nature: 'speedGood', label: '树果S + 帮手奖励 + 帮忙速度M + 速度性格' },
+    { rank: 2, skills: ['bfs','hb','stm'], nature: 'speedGood', label: '树果S + 帮手奖励 + 技能概率M + 速度性格' },
+    { rank: 3, skills: ['bfs','hb','hsm'], nature: 'skillGood', label: '树果S + 帮手奖励 + 帮忙速度M + 技能性格' },
+    { rank: 4, skills: ['bfs','hb','hss'], nature: 'speedGood', label: '树果S + 帮手奖励 + 帮忙速度S + 速度性格' },
+    { rank: 5, skills: ['bfs','hb','stm'], nature: 'skillGood', label: '树果S + 帮手奖励 + 技能概率M + 技能性格' },
+    { rank: 6, skills: ['bfs','hb','hsm'], nature: 'speedSkillDown', label: '树果S + 帮手奖励 + 帮忙速度M + 速度↑技能↓' },
+    { rank: 7, skills: ['bfs','hb','sts'], nature: 'speedGood', label: '树果S + 帮手奖励 + 技能概率S + 速度性格' },
+    { rank: 8, skills: ['bfs','hb','hss'], nature: 'skillGood', label: '树果S + 帮手奖励 + 帮忙速度S + 技能性格' },
+    { rank: 9, skills: ['bfs','hb','hsm'], nature: 'none', label: '树果S + 帮手奖励 + 帮忙速度M' },
+    { rank: 10, skills: ['bfs','hb','sts'], nature: 'skillGood', label: '树果S + 帮手奖励 + 技能概率S + 技能性格' },
+    { rank: 11, skills: ['bfs','hb','stm'], nature: 'speedSkillDown', label: '树果S + 帮手奖励 + 技能概率M + 速度↑技能↓' },
+    { rank: 12, skills: ['bfs','hb','hss'], nature: 'speedSkillDown', label: '树果S + 帮手奖励 + 帮忙速度S + 速度↑技能↓' },
+    { rank: 13, skills: ['bfs','hb','stm'], nature: 'none', label: '树果S + 帮手奖励 + 技能概率M' },
+    { rank: 14, skills: ['bfs','hb','hsm'], nature: 'skillSpeedDown', label: '树果S + 帮手奖励 + 帮忙速度M + 技能↑速度↓' },
+    { rank: 15, skills: ['bfs','hb'], nature: 'speedGood', label: '树果S + 帮手奖励 + 速度性格' },
+    { rank: 16, skills: ['bfs','hb','stm'], nature: 'skillSpeedDown', label: '树果S + 帮手奖励 + 技能概率M + 技能↑速度↓' },
+    { rank: 17, skills: ['bfs','hb','hss'], nature: 'none', label: '树果S + 帮手奖励 + 帮忙速度S' },
+    { rank: 18, skills: ['bfs','hsm','stm'], nature: 'speedGood', label: '树果S + 帮忙速度M + 技能概率M + 速度性格' },
+    { rank: 19, skills: ['bfs','hb','sts'], nature: 'speedSkillDown', label: '树果S + 帮手奖励 + 技能概率S + 速度↑技能↓' },
+    { rank: 20, skills: ['hb','hsm','stm'], nature: 'skillGood', label: '帮手奖励 + 帮忙速度M + 技能概率M + 技能性格' },
+    { rank: 21, skills: ['bfs','hb','hss'], nature: 'skillSpeedDown', label: '树果S + 帮手奖励 + 帮忙速度S + 技能↑速度↓' },
+    { rank: 22, skills: ['bfs','hb'], nature: 'skillGood', label: '树果S + 帮手奖励 + 技能性格' },
+    { rank: 23, skills: ['bfs','hsm','stm'], nature: 'skillGood', label: '树果S + 帮忙速度M + 技能概率M + 技能性格' },
+    { rank: 24, skills: ['bfs','hb','sts'], nature: 'none', label: '树果S + 帮手奖励 + 技能概率S' },
+    { rank: 25, skills: ['hb','hsm','stm'], nature: 'speedGood', label: '帮手奖励 + 帮忙速度M + 技能概率M + 速度性格' },
+    { rank: 26, skills: ['bfs','hsm','hss'], nature: 'speedGood', label: '树果S + 帮忙速度M + 帮忙速度S + 速度性格' },
+    { rank: 27, skills: ['bfs','hb','sts'], nature: 'skillSpeedDown', label: '树果S + 帮手奖励 + 技能概率S + 技能↑速度↓' },
+    { rank: 28, skills: ['bfs','hb'], nature: 'speedSkillDown', label: '树果S + 帮手奖励 + 速度↑技能↓' },
+    { rank: 29, skills: ['hb','stm','hss'], nature: 'skillGood', label: '帮手奖励 + 技能概率M + 帮忙速度S + 技能性格' },
+    { rank: 30, skills: ['bfs','hsm','sts'], nature: 'speedGood', label: '树果S + 帮忙速度M + 技能概率S + 速度性格' },
+    { rank: 31, skills: ['hb','stm','sts'], nature: 'skillGood', label: '帮手奖励 + 技能概率M + 技能概率S + 技能性格' },
+    { rank: 32, skills: ['hb','stm','hss'], nature: 'speedGood', label: '帮手奖励 + 技能概率M + 帮忙速度S + 速度性格' },
+    { rank: 33, skills: ['bfs','hsm','hss'], nature: 'skillGood', label: '树果S + 帮忙速度M + 帮忙速度S + 技能性格' },
+    { rank: 34, skills: ['bfs','stm','hss'], nature: 'speedGood', label: '树果S + 技能概率M + 帮忙速度S + 速度性格' },
+    { rank: 35, skills: ['hb','stm','sts'], nature: 'speedGood', label: '帮手奖励 + 技能概率M + 技能概率S + 速度性格' },
+    { rank: 36, skills: ['bfs','hb'], nature: 'none', label: '树果S + 帮手奖励' },
+    { rank: 37, skills: ['bfs','hsm','sts'], nature: 'skillGood', label: '树果S + 帮忙速度M + 技能概率S + 技能性格' },
+    { rank: 38, skills: ['bfs','hsm','stm'], nature: 'speedSkillDown', label: '树果S + 帮忙速度M + 技能概率M + 速度↑技能↓' },
+    { rank: 39, skills: ['bfs','stm','sts'], nature: 'speedGood', label: '树果S + 技能概率M + 技能概率S + 速度性格' },
+    { rank: 40, skills: ['bfs','stm','hss'], nature: 'skillGood', label: '树果S + 技能概率M + 帮忙速度S + 技能性格' },
+    { rank: 41, skills: ['hb','hsm','stm'], nature: 'skillSpeedDown', label: '帮手奖励 + 帮忙速度M + 技能概率M + 技能↑速度↓' },
+    { rank: 42, skills: ['hb','hsm','sts'], nature: 'skillGood', label: '帮手奖励 + 帮忙速度M + 技能概率S + 技能性格' },
+    { rank: 43, skills: ['bfs','hsm','stm'], nature: 'none', label: '树果S + 帮忙速度M + 技能概率M' },
+    { rank: 44, skills: ['bfs','hsm','hss'], nature: 'speedSkillDown', label: '树果S + 帮忙速度M + 帮忙速度S + 速度↑技能↓' },
+    { rank: 45, skills: ['bfs','stm','sts'], nature: 'skillGood', label: '树果S + 技能概率M + 技能概率S + 技能性格' },
+    { rank: 46, skills: ['hb','hsm','sts'], nature: 'speedGood', label: '帮手奖励 + 帮忙速度M + 技能概率S + 速度性格' },
+    { rank: 47, skills: ['bfs','hb'], nature: 'skillSpeedDown', label: '树果S + 帮手奖励 + 技能↑速度↓' },
+    { rank: 48, skills: ['bfs','hsm','stm'], nature: 'skillSpeedDown', label: '树果S + 帮忙速度M + 技能概率M + 技能↑速度↓' },
+    { rank: 49, skills: ['bfs','hsm'], nature: 'speedGood', label: '树果S + 帮忙速度M + 速度性格' },
+    { rank: 50, skills: ['hb','hsm','stm'], nature: 'none', label: '帮手奖励 + 帮忙速度M + 技能概率M' },
+    { rank: 51, skills: ['bfs','hss','sts'], nature: 'speedGood', label: '树果S + 帮忙速度S + 技能概率S + 速度性格' },
+    { rank: 52, skills: ['bfs','hsm','sts'], nature: 'speedSkillDown', label: '树果S + 帮忙速度M + 技能概率S + 速度↑技能↓' },
+    { rank: 53, skills: ['bfs','hsm','hss'], nature: 'none', label: '树果S + 帮忙速度M + 帮忙速度S' },
+    { rank: 54, skills: ['hb','stm','hss'], nature: 'skillSpeedDown', label: '帮手奖励 + 技能概率M + 帮忙速度S + 技能↑速度↓' },
+    { rank: 55, skills: ['hb','stm'], nature: 'skillGood', label: '帮手奖励 + 技能概率M + 技能性格' },
+    { rank: 56, skills: ['hb','stm','sts'], nature: 'skillSpeedDown', label: '帮手奖励 + 技能概率M + 技能概率S + 技能↑速度↓' },
+    { rank: 57, skills: ['hb','hss','sts'], nature: 'skillGood', label: '帮手奖励 + 帮忙速度S + 技能概率S + 技能性格' },
+    { rank: 58, skills: ['bfs','stm'], nature: 'speedGood', label: '树果S + 技能概率M + 速度性格' },
+    { rank: 59, skills: ['hb','hss','sts'], nature: 'speedGood', label: '帮手奖励 + 帮忙速度S + 技能概率S + 速度性格' },
+    { rank: 60, skills: ['bfs','hsm'], nature: 'skillGood', label: '树果S + 帮忙速度M + 技能性格' },
+    { rank: 61, skills: ['hb','hsm','stm'], nature: 'speedSkillDown', label: '帮手奖励 + 帮忙速度M + 技能概率M + 速度↑技能↓' },
+    { rank: 62, skills: ['hb','stm'], nature: 'speedGood', label: '帮手奖励 + 技能概率M + 速度性格' },
+    { rank: 63, skills: ['bfs','hsm','sts'], nature: 'none', label: '树果S + 帮忙速度M + 技能概率S' },
+    { rank: 64, skills: ['bfs','hss','sts'], nature: 'skillGood', label: '树果S + 帮忙速度S + 技能概率S + 技能性格' }
+];
+
+function getSceptileReferenceNatureTag(natureKey) {
+    const parts = getNaturePartsFromKey(natureKey);
+    if (parts.up === 'speed' && parts.down === 'skill') return 'speedSkillDown';
+    if (parts.up === 'skill' && parts.down === 'speed') return 'skillSpeedDown';
+    if (parts.up === 'speed') return 'speedGood';
+    if (parts.up === 'skill') return 'skillGood';
+    return 'none';
+}
+
+function getSceptileReferenceResolvedSkills(subskillsObj = {}) {
+    return getLatiosRelevantResolvedSkills(subskillsObj);
+}
+
+function getSceptileReferenceRankInfo(subskillsObj = {}, natureKey = 'blank') {
+    const actualSkills = getSceptileReferenceResolvedSkills(subskillsObj);
+    const natureTag = getSceptileReferenceNatureTag(natureKey);
+    const row = SCEPTILE_REFERENCE_RANK_ROWS.find(r => r.nature === natureTag && latiosSkillsMatch(actualSkills, r.skills));
+    if (!row) return { rank: null, line: 'none', label: '未命中特殊参考线', comboLabel: '未进入参考表 Rank 64 以内', skills: actualSkills, natureTag };
+    const line = row.rank <= 36 ? 'goldGrad' : 'tied';
+    const label = line === 'goldGrad' ? '👑通过特殊金帮线' : '🔸通过特殊和解线';
+    return { rank: row.rank, line, label, comboLabel: row.label, skills: actualSkills, natureTag };
+}
+
+function runEeveePanelAudit(subskillsObj = {}, natureKey = 'blank') {
+    const skillReport = runPanelAuditMath('skill', EEVEE_BASE_NAME, subskillsObj, natureKey, 'ABB');
+    const skillLine = skillReport.recommendValue || 'none';
+    const sceptileReport = getSceptileReferenceRankInfo(subskillsObj, natureKey);
+    const finalLine = maxThreeLineValue(skillLine, sceptileReport.line);
+    const lineLabel = {
+        none: '未通过伊布线',
+        tied: '🔸通过和解线',
+        grad: '🟩通过毕业线',
+        bigGrad: '🔮大毕业线达成',
+        goldGrad: '👑金帮荣誉毕业'
+    }[finalLine] || '未通过伊布线';
+    const hitSources = [];
+    if (skillLine !== 'none') hitSources.push(`普通技能侧：${skillReport.recommendLabel || getPlainSkillLineLabel(skillLine)}（效率 ${skillReport.effCurrent.toFixed(3)}）`);
+    if (sceptileReport.line !== 'none') hitSources.push(`特殊参考侧：${sceptileReport.label.replace(/[🔸👑]/g, '').trim()}（Rank ${sceptileReport.rank}）`);
+    return { line: finalLine, label: lineLabel, skillLine, skillEfficiency: skillReport.effCurrent, sceptileLine: sceptileReport.line, sceptileRank: sceptileReport.rank, sceptileComboLabel: sceptileReport.comboLabel, hitSources: hitSources.length ? hitSources : ['未命中普通技能侧或特殊参考侧达线'] };
+}
+
+function runEspeonPanelAudit(subskillsObj = {}, natureKey = 'blank') {
+    const ref = getSceptileReferenceRankInfo(subskillsObj, natureKey);
+    return {
+        line: ref.line,
+        label: ref.line === 'goldGrad' ? '👑金帮荣誉毕业' : (ref.line === 'tied' ? '🔸通过和解线' : '未通过太阳伊布参考线'),
+        sceptileRank: ref.rank,
+        sceptileComboLabel: ref.comboLabel,
+        hitSources: ref.line !== 'none' ? [`特殊参考侧：${ref.label.replace(/[🔸👑]/g, '').trim()}（Rank ${ref.rank}）`] : ['未命中特殊参考线']
+    };
+}
+
 function updateCheckInResultOptionsForName(name) {
     const select = document.getElementById('checkin-result');
     if (!select) return;
@@ -7900,6 +8115,17 @@ function updateCheckInResultOptionsForName(name) {
             <option value="grad" class="text-emerald-400 font-bold">🟩 毕业（${label} ${suffix}）</option>
             <option value="bigGrad" class="text-purple-400 font-bold">🔮 大毕业（${label} ${suffix}）</option>`;
         select.value = ['none','tied','grad','bigGrad'].includes(oldVal) ? oldVal : 'none';
+        return;
+    }
+    if (isEeveeFamilyName(standardName)) {
+        const familyHint = isEeveeBaseScoringName(standardName) ? '伊布专用' : (isEspeonScoringName(standardName) ? '太阳伊布专用' : (isEeveeNormalSkillEvolutionName(standardName) ? '普通技能型' : '玩家自定义'));
+        select.innerHTML = `
+            <option value="none" class="text-slate-400 font-bold">❌ 没货/白条</option>
+            <option value="tied" class="text-amber-400 font-bold">🔸 和解（${familyHint}）</option>
+            <option value="grad" class="text-emerald-400 font-bold">🟩 毕业（${familyHint}）</option>
+            <option value="bigGrad" class="text-purple-400 font-bold">🔮 大毕业（${familyHint}）</option>
+            <option value="goldGrad" class="text-red-400 font-bold">👑 金帮毕业（${familyHint}）</option>`;
+        select.value = ['none','tied','grad','bigGrad','goldGrad'].includes(oldVal) ? oldVal : 'none';
         return;
     }
     if (isSpecialSkillPokemonName(standardName)) {
@@ -7998,6 +8224,66 @@ function triggerLivePanelAudit() {
             const resSelect = document.getElementById('checkin-result');
             if (resSelect) resSelect.value = latiasReport.line;
         }
+        return;
+    }
+
+    if (isEeveeBaseScoringName(standardName)) {
+        const eeveeReport = runEeveePanelAudit(window.checkinSubskills, natureKey);
+        auditBox.innerHTML = `
+        <div class="bg-purple-50/70 p-3 rounded-2xl border border-purple-200/80 text-[11px] space-y-2 text-purple-950 font-medium">
+            <div class="flex items-center justify-between gap-2 border-b border-purple-100 pb-2">
+                <span class="font-black text-purple-700"><i class="fa-solid fa-paw"></i> 伊布专用速查</span>
+                <span class="font-mono font-black text-purple-700 bg-white border border-purple-100 px-2 py-0.5 rounded-lg">专用判定</span>
+            </div>
+            <div class="flex items-center justify-between bg-white/80 border border-purple-100 rounded-xl px-3 py-2"><span class="text-slate-500 font-bold">系统参考档</span><span class="font-black text-purple-700">${eeveeReport.label}</span></div>
+        </div>`;
+        window.currentSystemRecommendValue = eeveeReport.line;
+        if (!window.userManuallyOverrodeResult) {
+            const resSelect = document.getElementById('checkin-result');
+            if (resSelect) resSelect.value = eeveeReport.line;
+        }
+        return;
+    }
+
+    if (isEspeonScoringName(standardName)) {
+        const espeonReport = runEspeonPanelAudit(window.checkinSubskills, natureKey);
+        auditBox.innerHTML = `
+        <div class="bg-violet-50/70 p-3 rounded-2xl border border-violet-200/80 text-[11px] space-y-2 text-violet-950 font-medium">
+            <div class="flex items-center justify-between gap-2 border-b border-violet-100 pb-2">
+                <span class="font-black text-violet-700"><i class="fa-solid fa-sun"></i> 太阳伊布专用速查</span>
+                <span class="font-mono font-black text-violet-700 bg-white border border-violet-100 px-2 py-0.5 rounded-lg">专用判定</span>
+            </div>
+            <div class="flex items-center justify-between bg-white/80 border border-violet-100 rounded-xl px-3 py-2"><span class="text-slate-500 font-bold">系统参考档</span><span class="font-black text-violet-700">${espeonReport.label}</span></div>
+        </div>`;
+        window.currentSystemRecommendValue = espeonReport.line;
+        if (!window.userManuallyOverrodeResult && ['none','tied','goldGrad'].includes(espeonReport.line)) {
+            const resSelect = document.getElementById('checkin-result');
+            if (resSelect) resSelect.value = espeonReport.line;
+        }
+        return;
+    }
+
+    if (isEeveeNormalSkillEvolutionName(standardName)) {
+        const report = runPanelAuditMath('skill', standardName, window.checkinSubskills, natureKey, 'ABB');
+        auditBox.innerHTML = `
+        <div class="bg-indigo-50/70 p-3 rounded-2xl border border-indigo-200/80 text-[11px] space-y-2 text-indigo-950 font-medium">
+            <div class="flex items-center justify-between gap-2 border-b border-indigo-100 pb-2">
+                <span class="font-black text-indigo-700"><i class="fa-solid fa-wand-magic-sparkles"></i> ${standardName}普通技能型速查</span>
+                <span class="font-mono font-black text-indigo-700 bg-white border border-indigo-100 px-2 py-0.5 rounded-lg">效率 ${report.effCurrent.toFixed(3)}</span>
+            </div>
+            <div class="flex items-center justify-between bg-white/80 border border-indigo-100 rounded-xl px-3 py-2"><span class="text-slate-500 font-bold">系统参考档</span><span class="font-black text-indigo-700">${report.recommendLabel}</span></div>
+            <div class="text-[10px] text-indigo-700/80 font-bold">该进化型按普通技能型四线判断。</div>
+        </div>`;
+        window.currentSystemRecommendValue = report.recommendValue;
+        if (!window.userManuallyOverrodeResult) {
+            const resSelect = document.getElementById('checkin-result');
+            if (resSelect) resSelect.value = report.recommendValue;
+        }
+        return;
+    }
+
+    if (isEeveeOtherEvolutionName(standardName)) {
+        auditBox.innerHTML = `<p class="text-center py-2 text-[11px] text-slate-400 font-medium">该进化型暂不提供系统推荐档位，请根据个人用途手动选择记录档位。</p>`;
         return;
     }
 
