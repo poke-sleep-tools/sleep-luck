@@ -157,10 +157,12 @@
                     </h4>
                     <ul class="list-disc pl-9 space-y-1.5 text-slate-600">
                         <li><strong>请尽量完整录入 Box</strong>：大仓分数依赖完整样本。如果只录出货宠，不录大量没出货的捕捉记录，会导致总分严重虚高。</li>
+                        <li><strong>老玩家可启用总捕捉数校准</strong>：如果历史捕捉太多无法全部补录，可以填写游戏内总捕捉数与三系体感比例，系统会把未录入捕捉作为未毕业背景样本进行近似补正。</li>
                         <li><strong>大仓和毕业库分工不同</strong>：大仓负责统计总捕捉与出货数量；毕业库负责保存具体出货个体面板。补录毕业库不会自动增加大仓捕捉数。</li>
                         <li><strong>编辑历史记录会影响大仓</strong>：历史抽卡库是真实流水，修改或删除历史记录可能改变大仓统计；出货库里的“编辑当前”只改展示档案，不会影响大仓。</li>
                         <li><strong>特殊技能型暂不参与完整测评</strong>：部分特殊技能型宝可梦由于计算模型限制，暂时无法完整纳入运气和气运计算。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
+                        <li><strong>和解口径说明</strong>：默认主评分不要求完整记录所有和解；已录入的少量和解会按“自用和解”处理，理解为该品种至少曾出现过可留用的和解个体，而不是完整和解总数。</li>
                     </ul>
                 </div>
 
@@ -303,7 +305,7 @@
             </div>
             <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
                 <div class="text-[10px] text-amber-600 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
-                    <span class="w-2 h-2 rounded-full bg-amber-500"></span>和解总数
+                    <span class="w-2 h-2 rounded-full bg-amber-500"></span>自用和解数
                 </div>
                 <div class="text-2xl font-black text-amber-600 mt-1 font-mono" id="total-tied">0</div>
             </div>
@@ -340,7 +342,7 @@
             </div>
             <div class="flex-1 w-full">
                 <h3 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                    <i class="fa-solid fa-wand-magic-sparkles text-indigo-500 animate-pulse"></i> Box 气运命格天梯星盘 (0-100 纯客观幂律联合检验变换天梯)
+                    <i class="fa-solid fa-wand-magic-sparkles text-indigo-500 animate-pulse"></i> Box 气运命格天梯星盘（概率信息量分布评分）
                 </h3>
                 <div class="grid grid-cols-1 sm:grid-cols-4 gap-3" id="pie-chart-legend">
                     <!-- 动态高光数值分卡将在这里渲染 -->
@@ -401,34 +403,157 @@
             </button>
         </div>
 
-        <!-- 检索与控制栏 -->
-        <div class="bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
-            <div class="relative w-full md:w-[320px]">
-                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                    <i class="fa-solid fa-magnifying-glass text-xs"></i>
-                </span>
-                <input type="text" id="search-box" oninput="triggerSearchFilter()" placeholder="极速检索某种宝可梦(支持繁简)..." class="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
+        <!-- 检索与控制栏：大仓筛选 / 显示设置 / 常用功能分区 -->
+        <div class="bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col gap-3">
+            <div class="flex flex-col xl:flex-row gap-3 items-stretch xl:items-center justify-between">
+                <div class="relative w-full xl:w-[320px]">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                        <i class="fa-solid fa-magnifying-glass text-xs"></i>
+                    </span>
+                    <input type="text" id="search-box" oninput="triggerSearchFilter()" placeholder="极速检索某种宝可梦(支持繁简)..." class="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
+                </div>
+
+                <div class="flex flex-wrap gap-1.5 w-full xl:w-auto justify-start xl:justify-end items-center">
+                    <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-1 hidden sm:inline-flex items-center gap-1">
+                        <i class="fa-solid fa-layer-group text-indigo-400"></i> 大仓范围
+                    </span>
+                    <button onclick="filterByType('all')" id="filter-all" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-900 text-white shadow-sm">全盘大仓</button>
+                    <button onclick="filterByType('berry')" id="filter-berry" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">树果型</button>
+                    <button onclick="filterByType('food')" id="filter-food" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">食材型</button>
+                    <button onclick="filterByType('skill')" id="filter-skill" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">技能型</button>
+                </div>
             </div>
-            <div class="flex flex-wrap gap-1.5 w-full md:w-auto justify-start md:justify-end items-center">
-                <button onclick="filterByType('all')" id="filter-all" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-900 text-white shadow-sm">全盘大仓</button>
-                <button onclick="filterByType('berry')" id="filter-berry" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">树果型</button>
-                <button onclick="filterByType('food')" id="filter-food" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">食材型</button>
-                <button onclick="filterByType('skill')" id="filter-skill" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100">技能型</button>
-                <button onclick="toggleAllPokemonStandard()" id="global-eval-toggle" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200/60 shadow-sm flex items-center gap-1 ml-2" title="一键将大仓内所有种类的宝可梦统一切换标准">
-                    <i class="fa-solid fa-scale-unbalanced"></i> 全局标准
-                </button>
-                <button onclick="toggleShowOnlyGraduated()" id="filter-only-graduated" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1 ml-2" title="切换是否只显示已满足各自设定标准出货的宝可梦">
-                    <i class="fa-solid fa-eye-slash"></i> 只看已出货: 关
-                </button>
-                <button onclick="openDailyCheckInModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 text-white shadow-md flex items-center gap-1 ml-2 hover:scale-105 active:scale-95 duration-150 animate-pulse" title="记录今天刚抓的那一只，立刻对撞今日因果律运势！">
-                    <i class="fa-solid fa-calendar-check"></i> 📅 每日捕捉打卡
-                </button>
-                <button onclick="openHistoryModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-100 text-slate-700 shadow-sm flex items-center gap-1 ml-1 hover:bg-slate-200" title="查阅过去所有盲盒对撞的历史长卷">
-                    <i class="fa-solid fa-clock text-indigo-500"></i> 📜 历史抽卡库
-                </button>
-                <button onclick="openGraduationDexModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-800 shadow-sm flex items-center gap-1 ml-1 hover:bg-amber-200" title="查看和补录已经出货的宝可梦个体面板">
-                    <i class="fa-solid fa-trophy text-amber-600"></i> 🏆 出货库
-                </button>
+
+            <div class="border-t border-slate-100 pt-3 flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+                <div class="flex flex-wrap gap-1.5 items-center">
+                    <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-1 flex items-center gap-1">
+                        <i class="fa-solid fa-sliders text-slate-400"></i> 大仓显示
+                    </span>
+                    <button onclick="toggleShowOnlyGraduated()" id="filter-only-graduated" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="切换是否只显示已经有记录出货或自用和解的宝可梦">
+                        <i class="fa-solid fa-eye-slash"></i> 只看已出货: 关
+                    </button>
+                    <label class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-black text-slate-400 shadow-sm">
+                        <i class="fa-solid fa-arrow-down-wide-short text-slate-400"></i>
+                        排序
+                        <select id="box-sort-mode" onchange="setBoxSortMode(this.value)" class="bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-slate-400">
+                            <option value="entry_desc">录入顺序：新 → 旧</option>
+                            <option value="entry_asc">录入顺序：旧 → 新</option>
+                            <option value="count_desc">捕捉数：多 → 少</option>
+                            <option value="count_asc">捕捉数：少 → 多</option>
+                            <option value="name_asc">名字：A → Z</option>
+                            <option value="name_desc">名字：Z → A</option>
+                            <option value="result_desc">出货/自用数：多 → 少</option>
+                            <option value="luck_desc">气运击败率：高 → 低</option>
+                            <option value="luck_asc">气运击败率：低 → 高</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="flex flex-wrap gap-1.5 items-center justify-start lg:justify-end">
+                    <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-1 flex items-center gap-1">
+                        <i class="fa-solid fa-bolt text-amber-400"></i> 常用功能
+                    </span>
+                    <button onclick="openDailyCheckInModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 text-white shadow-md flex items-center gap-1 hover:scale-105 active:scale-95 duration-150" title="记录今天刚抓的那一只，立刻对撞今日因果律运势！">
+                        <i class="fa-solid fa-calendar-check"></i> 📅 每日捕捉打卡
+                    </button>
+                    <button onclick="openHistoryModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-100 text-slate-700 shadow-sm flex items-center gap-1 hover:bg-slate-200" title="查阅过去所有盲盒对撞的历史长卷">
+                        <i class="fa-solid fa-clock text-indigo-500"></i> 📜 历史抽卡库
+                    </button>
+                    <button onclick="openGraduationDexModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-800 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="查看和补录已经出货的宝可梦个体面板">
+                        <i class="fa-solid fa-trophy text-amber-600"></i> 🏆 出货库
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 📊 总捕捉数校准：老玩家补正，可选折叠区 -->
+        <div id="total-catch-calibration-panel" class="bg-white rounded-3xl border border-slate-200/70 shadow-sm overflow-hidden transition-all duration-300">
+            <button onclick="toggleTotalCatchCalibrationPanel()" class="w-full px-5 py-4 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-100/70 transition text-left">
+                <span class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <i class="fa-solid fa-chart-simple text-indigo-500"></i> 📊 总捕捉数校准（老玩家补正，可选）
+                </span>
+                <span id="calibration-fold-summary" class="text-[10px] font-bold text-slate-400 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-sm">未启用</span>
+            </button>
+            <div id="calibration-content" class="hidden p-5 border-t border-slate-100 bg-white flex flex-col gap-4 text-xs">
+                <div class="flex flex-col lg:flex-row gap-4 items-stretch lg:items-end">
+                    <label class="flex items-center gap-2 bg-indigo-50/50 border border-indigo-100 rounded-2xl px-3 py-2 font-black text-indigo-800">
+                        <input type="checkbox" id="calibration-enabled" onchange="handleCalibrationEnabledToggle()" class="w-4 h-4 accent-indigo-600">
+                        启用总捕捉数校准
+                    </label>
+                    <div class="flex-1 min-w-[180px]">
+                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">游戏内总捕捉数</label>
+                        <input type="number" min="0" id="calibration-total-catches" oninput="handleCalibrationDraftChange()" placeholder="例如 3000" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-black focus:outline-none focus:border-indigo-400">
+                    </div>
+                    <button onclick="resetCalibrationRatiosEqual()" class="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-scale-balanced"></i> 一键平分比例
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div class="bg-amber-50/60 border border-amber-200/70 rounded-2xl p-3 flex flex-col gap-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <label class="text-[10px] font-black text-amber-700">树果型抓捕倾向</label>
+                            <span id="calibration-ratio-pct-berry" class="text-[10px] font-mono font-black text-amber-700 bg-white border border-amber-100 rounded-lg px-2 py-0.5">33.3%</span>
+                        </div>
+                        <input type="range" min="0" max="100" step="1" id="calibration-ratio-slider-berry" oninput="syncCalibrationRatioFromSlider('berry')" class="w-full accent-amber-500">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[9px] font-bold text-amber-600 whitespace-nowrap">权重</span>
+                            <input type="number" min="0" step="0.1" id="calibration-ratio-berry" oninput="syncCalibrationRatioFromNumber('berry')" class="w-full bg-white border border-amber-200 rounded-xl px-3 py-1.5 text-xs font-mono font-black text-amber-700 focus:outline-none focus:border-amber-400">
+                        </div>
+                    </div>
+                    <div class="bg-emerald-50/60 border border-emerald-200/70 rounded-2xl p-3 flex flex-col gap-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <label class="text-[10px] font-black text-emerald-700">食材型抓捕倾向</label>
+                            <span id="calibration-ratio-pct-food" class="text-[10px] font-mono font-black text-emerald-700 bg-white border border-emerald-100 rounded-lg px-2 py-0.5">33.3%</span>
+                        </div>
+                        <input type="range" min="0" max="100" step="1" id="calibration-ratio-slider-food" oninput="syncCalibrationRatioFromSlider('food')" class="w-full accent-emerald-500">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[9px] font-bold text-emerald-600 whitespace-nowrap">权重</span>
+                            <input type="number" min="0" step="0.1" id="calibration-ratio-food" oninput="syncCalibrationRatioFromNumber('food')" class="w-full bg-white border border-emerald-200 rounded-xl px-3 py-1.5 text-xs font-mono font-black text-emerald-700 focus:outline-none focus:border-emerald-400">
+                        </div>
+                    </div>
+                    <div class="bg-purple-50/60 border border-purple-200/70 rounded-2xl p-3 flex flex-col gap-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <label class="text-[10px] font-black text-purple-700">技能型抓捕倾向</label>
+                            <span id="calibration-ratio-pct-skill" class="text-[10px] font-mono font-black text-purple-700 bg-white border border-purple-100 rounded-lg px-2 py-0.5">33.4%</span>
+                        </div>
+                        <input type="range" min="0" max="100" step="1" id="calibration-ratio-slider-skill" oninput="syncCalibrationRatioFromSlider('skill')" class="w-full accent-purple-500">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[9px] font-bold text-purple-600 whitespace-nowrap">权重</span>
+                            <input type="number" min="0" step="0.1" id="calibration-ratio-skill" oninput="syncCalibrationRatioFromNumber('skill')" class="w-full bg-white border border-purple-200 rounded-xl px-3 py-1.5 text-xs font-mono font-black text-purple-700 focus:outline-none focus:border-purple-400">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                        <label class="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">未录入友情阶段估算</label>
+                        <select id="calibration-stage-mode" onchange="handleCalibrationDraftChange()" class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-indigo-400">
+                            <option value="stage">推荐：按进化阶段权重估算具体品种与锁金</option>
+                            <option value="base">温和：只按类型不锁金概率估算</option>
+                            <option value="strict">严格：按较高友情阶段估算</option>
+                        </select>
+                        <p class="text-[10px] text-slate-400 mt-2 leading-relaxed">推荐模式会自动从宝可梦字典统计三系品种，并按“初始型较多、进化型较少”的权重分配未录入捕捉，再据此推算锁金阶段。</p>
+                    </div>
+                    <div class="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-3 text-[10px] text-indigo-900 leading-relaxed">
+                        <div class="font-black mb-1 flex items-center gap-1"><i class="fa-solid fa-circle-info text-indigo-500"></i> 比例输入规则</div>
+                        <div>三个数会被自动归一化，所以可以填 <span class="font-mono font-black">5 / 3 / 2</span>，系统会理解为 <span class="font-mono font-black">50% / 30% / 20%</span>。滑条和数字框只是表达“体感倾向”，不要求加起来等于 100%。</div>
+                    </div>
+                </div>
+
+                <div class="rounded-2xl bg-indigo-50/50 border border-indigo-100 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div id="calibration-apply-hint" class="text-[10px] text-indigo-900 font-bold leading-relaxed">
+                        拖动滑条或修改设置只会更新下方预览；点击右侧按钮后才会重新计算大仓评分，避免拖动时卡顿。
+                    </div>
+                    <button id="calibration-apply-btn" onclick="applyTotalCatchCalibrationSettings()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-1 whitespace-nowrap">
+                        <i class="fa-solid fa-calculator"></i> 应用校准并重新计算
+                    </button>
+                </div>
+
+                <div id="calibration-preview" class="rounded-2xl bg-slate-50 border border-slate-200 p-3 text-[11px] text-slate-600 leading-relaxed"></div>
+                <p class="text-[10px] text-slate-400 leading-relaxed">
+                    说明：三系比例是你对<strong>整体捕捉倾向</strong>的体感，不是未录入部分的比例。系统会先用游戏总捕捉数 × 体感比例估算三系总量，再扣掉已录入三系捕捉数，剩余才视为未录入捕捉。未录入捕捉默认不含毕业 / 大毕业 / 金帮，也不视为自用和解，只作为背景样本防止只录出货导致分数虚高。
+                </p>
             </div>
         </div>
 
@@ -474,6 +599,7 @@ let playerBox = [];
 let editingIndices = {};
 let currentFilterType = 'all'; 
 let showOnlyGraduated = false;
+let boxSortMode = 'entry_desc';
 
 let saveBoxTimer = null;
 let saveHistoryTimer = null;
@@ -1238,6 +1364,607 @@ function getLocalStorageKey() {
     return GUEST_LOCAL_KEY;
 }
 
+
+
+// ==========================================
+// 🧭 大仓排序：本地记忆
+// ==========================================
+function getBoxSortStorageKey() {
+    return currentCloudUser ? 'sleep_box_sort_mode_' + currentCloudUser.id : 'sleep_box_sort_mode_guest';
+}
+
+function loadBoxSortModeFromLocal() {
+    try {
+        boxSortMode = localStorage.getItem(getBoxSortStorageKey()) || 'entry_desc';
+    } catch (e) {
+        boxSortMode = 'entry_desc';
+    }
+}
+
+function saveBoxSortModeToLocal() {
+    localStorage.setItem(getBoxSortStorageKey(), boxSortMode || 'entry_desc');
+}
+
+function setBoxSortMode(mode) {
+    boxSortMode = mode || 'entry_desc';
+    saveBoxSortModeToLocal();
+    updateBoxUI(false);
+}
+
+function getBoxRecordOutputTotal(p) {
+    return (Number(p?.tiedCount) || 0) + (Number(p?.gradCount) || 0) + (Number(p?.bigGradCount) || 0) + (Number(p?.goldGradCount) || 0);
+}
+
+function sortBoxRecords(list) {
+    const mode = boxSortMode || 'entry_desc';
+    const originalIndex = new Map();
+    playerBox.forEach((p, i) => originalIndex.set(p.name, i));
+    const arr = [...list];
+    const idx = p => originalIndex.has(p.name) ? originalIndex.get(p.name) : 999999;
+    const luckRate = p => {
+        const m = getPokemonLuckMetrics(p);
+        return m && Number.isFinite(m.rate) ? m.rate : 50;
+    };
+    const resultTotal = p => getBoxRecordOutputTotal(p);
+
+    arr.sort((a, b) => {
+        if (mode === 'entry_asc') return idx(a) - idx(b);
+        if (mode === 'count_desc') return (Number(b.count) || 0) - (Number(a.count) || 0) || idx(a) - idx(b);
+        if (mode === 'count_asc') return (Number(a.count) || 0) - (Number(b.count) || 0) || idx(a) - idx(b);
+        if (mode === 'name_asc') return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN') || idx(a) - idx(b);
+        if (mode === 'name_desc') return String(b.name || '').localeCompare(String(a.name || ''), 'zh-CN') || idx(a) - idx(b);
+        if (mode === 'result_desc') return resultTotal(b) - resultTotal(a) || (Number(b.count) || 0) - (Number(a.count) || 0) || idx(a) - idx(b);
+        if (mode === 'luck_desc') return luckRate(b) - luckRate(a) || idx(a) - idx(b);
+        if (mode === 'luck_asc') return luckRate(a) - luckRate(b) || idx(a) - idx(b);
+        return idx(a) - idx(b); // entry_desc：playerBox 新录入在前
+    });
+    return arr;
+}
+
+// ==========================================
+// 📊 总捕捉数校准：老玩家补正，可选
+// ==========================================
+let totalCatchCalibration = {
+    enabled: false,
+    total: 0,
+    ratios: { berry: 33.3, food: 33.3, skill: 33.4 },
+    stageMode: 'stage',
+    panelOpen: false
+};
+
+// 校准设置采用“先预览，后应用”的双缓冲：
+// 拖动滑条只改 draft，不立刻触发昂贵的大仓重算，避免页面卡死。
+let totalCatchCalibrationDraft = null;
+let calibrationSettingsDirty = false;
+
+function getTotalCatchCalibrationStorageKey() {
+    return currentCloudUser ? 'sleep_total_catch_calibration_' + currentCloudUser.id : 'sleep_total_catch_calibration_guest';
+}
+
+function getDefaultTotalCatchCalibration() {
+    return { enabled: false, total: 0, ratios: { berry: 33.3, food: 33.3, skill: 33.4 }, stageMode: 'stage', panelOpen: false };
+}
+
+function loadTotalCatchCalibrationFromLocal() {
+    try {
+        const raw = localStorage.getItem(getTotalCatchCalibrationStorageKey());
+        totalCatchCalibration = Object.assign(getDefaultTotalCatchCalibration(), raw ? JSON.parse(raw) : {});
+        totalCatchCalibration.ratios = Object.assign({ berry: 33.3, food: 33.3, skill: 33.4 }, totalCatchCalibration.ratios || {});
+        if (!['base', 'stage', 'strict'].includes(totalCatchCalibration.stageMode)) totalCatchCalibration.stageMode = 'stage';
+    } catch (e) {
+        totalCatchCalibration = getDefaultTotalCatchCalibration();
+    }
+}
+
+function saveTotalCatchCalibrationToLocal() {
+    localStorage.setItem(getTotalCatchCalibrationStorageKey(), JSON.stringify(totalCatchCalibration));
+}
+
+function clearLuckCaches() {
+    if (typeof __luckInfoScoreCache !== 'undefined') __luckInfoScoreCache.clear();
+    if (typeof __luckAggregateCache !== 'undefined') __luckAggregateCache.clear();
+}
+
+function getRecordedCatchesBySummaryType() {
+    const out = { berry: 0, food: 0, skill: 0 };
+    (playerBox || []).forEach(p => {
+        const type = getPokemonSummaryType(p.name);
+        if (type && out[type] !== undefined) out[type] += Number(p.count) || 0;
+    });
+    return out;
+}
+
+function getRecordedEvaluableCatchesBySummaryType() {
+    // 用于评分校准：special_skill 不参与完整测评，但仍可被记录在大仓总捕捉中。
+    const out = { berry: 0, food: 0, skill: 0 };
+    (playerBox || []).forEach(p => {
+        const dict = pokemonDictionary[p.name];
+        if (!dict || dict.type === 'special_skill') return;
+        const type = getPokemonSummaryType(p.name);
+        if (type && out[type] !== undefined) out[type] += Number(p.count) || 0;
+    });
+    return out;
+}
+
+function normalizeCalibrationRatioFractions(settings = totalCatchCalibration) {
+    const raw = settings?.ratios || {};
+    const vals = {
+        berry: Math.max(0, Number(raw.berry) || 0),
+        food: Math.max(0, Number(raw.food) || 0),
+        skill: Math.max(0, Number(raw.skill) || 0)
+    };
+    const sum = vals.berry + vals.food + vals.skill;
+    if (sum <= 0) return { berry: 1/3, food: 1/3, skill: 1/3 };
+    return { berry: vals.berry / sum, food: vals.food / sum, skill: vals.skill / sum };
+}
+
+function allocateIntegerByWeights(total, weights) {
+    const n = Math.max(0, Math.floor(Number(total) || 0));
+    const keys = ['berry', 'food', 'skill'];
+    const raw = {};
+    let sumWeight = keys.reduce((s, k) => s + Math.max(0, Number(weights[k]) || 0), 0);
+    if (sumWeight <= 0) sumWeight = 3;
+    keys.forEach(k => raw[k] = n * (Math.max(0, Number(weights[k]) || 0) / sumWeight));
+    if (keys.every(k => (Number(weights[k]) || 0) <= 0)) keys.forEach(k => raw[k] = n / 3);
+
+    const out = {};
+    let used = 0;
+    keys.forEach(k => { out[k] = Math.floor(raw[k]); used += out[k]; });
+    let remain = n - used;
+    keys.sort((a, b) => (raw[b] - Math.floor(raw[b])) - (raw[a] - Math.floor(raw[a])));
+    for (let i = 0; i < remain; i++) out[keys[i % keys.length]] += 1;
+    return { berry: out.berry || 0, food: out.food || 0, skill: out.skill || 0 };
+}
+
+function getTotalCatchCalibrationInfo(settings = totalCatchCalibration) {
+    const recordedAll = (playerBox || []).reduce((s, p) => s + (Number(p.count) || 0), 0);
+    const recordedByType = getRecordedCatchesBySummaryType();
+    const recordedEvaluableByType = getRecordedEvaluableCatchesBySummaryType();
+    const ratio = normalizeCalibrationRatioFractions(settings);
+    const total = Math.max(0, Math.floor(Number(settings?.total) || 0));
+    const enabled = !!(settings?.enabled && total > recordedAll);
+    const missingTotal = enabled ? Math.max(0, total - recordedAll) : 0;
+
+    const target = {
+        berry: total * ratio.berry,
+        food: total * ratio.food,
+        skill: total * ratio.skill
+    };
+
+    const deficits = {
+        berry: Math.max(0, target.berry - recordedByType.berry),
+        food: Math.max(0, target.food - recordedByType.food),
+        skill: Math.max(0, target.skill - recordedByType.skill)
+    };
+
+    const deficitSum = deficits.berry + deficits.food + deficits.skill;
+    const missingByType = missingTotal > 0
+        ? allocateIntegerByWeights(missingTotal, deficitSum > 0 ? deficits : ratio)
+        : { berry: 0, food: 0, skill: 0 };
+
+    const coverage = total > 0 ? Math.min(100, (recordedAll / total) * 100) : 0;
+    return { enabled, total, recordedAll, recordedByType, recordedEvaluableByType, ratio, target, deficits, missingTotal, missingByType, coverage, stageMode: settings?.stageMode || 'stage' };
+}
+
+function getCalibrationCacheKey() {
+    const info = getTotalCatchCalibrationInfo();
+    return [
+        info.enabled ? 1 : 0,
+        info.total,
+        info.missingByType.berry,
+        info.missingByType.food,
+        info.missingByType.skill,
+        (totalCatchCalibration?.ratios?.berry || 0),
+        (totalCatchCalibration?.ratios?.food || 0),
+        (totalCatchCalibration?.ratios?.skill || 0),
+        (totalCatchCalibration?.stageMode || 'stage')
+    ].join('|');
+}
+
+function toggleTotalCatchCalibrationPanel() {
+    const currentOpen = !!(totalCatchCalibrationDraft || totalCatchCalibration).panelOpen;
+    if (totalCatchCalibrationDraft) totalCatchCalibrationDraft.panelOpen = !currentOpen;
+    totalCatchCalibration.panelOpen = !currentOpen;
+    saveTotalCatchCalibrationToLocal();
+    renderTotalCatchCalibrationUI();
+}
+
+function syncCalibrationRatioFromSlider(typeKey) {
+    const slider = document.getElementById(`calibration-ratio-slider-${typeKey}`);
+    const number = document.getElementById(`calibration-ratio-${typeKey}`);
+    if (slider && number) number.value = slider.value;
+    handleCalibrationDraftChange();
+}
+
+function syncCalibrationRatioFromNumber(typeKey) {
+    const slider = document.getElementById(`calibration-ratio-slider-${typeKey}`);
+    const number = document.getElementById(`calibration-ratio-${typeKey}`);
+    const value = Math.max(0, Number(number?.value) || 0);
+    if (slider) slider.value = Math.min(100, value);
+    handleCalibrationDraftChange();
+}
+
+function readTotalCatchCalibrationSettingsFromDOM() {
+    const enabledEl = document.getElementById('calibration-enabled');
+    const totalEl = document.getElementById('calibration-total-catches');
+    const stageModeEl = document.getElementById('calibration-stage-mode');
+    return {
+        enabled: !!enabledEl?.checked,
+        total: Math.max(0, Math.floor(Number(totalEl?.value) || 0)),
+        ratios: {
+            berry: Math.max(0, Number(document.getElementById('calibration-ratio-berry')?.value) || 0),
+            food: Math.max(0, Number(document.getElementById('calibration-ratio-food')?.value) || 0),
+            skill: Math.max(0, Number(document.getElementById('calibration-ratio-skill')?.value) || 0)
+        },
+        stageMode: ['base', 'stage', 'strict'].includes(stageModeEl?.value) ? stageModeEl.value : 'stage',
+        panelOpen: !!(totalCatchCalibrationDraft || totalCatchCalibration).panelOpen
+    };
+}
+
+function getCalibrationUISettings() {
+    return totalCatchCalibrationDraft || totalCatchCalibration;
+}
+
+function setCalibrationDirty(isDirty) {
+    calibrationSettingsDirty = !!isDirty;
+    const btn = document.getElementById('calibration-apply-btn');
+    const hint = document.getElementById('calibration-apply-hint');
+    if (btn) {
+        btn.className = calibrationSettingsDirty
+            ? 'bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-1 whitespace-nowrap animate-pulse'
+            : 'bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-1 whitespace-nowrap';
+        btn.innerHTML = calibrationSettingsDirty
+            ? '<i class="fa-solid fa-calculator"></i> 应用修改并重新计算'
+            : '<i class="fa-solid fa-rotate"></i> 重新计算校准评分';
+    }
+    if (hint) {
+        hint.innerHTML = calibrationSettingsDirty
+            ? '<span class="text-rose-600">设置已修改但尚未应用。</span> 现在只更新预览；点击右侧按钮后才会重算大仓，拖滑条不会再卡顿。'
+            : '拖动滑条或修改设置只会更新下方预览；点击右侧按钮后才会重新计算大仓评分，避免拖动时卡顿。';
+    }
+}
+
+function handleCalibrationDraftChange() {
+    totalCatchCalibrationDraft = readTotalCatchCalibrationSettingsFromDOM();
+    setCalibrationDirty(true);
+    renderTotalCatchCalibrationUI();
+}
+
+function handleCalibrationEnabledToggle() {
+    // 启用/取消启用是口径切换，用户会期待分数立刻变化；
+    // 因此这里不走“仅预览”，而是直接应用并重新计算。
+    totalCatchCalibrationDraft = readTotalCatchCalibrationSettingsFromDOM();
+    totalCatchCalibrationDraft.panelOpen = true;
+    applyTotalCatchCalibrationSettings();
+}
+
+// 兼容旧事件名：现在只更新预览，不立即重算。
+function handleCalibrationInputChange() {
+    handleCalibrationDraftChange();
+}
+
+function showCalibrationCalculatingOverlay(message = '正在重新计算校准评分…') {
+    let overlay = document.getElementById('calibration-calculating-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'calibration-calculating-overlay';
+        overlay.className = 'fixed inset-0 bg-slate-950/45 backdrop-blur-sm z-[9999] flex items-center justify-center p-4';
+        overlay.innerHTML = `
+            <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 px-6 py-5 flex flex-col items-center gap-3 max-w-sm text-center">
+                <div class="w-12 h-12 rounded-full border-4 border-indigo-100 border-t-indigo-600 animate-spin"></div>
+                <div class="text-sm font-black text-slate-800" id="calibration-calculating-message"></div>
+                <div class="text-[11px] text-slate-500 leading-relaxed">校准模式会计算额外的未录入捕捉背景样本，数据量大时可能需要几秒钟。</div>
+            </div>`;
+        document.body.appendChild(overlay);
+    }
+    const msgEl = document.getElementById('calibration-calculating-message');
+    if (msgEl) msgEl.textContent = message;
+    overlay.classList.remove('hidden');
+}
+
+function hideCalibrationCalculatingOverlay() {
+    const overlay = document.getElementById('calibration-calculating-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function applyTotalCatchCalibrationSettings() {
+    totalCatchCalibration = totalCatchCalibrationDraft || readTotalCatchCalibrationSettingsFromDOM();
+    totalCatchCalibrationDraft = null;
+    totalCatchCalibration.panelOpen = true;
+    saveTotalCatchCalibrationToLocal();
+    clearLuckCaches();
+    setCalibrationDirty(false);
+    renderTotalCatchCalibrationUI();
+
+    const isTurningCalibrationOn = !!totalCatchCalibration.enabled;
+    showCalibrationCalculatingOverlay(
+        isTurningCalibrationOn ? '正在应用总捕捉数校准…' : '正在关闭总捕捉数校准…'
+    );
+
+    // 让遮罩先绘制出来，再执行可能较重的分布计算。
+    setTimeout(() => {
+        try {
+            updateBoxUI(false);
+            showToast(isTurningCalibrationOn ? '已应用校准设置并重新计算' : '已关闭总捕捉数校准并重新计算');
+        } catch (e) {
+            console.error(e);
+            showToast('校准计算失败，请稍后再试');
+        } finally {
+            hideCalibrationCalculatingOverlay();
+        }
+    }, 40);
+}
+
+function resetCalibrationRatiosEqual() {
+    totalCatchCalibration.ratios = { berry: 1, food: 1, skill: 1 };
+    ['berry', 'food', 'skill'].forEach(k => {
+        const el = document.getElementById(`calibration-ratio-${k}`);
+        const slider = document.getElementById(`calibration-ratio-slider-${k}`);
+        if (el) el.value = totalCatchCalibration.ratios[k];
+        if (slider) slider.value = 1;
+    });
+    handleCalibrationInputChange();
+    showToast('已将三系体感比例恢复为平分，点击应用后重新计算');
+}
+
+
+function getCalibrationTypeSpeciesCountSummary() {
+    return {
+        berry: getEvaluableStandardPokemonByType('berry').length,
+        food: getEvaluableStandardPokemonByType('food').length,
+        skill: getEvaluableStandardPokemonByType('skill').length
+    };
+}
+
+function renderTotalCatchCalibrationUI() {
+    const enabledEl = document.getElementById('calibration-enabled');
+    const contentEl = document.getElementById('calibration-content');
+    const summaryEl = document.getElementById('calibration-fold-summary');
+    const previewEl = document.getElementById('calibration-preview');
+    if (!enabledEl || !contentEl || !summaryEl || !previewEl) return;
+
+    const uiSettings = getCalibrationUISettings();
+    const activeId = document.activeElement ? document.activeElement.id : '';
+    const editingIds = new Set(['calibration-total-catches', 'calibration-ratio-berry', 'calibration-ratio-food', 'calibration-ratio-skill', 'calibration-ratio-slider-berry', 'calibration-ratio-slider-food', 'calibration-ratio-slider-skill']);
+    if (!editingIds.has(activeId)) {
+        enabledEl.checked = !!uiSettings.enabled;
+        const totalEl = document.getElementById('calibration-total-catches');
+        if (totalEl) totalEl.value = Number(uiSettings.total || 0) || '';
+        const r = Object.assign({ berry: 33.3, food: 33.3, skill: 33.4 }, uiSettings.ratios || {});
+        const rb = document.getElementById('calibration-ratio-berry');
+        const rf = document.getElementById('calibration-ratio-food');
+        const rs = document.getElementById('calibration-ratio-skill');
+        const sb = document.getElementById('calibration-ratio-slider-berry');
+        const sf = document.getElementById('calibration-ratio-slider-food');
+        const ss = document.getElementById('calibration-ratio-slider-skill');
+        const stageModeEl = document.getElementById('calibration-stage-mode');
+        if (rb) rb.value = r.berry;
+        if (rf) rf.value = r.food;
+        if (rs) rs.value = r.skill;
+        if (sb) sb.value = Math.min(100, Math.max(0, Number(r.berry) || 0));
+        if (sf) sf.value = Math.min(100, Math.max(0, Number(r.food) || 0));
+        if (ss) ss.value = Math.min(100, Math.max(0, Number(r.skill) || 0));
+        if (stageModeEl) stageModeEl.value = uiSettings.stageMode || 'stage';
+    }
+
+    if (uiSettings.panelOpen) contentEl.classList.remove('hidden');
+    else contentEl.classList.add('hidden');
+
+    const info = getTotalCatchCalibrationInfo(uiSettings);
+    if (!uiSettings.enabled) {
+        summaryEl.innerText = '未启用';
+        summaryEl.className = 'text-[10px] font-bold text-slate-400 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-sm';
+    } else if (info.total <= info.recordedAll) {
+        summaryEl.innerText = `总捕捉需大于已录入 ${info.recordedAll}`;
+        summaryEl.className = 'text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-2.5 py-1 shadow-sm';
+    } else {
+        summaryEl.innerText = `已启用 · 覆盖率 ${info.coverage.toFixed(1)}% · 未录入 ${info.missingTotal}`;
+        summaryEl.className = 'text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl px-2.5 py-1 shadow-sm';
+    }
+
+    const ratioPct = {
+        berry: (info.ratio.berry * 100).toFixed(1),
+        food: (info.ratio.food * 100).toFixed(1),
+        skill: (info.ratio.skill * 100).toFixed(1)
+    };
+    ['berry', 'food', 'skill'].forEach(k => {
+        const pctEl = document.getElementById(`calibration-ratio-pct-${k}`);
+        if (pctEl) pctEl.textContent = `${ratioPct[k]}%`;
+    });
+
+    previewEl.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2">
+            <div class="bg-white rounded-xl border border-slate-200 px-3 py-2"><div class="text-[9px] text-slate-400 font-black">游戏总捕捉</div><div class="font-mono font-black text-slate-800">${info.total || '—'}</div></div>
+            <div class="bg-white rounded-xl border border-slate-200 px-3 py-2"><div class="text-[9px] text-slate-400 font-black">已录入捕捉</div><div class="font-mono font-black text-slate-800">${info.recordedAll}</div></div>
+            <div class="bg-white rounded-xl border border-slate-200 px-3 py-2"><div class="text-[9px] text-slate-400 font-black">未录入估算</div><div class="font-mono font-black ${info.missingTotal > 0 ? 'text-indigo-700' : 'text-slate-400'}">${info.missingTotal}</div></div>
+            <div class="bg-white rounded-xl border border-slate-200 px-3 py-2"><div class="text-[9px] text-slate-400 font-black">档案覆盖率</div><div class="font-mono font-black text-slate-800">${info.total > 0 ? info.coverage.toFixed(1) + '%' : '—'}</div></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div class="bg-amber-50/70 rounded-xl border border-amber-100 px-3 py-2"><div class="text-[9px] font-black text-amber-700">树果型</div><div class="font-mono font-black text-amber-700">已录 ${info.recordedByType.berry} · 体感 ${ratioPct.berry}% · 校准未录 ${info.missingByType.berry}</div></div>
+            <div class="bg-emerald-50/70 rounded-xl border border-emerald-100 px-3 py-2"><div class="text-[9px] font-black text-emerald-700">食材型</div><div class="font-mono font-black text-emerald-700">已录 ${info.recordedByType.food} · 体感 ${ratioPct.food}% · 校准未录 ${info.missingByType.food}</div></div>
+            <div class="bg-purple-50/70 rounded-xl border border-purple-100 px-3 py-2"><div class="text-[9px] font-black text-purple-700">技能型</div><div class="font-mono font-black text-purple-700">已录 ${info.recordedByType.skill} · 体感 ${ratioPct.skill}% · 校准未录 ${info.missingByType.skill}</div></div>
+        </div>
+        <div class="text-[10px] text-slate-400 font-bold">推荐/严格模式会用字典中的可测评品种数与进化阶段权重估算：树果 ${getCalibrationTypeSpeciesCountSummary().berry} 种 / 食材 ${getCalibrationTypeSpeciesCountSummary().food} 种 / 技能 ${getCalibrationTypeSpeciesCountSummary().skill} 种。</div>`;
+    setCalibrationDirty(calibrationSettingsDirty);
+}
+
+function getCalibrationStageModeLabel(mode) {
+    if (mode === 'base') return '温和：按类型不锁金概率估算';
+    if (mode === 'strict') return '严格：按较高友情阶段估算';
+    return '推荐：按进化阶段权重估算具体品种与锁金';
+}
+
+function getCalibrationSingleCatchDistribution(pType) {
+    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType]?.none || {});
+    const dist = { 0: 0 };
+    let nonZero = 0;
+    ['grad', 'bigGrad', 'goldGrad'].forEach(result => {
+        const prob = Math.max(0, Number(base[result]) || 0);
+        if (prob <= 0) return;
+        const key = infoScoreKeyFromProbability(prob);
+        dist[key] = (dist[key] || 0) + prob;
+        nonZero += prob;
+    });
+    // 未录入最高最高只是普通和解，但不视为自用和解，因此 tied 与未出货都合并为 0 分。
+    dist[0] = (dist[0] || 0) + Math.max(0, 1 - nonZero);
+    return normalizeLuckDistribution(dist);
+}
+
+function powerLuckDistribution(singleDist, count) {
+    let n = Math.max(0, Math.floor(Number(count) || 0));
+    let result = { 0: 1 };
+    let base = singleDist;
+    while (n > 0) {
+        if (n % 2 === 1) result = convolveLuckDistribution(result, base);
+        n = Math.floor(n / 2);
+        if (n > 0) base = convolveLuckDistribution(base, base);
+    }
+    return result;
+}
+
+function getRecordedCatchesBySpeciesName() {
+    const out = {};
+    (playerBox || []).forEach(p => {
+        const name = p?.name;
+        if (!name) return;
+        out[name] = (out[name] || 0) + (Number(p.count) || 0);
+    });
+    return out;
+}
+
+function getEvaluableStandardPokemonByType(pType) {
+    const map = new Map();
+    Object.values(pokemonDictionary || {}).forEach(item => {
+        if (!item || !item.standard || item.type !== pType) return;
+        // 当前完整评分只覆盖 berry / food / skill；special_skill 暂不进入校准模型。
+        if (!['berry', 'food', 'skill'].includes(item.type)) return;
+        if (!map.has(item.standard)) map.set(item.standard, item);
+    });
+    return Array.from(map.keys());
+}
+
+function allocateIntegerByArbitraryWeights(total, weightsObj) {
+    const n = Math.max(0, Math.floor(Number(total) || 0));
+    const keys = Object.keys(weightsObj || {});
+    if (n <= 0 || keys.length === 0) return {};
+    let sumWeight = keys.reduce((s, k) => s + Math.max(0, Number(weightsObj[k]) || 0), 0);
+    const raw = {};
+    if (sumWeight <= 0) {
+        keys.forEach(k => raw[k] = n / keys.length);
+    } else {
+        keys.forEach(k => raw[k] = n * Math.max(0, Number(weightsObj[k]) || 0) / sumWeight);
+    }
+    const out = {};
+    let used = 0;
+    keys.forEach(k => { out[k] = Math.floor(raw[k]); used += out[k]; });
+    let remain = n - used;
+    const sorted = [...keys].sort((a, b) => (raw[b] - Math.floor(raw[b])) - (raw[a] - Math.floor(raw[a])));
+    for (let i = 0; i < remain; i++) out[sorted[i % sorted.length]] += 1;
+    return out;
+}
+
+function getCalibrationSpeciesAllocations(pType) {
+    const info = getTotalCatchCalibrationInfo();
+    const missing = Math.max(0, Number(info.missingByType?.[pType]) || 0);
+    if (!info.enabled || missing <= 0) return [];
+
+    const species = getEvaluableStandardPokemonByType(pType);
+    const recordedSpecies = getRecordedCatchesBySpeciesName();
+    const targetTypeTotal = Math.max(0, Number(info.target?.[pType]) || 0);
+    const baseWeights = {};
+    species.forEach(name => baseWeights[name] = getEvolutionCatchWeight(name));
+    const weightSum = Object.values(baseWeights).reduce((s, v) => s + Math.max(0, Number(v) || 0), 0) || 1;
+
+    const deficits = {};
+    species.forEach(name => {
+        const target = targetTypeTotal * (Math.max(0, Number(baseWeights[name]) || 0) / weightSum);
+        const recorded = Number(recordedSpecies[name]) || 0;
+        deficits[name] = Math.max(0, target - recorded);
+    });
+
+    const deficitSum = Object.values(deficits).reduce((s, v) => s + v, 0);
+    const allocationWeights = deficitSum > 0 ? deficits : baseWeights;
+    const allocated = allocateIntegerByArbitraryWeights(missing, allocationWeights);
+
+    return Object.keys(allocated)
+        .filter(name => allocated[name] > 0)
+        .map(name => {
+            const recorded = Number(recordedSpecies[name]) || 0;
+            const meta = getEvolutionStageMeta(name);
+            return {
+                name,
+                pType,
+                count: allocated[name],
+                recorded,
+                estimatedTotal: recorded + allocated[name],
+                stage: Number(meta.stage) || 0,
+                familySize: Number(meta.familySize) || 1,
+                line: meta.line || name,
+                weight: baseWeights[name] || 0
+            };
+        });
+}
+
+function buildCalibrationSpeciesHiddenDistribution(name, pType, hiddenCount, mode = 'stage') {
+    const n = Math.max(0, Math.floor(Number(hiddenCount) || 0));
+    if (n <= 0 || !LUCK_PROB_MATRIX[pType]) return { 0: 1 };
+
+    const recordedSpecies = getRecordedCatchesBySpeciesName();
+    const recorded = Math.max(0, Math.floor(Number(recordedSpecies[name]) || 0));
+    const dict = pokemonDictionary[name] || { type: pType, defaultLock: getRecommendedLockModeForName(name) };
+    const pLike = {
+        name,
+        count: Math.max(1, recorded + n),
+        lockMode: dict.defaultLock || getRecommendedLockModeForName(name) || (pType === 'berry' ? 'two' : 'none'),
+        tiedCount: 0,
+        gradCount: 0,
+        bigGradCount: 0,
+        goldGradCount: 0
+    };
+
+    const isTiedIncluded = SPECIAL_STANDARD_DOWNGRADE.includes(name);
+    const scoreKeyMap = getLuckScoreKeyMap(pLike, pType, isTiedIncluded);
+    let startIndex = recorded + 1;
+    if (mode === 'strict') startIndex = Math.max(startIndex, 39);
+
+    const lockCounts = { none: 0, one: 0, two: 0 };
+    for (let j = 0; j < n; j++) {
+        const catchIndex = startIndex + j;
+        const lockType = getLuckLockTypeForCatchIndex(pLike, catchIndex);
+        lockCounts[lockType] = (lockCounts[lockType] || 0) + 1;
+    }
+
+    let dist = { 0: 1 };
+    Object.keys(lockCounts).forEach(lockType => {
+        const c = lockCounts[lockType] || 0;
+        if (c <= 0) return;
+        const single = getSingleCatchScoreDistribution(pLike, pType, lockType, scoreKeyMap, isTiedIncluded);
+        dist = convolveLuckDistribution(dist, powerLuckDistribution(single, c));
+    });
+    return dist;
+}
+
+function buildCalibrationUnrecordedSpeciesModelDistribution(pType, count, mode = 'stage') {
+    const n = Math.max(0, Math.floor(Number(count) || 0));
+    if (n <= 0 || !LUCK_PROB_MATRIX[pType]) return { 0: 1 };
+    const allocations = getCalibrationSpeciesAllocations(pType);
+    if (!allocations.length) return powerLuckDistribution(getCalibrationSingleCatchDistribution(pType), n);
+
+    let dist = { 0: 1 };
+    allocations.forEach(item => {
+        dist = convolveLuckDistribution(dist, buildCalibrationSpeciesHiddenDistribution(item.name, pType, item.count, mode));
+    });
+    return dist;
+}
+
+function buildCalibrationUnrecordedDistribution(pType, count) {
+    const n = Math.max(0, Math.floor(Number(count) || 0));
+    if (n <= 0 || !LUCK_PROB_MATRIX[pType]) return { 0: 1 };
+    const mode = totalCatchCalibration?.stageMode || 'stage';
+    if (mode === 'base') return powerLuckDistribution(getCalibrationSingleCatchDistribution(pType), n);
+    return buildCalibrationUnrecordedSpeciesModelDistribution(pType, n, mode);
+}
+
 function loadBoxFromLocal() {
     const key = getLocalStorageKey();
 
@@ -1251,10 +1978,19 @@ function loadBoxFromLocal() {
     playerBox = localData ? JSON.parse(localData) : [];
 }
 
+function hasRecordedTiedCount(p) {
+    if (!p) return false;
+    if ((Number(p.tiedCount) || 0) > 0) return true;
+    if (typeof FOOD_TRACK_KEYS !== 'undefined') {
+        return FOOD_TRACK_KEYS.some(track => (Number(p[`tiedCount_${track}`]) || 0) > 0);
+    }
+    return false;
+}
+
 function normalizePlayerBox() {
     playerBox.forEach(p => { 
         if (!p.lockMode) p.lockMode = getRecommendedLockModeForName(p.name); 
-        if (!p.evalMode) p.evalMode = 'tied'; 
+        if (!p.evalMode) p.evalMode = 'grad'; 
         ensureFoodTrackCounts(p);
 
         // 旧版双轨数据迁移：如果旧字段只有 AAA/ABB，保留；非主流从 0 开始。
@@ -1281,6 +2017,10 @@ function normalizePlayerBox() {
             }
             recalcFoodTrackTotals(p);
         }
+
+        // 评分口径统一：不再提供“包含和解 / 仅看毕业”切换。
+        // evalMode 仅作为旧数据兼容字段保留；新版评分固定为“毕业级以上 + 自用和解补正”。
+        p.evalMode = 'grad';
     });
 }
 
@@ -1451,6 +2191,1115 @@ function normalizePlayerBox() {
             '冰伊布': { standard: '冰伊布', type: 'special_skill', defaultLock: 'none' },
             '仙子伊布': { standard: '仙子伊布', type: 'special_skill', defaultLock: 'none' }
         };
+
+// ==========================================
+// 🧬 进化阶段权重：用于“总捕捉数校准”的未录入品种分配
+// 说明：该表只影响老玩家补正，不改变玩家手动录入的大仓数据。
+// 权重设计目标是反映常见捕捉习惯：初始型最多，进化型较少，后段进化/活动/传说更少。
+// ==========================================
+const EVOLUTION_STAGE_META = {
+    "绿毛虫": {
+        "line": "绿毛虫",
+        "stage": 0,
+        "familySize": 3
+    },
+    "铁甲蛹": {
+        "line": "绿毛虫",
+        "stage": 1,
+        "familySize": 3
+    },
+    "巴大蝶": {
+        "line": "绿毛虫",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小拉达": {
+        "line": "小拉达",
+        "stage": 0,
+        "familySize": 2
+    },
+    "拉达": {
+        "line": "小拉达",
+        "stage": 1,
+        "familySize": 2
+    },
+    "阿柏蛇": {
+        "line": "阿柏蛇",
+        "stage": 0,
+        "familySize": 2
+    },
+    "阿柏怪": {
+        "line": "阿柏蛇",
+        "stage": 1,
+        "familySize": 2
+    },
+    "皮丘": {
+        "line": "皮丘",
+        "stage": 0,
+        "familySize": 3
+    },
+    "皮卡丘": {
+        "line": "皮丘",
+        "stage": 1,
+        "familySize": 3
+    },
+    "雷丘": {
+        "line": "皮丘",
+        "stage": 2,
+        "familySize": 3
+    },
+    "皮宝宝": {
+        "line": "皮宝宝",
+        "stage": 0,
+        "familySize": 3
+    },
+    "皮皮": {
+        "line": "皮宝宝",
+        "stage": 1,
+        "familySize": 3
+    },
+    "皮可西": {
+        "line": "皮宝宝",
+        "stage": 2,
+        "familySize": 3
+    },
+    "六尾": {
+        "line": "六尾",
+        "stage": 0,
+        "familySize": 2
+    },
+    "九尾": {
+        "line": "六尾",
+        "stage": 1,
+        "familySize": 2
+    },
+    "六尾(阿罗拉的样子)": {
+        "line": "六尾(阿罗拉的样子)",
+        "stage": 0,
+        "familySize": 2
+    },
+    "九尾(阿罗拉的样子)": {
+        "line": "六尾(阿罗拉的样子)",
+        "stage": 1,
+        "familySize": 2
+    },
+    "猴怪": {
+        "line": "猴怪",
+        "stage": 0,
+        "familySize": 2
+    },
+    "火暴猴": {
+        "line": "猴怪",
+        "stage": 1,
+        "familySize": 2
+    },
+    "嘟嘟": {
+        "line": "嘟嘟",
+        "stage": 0,
+        "familySize": 2
+    },
+    "嘟嘟利": {
+        "line": "嘟嘟",
+        "stage": 1,
+        "familySize": 2
+    },
+    "大岩蛇": {
+        "line": "大岩蛇",
+        "stage": 0,
+        "familySize": 2
+    },
+    "大钢蛇": {
+        "line": "大岩蛇",
+        "stage": 1,
+        "familySize": 2
+    },
+    "卡拉卡拉": {
+        "line": "卡拉卡拉",
+        "stage": 0,
+        "familySize": 2
+    },
+    "嘎啦嘎啦": {
+        "line": "卡拉卡拉",
+        "stage": 1,
+        "familySize": 2
+    },
+    "菊草叶": {
+        "line": "菊草叶",
+        "stage": 0,
+        "familySize": 3
+    },
+    "月桂叶": {
+        "line": "菊草叶",
+        "stage": 1,
+        "familySize": 3
+    },
+    "大竺葵": {
+        "line": "菊草叶",
+        "stage": 2,
+        "familySize": 3
+    },
+    "火球鼠": {
+        "line": "火球鼠",
+        "stage": 0,
+        "familySize": 3
+    },
+    "火岩鼠": {
+        "line": "火球鼠",
+        "stage": 1,
+        "familySize": 3
+    },
+    "火暴兽": {
+        "line": "火球鼠",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小锯鳄": {
+        "line": "小锯鳄",
+        "stage": 0,
+        "familySize": 3
+    },
+    "蓝鳄": {
+        "line": "小锯鳄",
+        "stage": 1,
+        "familySize": 3
+    },
+    "大力鳄": {
+        "line": "小锯鳄",
+        "stage": 2,
+        "familySize": 3
+    },
+    "天然雀": {
+        "line": "天然雀",
+        "stage": 0,
+        "familySize": 2
+    },
+    "天然鸟": {
+        "line": "天然雀",
+        "stage": 1,
+        "familySize": 2
+    },
+    "狃拉": {
+        "line": "狃拉",
+        "stage": 0,
+        "familySize": 2
+    },
+    "玛狃拉": {
+        "line": "狃拉",
+        "stage": 1,
+        "familySize": 2
+    },
+    "火稚鸡": {
+        "line": "火稚鸡",
+        "stage": 0,
+        "familySize": 3
+    },
+    "力壮鸡": {
+        "line": "火稚鸡",
+        "stage": 1,
+        "familySize": 3
+    },
+    "火焰鸡": {
+        "line": "火稚鸡",
+        "stage": 2,
+        "familySize": 3
+    },
+    "戴鲁比": {
+        "line": "戴鲁比",
+        "stage": 0,
+        "familySize": 2
+    },
+    "黑鲁加": {
+        "line": "戴鲁比",
+        "stage": 1,
+        "familySize": 2
+    },
+    "水跃鱼": {
+        "line": "水跃鱼",
+        "stage": 0,
+        "familySize": 3
+    },
+    "沼跃鱼": {
+        "line": "水跃鱼",
+        "stage": 1,
+        "familySize": 3
+    },
+    "巨沼怪": {
+        "line": "水跃鱼",
+        "stage": 2,
+        "familySize": 3
+    },
+    "懒人獭": {
+        "line": "懒人獭",
+        "stage": 0,
+        "familySize": 3
+    },
+    "过动猿": {
+        "line": "懒人獭",
+        "stage": 1,
+        "familySize": 3
+    },
+    "请假王": {
+        "line": "懒人獭",
+        "stage": 2,
+        "familySize": 3
+    },
+    "青绵鸟": {
+        "line": "青绵鸟",
+        "stage": 0,
+        "familySize": 2
+    },
+    "七夕青鸟": {
+        "line": "青绵鸟",
+        "stage": 1,
+        "familySize": 2
+    },
+    "怨影娃娃": {
+        "line": "怨影娃娃",
+        "stage": 0,
+        "familySize": 2
+    },
+    "诅咒娃娃": {
+        "line": "怨影娃娃",
+        "stage": 1,
+        "familySize": 2
+    },
+    "海豹球": {
+        "line": "海豹球",
+        "stage": 0,
+        "familySize": 3
+    },
+    "海魔狮": {
+        "line": "海豹球",
+        "stage": 1,
+        "familySize": 3
+    },
+    "帝牙海狮": {
+        "line": "海豹球",
+        "stage": 2,
+        "familySize": 3
+    },
+    "宝贝龙": {
+        "line": "宝贝龙",
+        "stage": 0,
+        "familySize": 3
+    },
+    "甲壳龙": {
+        "line": "宝贝龙",
+        "stage": 1,
+        "familySize": 3
+    },
+    "暴飞龙": {
+        "line": "宝贝龙",
+        "stage": 2,
+        "familySize": 3
+    },
+    "食梦梦": {
+        "line": "食梦梦",
+        "stage": 0,
+        "familySize": 2
+    },
+    "梦梦蚀": {
+        "line": "食梦梦",
+        "stage": 1,
+        "familySize": 2
+    },
+    "宝宝暴龙": {
+        "line": "宝宝暴龙",
+        "stage": 0,
+        "familySize": 2
+    },
+    "怪颚龙": {
+        "line": "宝宝暴龙",
+        "stage": 1,
+        "familySize": 2
+    },
+    "妙蛙种子": {
+        "line": "妙蛙种子",
+        "stage": 0,
+        "familySize": 3
+    },
+    "妙蛙草": {
+        "line": "妙蛙种子",
+        "stage": 1,
+        "familySize": 3
+    },
+    "妙蛙花": {
+        "line": "妙蛙种子",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小火龙": {
+        "line": "小火龙",
+        "stage": 0,
+        "familySize": 3
+    },
+    "火恐龙": {
+        "line": "小火龙",
+        "stage": 1,
+        "familySize": 3
+    },
+    "喷火龙": {
+        "line": "小火龙",
+        "stage": 2,
+        "familySize": 3
+    },
+    "杰尼龟": {
+        "line": "杰尼龟",
+        "stage": 0,
+        "familySize": 3
+    },
+    "卡咪龟": {
+        "line": "杰尼龟",
+        "stage": 1,
+        "familySize": 3
+    },
+    "水箭龟": {
+        "line": "杰尼龟",
+        "stage": 2,
+        "familySize": 3
+    },
+    "地鼠": {
+        "line": "地鼠",
+        "stage": 0,
+        "familySize": 2
+    },
+    "三地鼠": {
+        "line": "地鼠",
+        "stage": 1,
+        "familySize": 2
+    },
+    "喇叭芽": {
+        "line": "喇叭芽",
+        "stage": 0,
+        "familySize": 3
+    },
+    "口呆花": {
+        "line": "喇叭芽",
+        "stage": 1,
+        "familySize": 3
+    },
+    "大食花": {
+        "line": "喇叭芽",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小拳石": {
+        "line": "小拳石",
+        "stage": 0,
+        "familySize": 3
+    },
+    "隆隆石": {
+        "line": "小拳石",
+        "stage": 1,
+        "familySize": 3
+    },
+    "隆隆岩": {
+        "line": "小拳石",
+        "stage": 2,
+        "familySize": 3
+    },
+    "鬼斯": {
+        "line": "鬼斯",
+        "stage": 0,
+        "familySize": 3
+    },
+    "鬼斯通": {
+        "line": "鬼斯",
+        "stage": 1,
+        "familySize": 3
+    },
+    "耿鬼": {
+        "line": "鬼斯",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小福蛋": {
+        "line": "小福蛋",
+        "stage": 0,
+        "familySize": 3
+    },
+    "吉利蛋": {
+        "line": "小福蛋",
+        "stage": 1,
+        "familySize": 3
+    },
+    "幸福蛋": {
+        "line": "小福蛋",
+        "stage": 2,
+        "familySize": 3
+    },
+    "魔尼尼": {
+        "line": "魔尼尼",
+        "stage": 0,
+        "familySize": 2
+    },
+    "魔墙人偶": {
+        "line": "魔尼尼",
+        "stage": 1,
+        "familySize": 2
+    },
+    "迷你龙": {
+        "line": "迷你龙",
+        "stage": 0,
+        "familySize": 3
+    },
+    "哈克龙": {
+        "line": "迷你龙",
+        "stage": 1,
+        "familySize": 3
+    },
+    "快龙": {
+        "line": "迷你龙",
+        "stage": 2,
+        "familySize": 3
+    },
+    "乌波": {
+        "line": "乌波",
+        "stage": 0,
+        "familySize": 2
+    },
+    "沼王": {
+        "line": "乌波",
+        "stage": 1,
+        "familySize": 2
+    },
+    "乌波(帕底亚的样子)": {
+        "line": "乌波(帕底亚的样子)",
+        "stage": 0,
+        "familySize": 2
+    },
+    "土王": {
+        "line": "乌波(帕底亚的样子)",
+        "stage": 1,
+        "familySize": 2
+    },
+    "幼基拉斯": {
+        "line": "幼基拉斯",
+        "stage": 0,
+        "familySize": 3
+    },
+    "沙基拉斯": {
+        "line": "幼基拉斯",
+        "stage": 1,
+        "familySize": 3
+    },
+    "班基拉斯": {
+        "line": "幼基拉斯",
+        "stage": 2,
+        "familySize": 3
+    },
+    "可可多拉": {
+        "line": "可可多拉",
+        "stage": 0,
+        "familySize": 3
+    },
+    "可多拉": {
+        "line": "可可多拉",
+        "stage": 1,
+        "familySize": 3
+    },
+    "波士可多拉": {
+        "line": "可可多拉",
+        "stage": 2,
+        "familySize": 3
+    },
+    "大颚蚁": {
+        "line": "大颚蚁",
+        "stage": 0,
+        "familySize": 3
+    },
+    "超音波幼虫": {
+        "line": "大颚蚁",
+        "stage": 1,
+        "familySize": 3
+    },
+    "沙漠蜻蜓": {
+        "line": "大颚蚁",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小猫怪": {
+        "line": "小猫怪",
+        "stage": 0,
+        "familySize": 3
+    },
+    "勒克猫": {
+        "line": "小猫怪",
+        "stage": 1,
+        "familySize": 3
+    },
+    "论琴猫": {
+        "line": "小猫怪",
+        "stage": 2,
+        "familySize": 3
+    },
+    "不良蛙": {
+        "line": "不良蛙",
+        "stage": 0,
+        "familySize": 2
+    },
+    "毒骷蛙": {
+        "line": "不良蛙",
+        "stage": 1,
+        "familySize": 2
+    },
+    "雪笠怪": {
+        "line": "雪笠怪",
+        "stage": 0,
+        "familySize": 2
+    },
+    "暴雪王": {
+        "line": "雪笠怪",
+        "stage": 1,
+        "familySize": 2
+    },
+    "强颚鸡母虫": {
+        "line": "强颚鸡母虫",
+        "stage": 0,
+        "familySize": 3
+    },
+    "虫电宝": {
+        "line": "强颚鸡母虫",
+        "stage": 1,
+        "familySize": 3
+    },
+    "锹农炮虫": {
+        "line": "强颚鸡母虫",
+        "stage": 2,
+        "familySize": 3
+    },
+    "萌虻": {
+        "line": "萌虻",
+        "stage": 0,
+        "familySize": 2
+    },
+    "蝶结萌虻": {
+        "line": "萌虻",
+        "stage": 1,
+        "familySize": 2
+    },
+    "童偶熊": {
+        "line": "童偶熊",
+        "stage": 0,
+        "familySize": 2
+    },
+    "穿着熊": {
+        "line": "童偶熊",
+        "stage": 1,
+        "familySize": 2
+    },
+    "新叶喵": {
+        "line": "新叶喵",
+        "stage": 0,
+        "familySize": 3
+    },
+    "蒂蕾喵": {
+        "line": "新叶喵",
+        "stage": 1,
+        "familySize": 3
+    },
+    "魔幻假面喵": {
+        "line": "新叶喵",
+        "stage": 2,
+        "familySize": 3
+    },
+    "呆火鳄": {
+        "line": "呆火鳄",
+        "stage": 0,
+        "familySize": 3
+    },
+    "炙烫鳄": {
+        "line": "呆火鳄",
+        "stage": 1,
+        "familySize": 3
+    },
+    "骨纹巨声鳄": {
+        "line": "呆火鳄",
+        "stage": 2,
+        "familySize": 3
+    },
+    "润水鸭": {
+        "line": "润水鸭",
+        "stage": 0,
+        "familySize": 3
+    },
+    "涌跃鸭": {
+        "line": "润水鸭",
+        "stage": 1,
+        "familySize": 3
+    },
+    "狂欢浪舞鸭": {
+        "line": "润水鸭",
+        "stage": 2,
+        "familySize": 3
+    },
+    "走鲸": {
+        "line": "走鲸",
+        "stage": 0,
+        "familySize": 2
+    },
+    "浩大鲸": {
+        "line": "走鲸",
+        "stage": 1,
+        "familySize": 2
+    },
+    "南瓜精": {
+        "line": "南瓜精",
+        "stage": 0,
+        "familySize": 2
+    },
+    "南瓜怪人呢": {
+        "line": "南瓜精",
+        "stage": 1,
+        "familySize": 2
+    },
+    "穿山鼠": {
+        "line": "穿山鼠",
+        "stage": 0,
+        "familySize": 2
+    },
+    "穿山王": {
+        "line": "穿山鼠",
+        "stage": 1,
+        "familySize": 2
+    },
+    "宝宝丁": {
+        "line": "宝宝丁",
+        "stage": 0,
+        "familySize": 3
+    },
+    "胖丁": {
+        "line": "宝宝丁",
+        "stage": 1,
+        "familySize": 3
+    },
+    "胖可丁": {
+        "line": "宝宝丁",
+        "stage": 2,
+        "familySize": 3
+    },
+    "喵喵": {
+        "line": "喵喵",
+        "stage": 0,
+        "familySize": 2
+    },
+    "猫老大": {
+        "line": "喵喵",
+        "stage": 1,
+        "familySize": 2
+    },
+    "小磁怪": {
+        "line": "小磁怪",
+        "stage": 0,
+        "familySize": 3
+    },
+    "三合一磁怪": {
+        "line": "小磁怪",
+        "stage": 1,
+        "familySize": 3
+    },
+    "自爆磁怪": {
+        "line": "小磁怪",
+        "stage": 2,
+        "familySize": 3
+    },
+    "波克比": {
+        "line": "波克比",
+        "stage": 0,
+        "familySize": 3
+    },
+    "波克基古": {
+        "line": "波克比",
+        "stage": 1,
+        "familySize": 3
+    },
+    "波克基斯": {
+        "line": "波克比",
+        "stage": 2,
+        "familySize": 3
+    },
+    "拉鲁拉丝": {
+        "line": "拉鲁拉丝",
+        "stage": 0,
+        "familySize": 3
+    },
+    "奇鲁莉安": {
+        "line": "奇鲁莉安",
+        "stage": 0,
+        "familySize": 2
+    },
+    "沙奈朵": {
+        "line": "拉鲁拉丝",
+        "stage": 2,
+        "familySize": 3
+    },
+    "艾路雷朵": {
+        "line": "奇鲁莉安",
+        "stage": 1,
+        "familySize": 2
+    },
+    "溶食兽": {
+        "line": "溶食兽",
+        "stage": 0,
+        "familySize": 2
+    },
+    "吞食兽": {
+        "line": "溶食兽",
+        "stage": 1,
+        "familySize": 2
+    },
+    "石居蟹": {
+        "line": "石居蟹",
+        "stage": 0,
+        "familySize": 2
+    },
+    "岩殿居蟹": {
+        "line": "石居蟹",
+        "stage": 1,
+        "familySize": 2
+    },
+    "布拨": {
+        "line": "布拨",
+        "stage": 0,
+        "familySize": 3
+    },
+    "布土拨": {
+        "line": "布拨",
+        "stage": 1,
+        "familySize": 3
+    },
+    "巴布土拨": {
+        "line": "布拨",
+        "stage": 2,
+        "familySize": 3
+    },
+    "利欧路": {
+        "line": "利欧路",
+        "stage": 0,
+        "familySize": 2
+    },
+    "路卡利欧": {
+        "line": "利欧路",
+        "stage": 1,
+        "familySize": 2
+    },
+    "呆呆兽": {
+        "line": "呆呆兽",
+        "stage": 0,
+        "familySize": 2
+    },
+    "呆壳兽": {
+        "line": "呆呆兽",
+        "stage": 1,
+        "familySize": 2
+    },
+    "木守宫": {
+        "line": "木守宫",
+        "stage": 0,
+        "familySize": 3
+    },
+    "森林蜥蜴": {
+        "line": "木守宫",
+        "stage": 1,
+        "familySize": 3
+    },
+    "蜥蜴王": {
+        "line": "木守宫",
+        "stage": 2,
+        "familySize": 3
+    },
+    "飘飘球": {
+        "line": "飘飘球",
+        "stage": 0,
+        "familySize": 2
+    },
+    "随风球": {
+        "line": "飘飘球",
+        "stage": 1,
+        "familySize": 2
+    },
+    "嗡蝠": {
+        "line": "嗡蝠",
+        "stage": 0,
+        "familySize": 2
+    },
+    "音波龙": {
+        "line": "嗡蝠",
+        "stage": 1,
+        "familySize": 2
+    },
+    "咩利羊": {
+        "line": "咩利羊",
+        "stage": 0,
+        "familySize": 3
+    },
+    "茸茸羊": {
+        "line": "咩利羊",
+        "stage": 1,
+        "familySize": 3
+    },
+    "电龙": {
+        "line": "咩利羊",
+        "stage": 2,
+        "familySize": 3
+    },
+    "可达鸭": {
+        "line": "可达鸭",
+        "stage": 0,
+        "familySize": 2
+    },
+    "哥达鸭": {
+        "line": "可达鸭",
+        "stage": 1,
+        "familySize": 2
+    },
+    "盆才怪": {
+        "line": "盆才怪",
+        "stage": 0,
+        "familySize": 2
+    },
+    "树才怪": {
+        "line": "盆才怪",
+        "stage": 1,
+        "familySize": 2
+    },
+    "毛头小鹰": {
+        "line": "毛头小鹰",
+        "stage": 0,
+        "familySize": 2
+    },
+    "勇士雄鹰": {
+        "line": "毛头小鹰",
+        "stage": 1,
+        "familySize": 2
+    },
+    "伊布": {
+        "line": "伊布",
+        "stage": 0,
+        "familySize": 2
+    },
+    "水伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "雷伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "火伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "太阳伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "月亮伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "叶伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "冰伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "仙子伊布": {
+        "line": "伊布",
+        "stage": 1,
+        "familySize": 2
+    },
+    "雷公": {
+        "line": "雷公",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "legendary",
+        "weight": 0.03
+    },
+    "炎帝": {
+        "line": "炎帝",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "legendary",
+        "weight": 0.03
+    },
+    "水君": {
+        "line": "水君",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "legendary",
+        "weight": 0.03
+    },
+    "克雷色利亚": {
+        "line": "克雷色利亚",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "legendary",
+        "weight": 0.03
+    },
+    "拉帝欧斯": {
+        "line": "拉帝欧斯",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "legendary",
+        "weight": 0.03
+    },
+    "拉帝亚斯": {
+        "line": "拉帝亚斯",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "legendary",
+        "weight": 0.03
+    },
+    "皮卡丘(万圣节)": {
+        "line": "皮卡丘(万圣节)",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "event",
+        "weight": 0.06
+    },
+    "皮卡丘(佳节)": {
+        "line": "皮卡丘(佳节)",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "event",
+        "weight": 0.06
+    },
+    "伊布(佳节)": {
+        "line": "伊布(佳节)",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "event",
+        "weight": 0.06
+    },
+    "海豹球(佳节)": {
+        "line": "海豹球(佳节)",
+        "stage": 0,
+        "familySize": 1,
+        "rareClass": "event",
+        "weight": 0.06
+    },
+    "袋兽": {
+        "line": "袋兽",
+        "stage": 0,
+        "familySize": 1
+    },
+    "信使鸟": {
+        "line": "信使鸟",
+        "stage": 0,
+        "familySize": 1
+    },
+    "大嘴娃": {
+        "line": "大嘴娃",
+        "stage": 0,
+        "familySize": 1
+    },
+    "阿勃梭鲁": {
+        "line": "阿勃梭鲁",
+        "stage": 0,
+        "familySize": 1
+    },
+    "花岩怪": {
+        "line": "花岩怪",
+        "stage": 0,
+        "familySize": 1
+    },
+    "花疗环环": {
+        "line": "花疗环环",
+        "stage": 0,
+        "familySize": 1
+    },
+    "老翁龙": {
+        "line": "老翁龙",
+        "stage": 0,
+        "familySize": 1
+    },
+    "古月鸟": {
+        "line": "古月鸟",
+        "stage": 0,
+        "familySize": 1
+    },
+    "勾魂眼": {
+        "line": "勾魂眼",
+        "stage": 0,
+        "familySize": 1
+    },
+    "正电拍拍": {
+        "line": "正电拍拍",
+        "stage": 0,
+        "familySize": 1
+    },
+    "负电拍拍": {
+        "line": "负电拍拍",
+        "stage": 0,
+        "familySize": 1
+    },
+    "小果然": {
+        "line": "小果然",
+        "stage": 0,
+        "familySize": 1
+    },
+    "托戈德玛尔": {
+        "line": "托戈德玛尔",
+        "stage": 0,
+        "familySize": 1
+    },
+    "咚咚鼠": {
+        "line": "咚咚鼠",
+        "stage": 0,
+        "familySize": 1
+    },
+    "大葱鸭": {
+        "line": "大葱鸭",
+        "stage": 0,
+        "familySize": 1
+    },
+    "凯罗斯": {
+        "line": "凯罗斯",
+        "stage": 0,
+        "familySize": 1
+    },
+    "百变怪": {
+        "line": "百变怪",
+        "stage": 0,
+        "familySize": 1
+    }
+};
+
+const CALIBRATION_EVOLUTION_WEIGHT_CONFIG = {
+    basic: 1.00,
+    stage1: 0.18,
+    stage2: 0.04,
+    single: 0.55,
+    event: 0.06,
+    legendary: 0.03
+};
+
+function getEvolutionStageMeta(name) {
+    return EVOLUTION_STAGE_META[name] || { line: name, stage: 0, familySize: 1 };
+}
+
+function getEvolutionCatchWeight(name) {
+    const meta = getEvolutionStageMeta(name);
+    if (Number(meta.weight) > 0) return Number(meta.weight);
+    if (meta.rareClass === 'legendary') return CALIBRATION_EVOLUTION_WEIGHT_CONFIG.legendary;
+    if (meta.rareClass === 'event') return CALIBRATION_EVOLUTION_WEIGHT_CONFIG.event;
+    if ((Number(meta.familySize) || 1) <= 1) return CALIBRATION_EVOLUTION_WEIGHT_CONFIG.single;
+    const stage = Math.max(0, Number(meta.stage) || 0);
+    if (stage <= 0) return CALIBRATION_EVOLUTION_WEIGHT_CONFIG.basic;
+    if (stage === 1) return CALIBRATION_EVOLUTION_WEIGHT_CONFIG.stage1;
+    return CALIBRATION_EVOLUTION_WEIGHT_CONFIG.stage2;
+}
+
 
         function updateAddPanelWeights() {
     const nameInput = document.getElementById('input-name');
@@ -1650,8 +3499,10 @@ function normalizePlayerBox() {
                     <span class="text-[11px] font-black font-mono ${extraCls}">${value}</span>
                 </div>`;
 
+            const calibrationInfo = getTotalCatchCalibrationInfo();
             const cards = configs.map(cfg => {
                 const s = stats[cfg.key];
+                const calibrationMissing = calibrationInfo.enabled ? (Number(calibrationInfo.missingByType[cfg.key]) || 0) : 0;
                 const graduatedTotal = s.grad + s.bigGrad + s.goldGrad;
 
                 return `
@@ -1669,11 +3520,12 @@ function normalizePlayerBox() {
                         <div class="text-right">
                             <div class="text-[9px] text-slate-400 font-bold">总捕捉</div>
                             <div class="text-lg leading-none font-black font-mono ${cfg.total}">${s.catches}</div>
+                            ${calibrationMissing > 0 ? `<div class="text-[9px] text-indigo-500 font-bold mt-0.5">校准未录 +${calibrationMissing}</div>` : ''}
                         </div>
                     </div>
 
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                        ${makeMiniStat('和解', s.tied, 'text-amber-600')}
+                        ${makeMiniStat('自用和解', s.tied, 'text-amber-600')}
                         ${makeMiniStat('毕业', s.grad, 'text-slate-700')}
                         ${makeMiniStat('大毕业', s.bigGrad, 'text-purple-600')}
                         ${makeMiniStat('金帮', s.goldGrad, 'text-red-600')}
@@ -1727,6 +3579,7 @@ function normalizePlayerBox() {
             document.getElementById('total-big-grad').innerText = totalBigGrad;
             document.getElementById('total-gold-grad').innerText = totalGoldGrad;
 
+            renderTotalCatchCalibrationUI();
             renderTypeSummaryPanel();
 
             let searchKeyword = document.getElementById('search-box').value.trim().toLowerCase();
@@ -1747,13 +3600,17 @@ function normalizePlayerBox() {
                 
                 let matchGraduated = true;
                 if (showOnlyGraduated) {
-                    let isTiedIncluded = (p.evalMode !== 'grad');
-                    let qualifiesCount = (p.goldGradCount || 0) + (p.bigGradCount || 0) + (p.gradCount || 0) + (isTiedIncluded ? (p.tiedCount || 0) : 0);
+                    // 统一口径：已录入和解视为“自用和解”，也属于已出货/已留用档案。
+                    let qualifiesCount = (p.goldGradCount || 0) + (p.bigGradCount || 0) + (p.gradCount || 0) + (p.tiedCount || 0);
                     matchGraduated = qualifiesCount > 0;
                 }
                 
                 return matchType && matchKeyword && matchGraduated;
             });
+
+            filteredBox = sortBoxRecords(filteredBox);
+            const sortEl = document.getElementById('box-sort-mode');
+            if (sortEl && sortEl.value !== (boxSortMode || 'entry_desc')) sortEl.value = boxSortMode || 'entry_desc';
 
             const typeKeys = { all: '全盘大仓', berry: '树果型', food: '食材型', skill: '技能型' };
 
@@ -1776,16 +3633,6 @@ function normalizePlayerBox() {
                     else btn.innerText = typeKeys[tk]; 
                 }
             });
-
-            const globalToggleBtn = document.getElementById('global-eval-toggle');
-            if (globalToggleBtn) {
-                if (playerBox.length === 0) {
-                    globalToggleBtn.innerHTML = `<i class="fa-solid fa-scale-unbalanced"></i> 全局标准`;
-                } else {
-                    let hasTiedMode = playerBox.some(p => (p.evalMode || 'tied') === 'tied');
-                    globalToggleBtn.innerHTML = `<i class="fa-solid ${hasTiedMode ? 'fa-bolt text-indigo-500' : 'fa-scale-unbalanced'}"></i> ${hasTiedMode ? '全局: 一键仅看毕业' : '全局: 一键包含和解'}`;
-                }
-            }
 
             // 🚀 响应式大盘重绘：双核引擎完美重组
             const panelEl = document.getElementById('luck-destiny-panel');
@@ -1832,6 +3679,9 @@ function normalizePlayerBox() {
                     let scoreSkill = convertRateToObjectiveScore(rateSkill);
 
                     let countValidPairs = playerBox.filter(p => p.count && p.count > 0).length;
+                    let allMetricsForLegend = getAggregateLuckMetrics('all');
+                    let calibrationBackgroundCount = allMetricsForLegend ? (allMetricsForLegend.calibrationUnrecorded || 0) : 0;
+                    let calibrationNoteText = calibrationBackgroundCount > 0 ? `校准背景: +${calibrationBackgroundCount} 未录入` : `校准未启用`;
 
                     // 刷新圆环正中心的全局打分显示
                     const totalScoreEl = document.getElementById('pie-total-score');
@@ -1872,6 +3722,7 @@ function normalizePlayerBox() {
                             <div class="flex flex-col gap-1">
                                 <div class="mt-0.5">${getBoxTotalBadge(scoreBoxTotal)}</div>
                                 <div class="text-[9px] text-slate-400 font-semibold">有效测评品类: ${countValidPairs} 种</div>
+                                <div class="text-[9px] text-slate-500 font-semibold">${calibrationNoteText}</div>
                             </div>
                         </div>
                         <!-- 卡片 2：树果 -->
@@ -2018,11 +3869,6 @@ function normalizePlayerBox() {
                             </div>
                         </div>
                         <div class="flex gap-3 items-center">
-                            ${isSpecialDowngrade ? '' : `
-                            <button onclick="togglePokemonStandard(${idx})" class="text-[11px] transition duration-150 flex items-center gap-0.5 ${p.evalMode === 'grad' ? 'text-indigo-600 font-bold bg-indigo-50 px-1.5 py-0.5 rounded-md border border-indigo-200/40' : 'text-slate-400 hover:text-amber-600'}" title="点击切换审计标准">
-                                <i class="fa-solid ${p.evalMode === 'grad' ? 'fa-bolt text-indigo-500' : 'fa-scale-unbalanced'}"></i>${p.evalMode === 'grad' ? '标准: 仅看毕业' : '标准: 包含和解'}
-                            </button>
-                            `}
                             <button onclick="toggleInlineEdit(${idx})" class="text-slate-400 hover:text-amber-600 transition text-xs flex items-center gap-0.5"><i class="fa-solid fa-pen-to-square"></i> 修改</button>
                             <button onclick="deletePokemon(${idx})" class="text-slate-300 hover:text-rose-500 transition p-1 text-xs"><i class="fa-solid fa-trash-can"></i></button>
                         </div>
@@ -2031,7 +3877,7 @@ function normalizePlayerBox() {
                     <div class="grid ${isSpecialDowngrade ? 'grid-cols-3' : 'grid-cols-4'} gap-2 text-center bg-slate-50/50 p-2 rounded-xl border border-slate-100">
                         ${isSpecialDowngrade ? '' : `
                         <div class="px-1 py-1 rounded-lg ${p.tiedCount > 0 ? 'bg-amber-50 text-amber-700 font-bold' : 'text-slate-300'}">
-                            <div class="text-[9px]">和解</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
+                            <div class="text-[9px]">自用和解</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
                             ${isFoodType && p.tiedCount > 0 ? getFoodTrackBreakdownHTML(p, 'tied') : ''}
                         </div>
                         `}
@@ -2296,6 +4142,8 @@ async function signInUser() {
 
     currentCloudUser = data.user;
     updateAuthUI();
+    loadBoxSortModeFromLocal();
+    loadTotalCatchCalibrationFromLocal();
     await loadBoxFromCloud();
     await loadHistoryFromCloud();
     await loadGraduationDexFromCloud();
@@ -2316,6 +4164,8 @@ async function signOutUser() {
 
     currentCloudUser = null;
     updateAuthUI();
+    loadBoxSortModeFromLocal();
+    loadTotalCatchCalibrationFromLocal();
 
     loadBoxFromLocal();
     normalizePlayerBox();
@@ -2348,37 +4198,10 @@ function updateAuthUI() {
     }
 }
 
-        function togglePokemonStandard(index) {
-            let currentMode = playerBox[index].evalMode || 'tied';
-            playerBox[index].evalMode = (currentMode === 'tied') ? 'grad' : 'tied';
-            updateBoxUI();
-            showToast("已成功将【" + playerBox[index].name + "】切换为" + (playerBox[index].evalMode === 'grad' ? '仅看毕业的硬核标准' : '包含和解的大众标准'));
-        }
-
-        function toggleAllPokemonStandard() {
-            if (playerBox.length === 0) {
-                showToast("大仓空空如也，请先录入宝可梦资产！");
-                return;
-            }
-            let hasTiedMode = playerBox.some(p => !SPECIAL_STANDARD_DOWNGRADE.includes(p.name) && (p.evalMode || 'tied') === 'tied');
-            let targetMode = hasTiedMode ? 'grad' : 'tied';
-            
-            playerBox.forEach(p => {
-                if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
-                    p.evalMode = 'grad';
-                } else {
-                    p.evalMode = targetMode;
-                }
-            });
-            
-            updateBoxUI();
-            showToast("已将全局资产整体切换为：" + (targetMode === 'grad' ? '仅看毕业的硬核标准' : '包含和解的大众标准'));
-        }
-
         function toggleShowOnlyGraduated() {
             showOnlyGraduated = !showOnlyGraduated;
             updateBoxUI(); 
-            showToast(showOnlyGraduated ? "已开启过滤：当前仅展现大仓内已出货的胚子！" : "已关闭过滤：展现全盘大仓！");
+            showToast(showOnlyGraduated ? "已开启过滤：当前仅展现有出货/自用和解记录的宝可梦！" : "已关闭过滤：展现全盘大仓！");
         }
 
         
@@ -2635,194 +4458,587 @@ function getActiveFoodTrackProbabilityRows(p) {
     
         const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
 
-        function getPokemonLuckMetrics(p) {
-    if (!p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50 };
-    
-    let dict = pokemonDictionary[p.name];
-    if (!dict || dict.type === 'special_skill') return null;
-    
-    let pType = dict.type;
-    const matrix = {
-        berry: {
-            none: { gold: 0.0025, bigGrad: 0.0056, grad: 0.0065, tied: 0.0251 },
-            one:  { gold: 0.0124, bigGrad: 0.0207, grad: 0.0228, tied: 0.0752 },
-            two:  { gold: 0.0526, bigGrad: 0.0592, grad: 0.0598, tied: 0.1197 }
-        },
-        food: {
-            none: { gold: 0.0012, bigGrad: 0.0082, grad: 0.0127, tied: 0.0214 },
-            one:  { gold: 0.0032, bigGrad: 0.0053, grad: 0.0083, tied: 0.0113 },
-            two:  { gold: 0.0023, bigGrad: 0.0023, grad: 0.0039, tied: 0.0039 }
-        },
-        skill: {
-            none: { gold: 0.0085, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
-            one:  { gold: 0.0225, bigGrad: 0.0311, grad: 0.0412, tied: 0.0679 },
-            two:  { gold: 0.0140, bigGrad: 0.0140, grad: 0.0140, tied: 0.0285 }
-        }
-    };
 
-    let foodRows = [];
-    let foodMultiplier = 1;
-    if (pType === 'food') {
+// ==========================================
+// 📊 概率信息量气运评分 v2.2
+// 核心思想：默认不完整评价和解；普通毕业线、金帮线与“自用和解”统一进入同一个概率分布。
+// 单次出货贡献 = -log10(该结果在当前宝可梦/轨道/锁金条件下的平均理论概率)；自用和解按“至少出现过 k 只和解线个体”计分。
+// 单宠、三类型、全大仓都通过理论总分布计算百分位，避免手动权重。
+// ==========================================
+const LUCK_INFO_SCORE_SCALE = 1000;      // 0.001 信息量精度
+const LUCK_MIN_PROB = 1e-12;
+const LUCK_DIST_MAX_STATES = 9000;
+const LUCK_DIST_MIN_PROB = 1e-14;
+
+const LUCK_PROB_MATRIX = {
+    berry: {
+        none: { gold: 0.0025, bigGrad: 0.0056, grad: 0.0065, tied: 0.0251 },
+        one:  { gold: 0.0124, bigGrad: 0.0207, grad: 0.0228, tied: 0.0752 },
+        two:  { gold: 0.0526, bigGrad: 0.0592, grad: 0.0598, tied: 0.1197 }
+    },
+    food: {
+        none: { gold: 0.0012, bigGrad: 0.0082, grad: 0.0127, tied: 0.0214 },
+        one:  { gold: 0.0032, bigGrad: 0.0053, grad: 0.0083, tied: 0.0113 },
+        two:  { gold: 0.0023, bigGrad: 0.0023, grad: 0.0039, tied: 0.0039 }
+    },
+    skill: {
+        none: { gold: 0.0085, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
+        one:  { gold: 0.0225, bigGrad: 0.0311, grad: 0.0412, tied: 0.0679 },
+        two:  { gold: 0.0140, bigGrad: 0.0140, grad: 0.0140, tied: 0.0285 }
+    }
+};
+
+const LUCK_RESULT_ORDER = ['tied', 'grad', 'bigGrad', 'goldGrad'];
+const LUCK_RESULT_LABELS = {
+    tied: '和解',
+    grad: '毕业',
+    bigGrad: '大毕业',
+    goldGrad: '金帮'
+};
+
+let __luckInfoScoreCache = new Map();
+let __luckAggregateCache = new Map();
+
+function getLuckSpeciesCacheKey(p) {
+    if (!p) return 'null';
+    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount];
+    if (isFoodPokemonName(p.name)) {
         ensureFoodTrackCounts(p);
-        foodRows = getActiveFoodTrackProbabilityRows(p);
-        foodMultiplier = foodRows.reduce((sum, row) => sum + row.probWeight, 0) || 1;
-    }
-
-    let sumGold = 0, sumBigGrad = 0, sumGrad = 0, sumTied = 0;
-    for (let i = 1; i <= p.count; i++) {
-        let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
-        let pr = matrix[pType][lockType];
-        sumGold += pr.gold * foodMultiplier; 
-        sumBigGrad += pr.bigGrad * foodMultiplier;
-        sumGrad += pr.grad * foodMultiplier;
-        sumTied += pr.tied * foodMultiplier;
-    }
-    
-    const W_gold = sumGold > 0 ? p.count / (sumGold / p.count) : 0;
-    const W_bigGrad = sumBigGrad > 0 ? p.count / (sumBigGrad / p.count) : 0;
-    const W_grad = sumGrad > 0 ? p.count / (sumGrad / p.count) : 0;
-    const W_tied = sumTied > 0 ? p.count / (sumTied / p.count) : 0;
-    
-    let isTiedIncluded = (p.evalMode !== 'grad');
-    if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) isTiedIncluded = true;
-
-    let expectedScore = 0;
-    let variance = 0;
-
-    for (let i = 1; i <= p.count; i++) {
-        let lockType = (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || 'two')));
-        let pr = matrix[pType][lockType];
-
-        let p_gold = pr.gold * foodMultiplier;
-        let p_big = pr.bigGrad * foodMultiplier;
-        let p_gr = (pr.grad - pr.bigGrad) * foodMultiplier;
-        let p_ti = (pr.tied - pr.grad) * foodMultiplier;
-        if (p_gr < 0) p_gr = 0;
-        if (p_ti < 0) p_ti = 0;
-
-        let mu_i = 0, sq_i = 0;
-
-        if (pType === 'food') {
-            const avgScore = (baseW) => foodRows.reduce((sum, row) => sum + (row.probWeight / foodMultiplier) * (baseW * row.scoreFactor), 0);
-            const avgScoreSq = (baseW) => foodRows.reduce((sum, row) => sum + (row.probWeight / foodMultiplier) * Math.pow(baseW * row.scoreFactor, 2), 0);
-            const S_tied = isTiedIncluded ? W_tied : 0;
-            mu_i = p_gold * avgScore(W_gold) + p_big * avgScore(W_bigGrad) + p_gr * avgScore(W_grad) + p_ti * avgScore(S_tied);
-            sq_i = p_gold * avgScoreSq(W_gold) + p_big * avgScoreSq(W_bigGrad) + p_gr * avgScoreSq(W_grad) + p_ti * avgScoreSq(S_tied);
-        } else {
-            let S_tied = isTiedIncluded ? W_tied : 0;
-            mu_i = p_gold * W_gold + p_big * W_bigGrad + p_gr * W_grad + p_ti * S_tied;
-            sq_i = p_gold * Math.pow(W_gold, 2) + p_big * Math.pow(W_bigGrad, 2) + p_gr * Math.pow(W_grad, 2) + p_ti * Math.pow(S_tied, 2);
-        }
-        expectedScore += mu_i;
-        variance += (sq_i - Math.pow(mu_i, 2));
-    }
-
-    let actualScore = 0;
-    if (pType === 'food') {
         FOOD_TRACK_KEYS.forEach(track => {
-            const row = foodRows.find(r => r.track === track);
-            const fallbackMultiplier = FOOD_TRACK_META[track]?.probWeight || 1;
-            const activeMultiplier = foodMultiplier || fallbackMultiplier;
-            const scoreFactor = row ? row.scoreFactor : (activeMultiplier / fallbackMultiplier);
-            actualScore += (Number(p[`goldGradCount_${track}`]) || 0) * W_gold * scoreFactor;
-            actualScore += (Number(p[`bigGradCount_${track}`]) || 0) * W_bigGrad * scoreFactor;
-            actualScore += (Number(p[`gradCount_${track}`]) || 0) * W_grad * scoreFactor;
-            actualScore += (Number(p[`tiedCount_${track}`]) || 0) * (isTiedIncluded ? W_tied : 0) * scoreFactor;
+            LUCK_RESULT_ORDER.forEach(result => base.push(`${result}_${track}:${Number(p[getFoodTrackCountKey(result, track)]) || 0}`));
         });
-    } else if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
-        actualScore += (p.goldGradCount || 0) * W_bigGrad +
-                       (p.bigGradCount || 0) * W_grad +
-                       (p.gradCount || 0) * W_tied;
-    } else {
-        actualScore += (p.goldGradCount || 0) * W_gold +
-                       (p.bigGradCount || 0) * W_bigGrad +
-                       (p.gradCount || 0) * W_grad +
-                       (p.tiedCount || 0) * (isTiedIncluded ? W_tied : 0);
     }
-                     
-    let rate = 50;
-    if (variance > 0) {
-        let z = (actualScore - expectedScore) / Math.sqrt(variance);
-        let percentile = (0.5 * (1 + erf(z / Math.sqrt(2)))) * 100;
-        rate = Math.min(99.9, Math.max(0.1, Math.round(percentile * 10) / 10));
-    }
-    return { actual: actualScore, expected: expectedScore, variance: variance, rate: rate };
+    return base.join('|');
 }
 
-        function calculateLuckPercentile(p) {
-            let metrics = getPokemonLuckMetrics(p);
-            return metrics ? metrics.rate : null;
-        }
+function getLuckAggregateCacheKey(targetType) {
+    return targetType + '::calib:' + getCalibrationCacheKey() + '::' + playerBox.map(p => getLuckSpeciesCacheKey(p)).join('||');
+}
 
-        function getTypeLuckInfo(targetType) {
-            let sumZ = 0;
-            let countValidElements = 0;
-            
-            playerBox.forEach(p => {
-                if (!p.count || p.count === 0) return;
-                let dict = pokemonDictionary[p.name];
-                if (!dict || dict.type === 'special_skill') return;
-                
-                let match = false;
-                if (targetType === 'all') match = true;
-                else if (targetType === 'skill') match = (dict.type === 'skill' || dict.type === 'special_skill');
-                else match = (dict.type === targetType);
-                
-                if (!match) return;
+function clampLuckRate(rate) {
+    return Math.min(99.9, Math.max(0.1, Math.round(rate * 10) / 10));
+}
 
-                let metrics = getPokemonLuckMetrics(p);
-                if (metrics && metrics.variance > 0) {
-                    let zIndividual = (metrics.actual - metrics.expected) / Math.sqrt(metrics.variance);
-                    sumZ += zIndividual;
-                    countValidElements++;
-                }
+function getLuckLockTypeForCatchIndex(p, i) {
+    return (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || getRecommendedLockModeForName(p.name) || 'two')));
+}
+
+function getExclusiveResultProbabilities(pr) {
+    // LUCK_PROB_MATRIX 中 tied / grad / bigGrad 是累计线；gold 是独立金帮线。
+    // 这里转成最终互斥结果概率，便于“结果信息量”统一计算。
+    const pGold = Math.max(0, Number(pr.gold) || 0);
+    const pBig = Math.max(0, (Number(pr.bigGrad) || 0) - pGold);
+    const pGrad = Math.max(0, (Number(pr.grad) || 0) - (Number(pr.bigGrad) || 0));
+    const pTied = Math.max(0, (Number(pr.tied) || 0) - (Number(pr.grad) || 0));
+    return {
+        tied: pTied,
+        grad: pGrad,
+        bigGrad: pBig,
+        goldGrad: pGold
+    };
+}
+
+function getLuckFoodRowsForScoring(p) {
+    if (!p || !isFoodPokemonName(p.name)) return [{ track: null, probWeight: 1 }];
+    ensureFoodTrackCounts(p);
+    const baseTracks = getDefaultFoodTracksForName(p.name);
+    const tracks = [...baseTracks];
+    if (hasAnyFoodTrackCount(p, 'OTHER') && !tracks.includes('OTHER')) tracks.push('OTHER');
+    return tracks.map(track => ({
+        track,
+        probWeight: FOOD_TRACK_META[track]?.probWeight || 1
+    }));
+}
+
+function getAverageResultProbabilities(p, pType, isTiedIncluded) {
+    const avg = {};
+    const rows = pType === 'food' ? getLuckFoodRowsForScoring(p) : [{ track: null, probWeight: 1 }];
+    rows.forEach(row => {
+        LUCK_RESULT_ORDER.forEach(result => {
+            if (result === 'tied' && !isTiedIncluded) return;
+            const key = row.track ? `${result}_${row.track}` : result;
+            avg[key] = 0;
+        });
+    });
+
+    for (let i = 1; i <= Number(p.count || 0); i++) {
+        const lockType = getLuckLockTypeForCatchIndex(p, i);
+        const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]);
+        rows.forEach(row => {
+            LUCK_RESULT_ORDER.forEach(result => {
+                if (result === 'tied' && !isTiedIncluded) return;
+                const key = row.track ? `${result}_${row.track}` : result;
+                avg[key] += base[result] * row.probWeight;
             });
-            
-            if (countValidElements === 0) return null;
-            
-            let zMeta = sumZ / Math.sqrt(countValidElements);
-            let percentile = (0.5 * (1 + erf(zMeta / Math.sqrt(2)))) * 100;
-            return Math.min(99.9, Math.max(0.1, Math.round(percentile * 10) / 10));
+        });
+    }
+
+    Object.keys(avg).forEach(key => {
+        avg[key] = avg[key] / Math.max(1, Number(p.count || 0));
+    });
+    return avg;
+}
+
+function infoScoreKeyFromProbability(prob) {
+    const p = Math.max(LUCK_MIN_PROB, Number(prob) || 0);
+    return Math.max(0, Math.round((-Math.log10(p)) * LUCK_INFO_SCORE_SCALE));
+}
+
+function getLuckScoreKeyMap(p, pType, isTiedIncluded) {
+    const avg = getAverageResultProbabilities(p, pType, isTiedIncluded);
+    const scoreKeyMap = {};
+    Object.keys(avg).forEach(key => {
+        scoreKeyMap[key] = infoScoreKeyFromProbability(avg[key]);
+    });
+    return scoreKeyMap;
+}
+
+function getLuckResultKey(result, track = null) {
+    return track ? `${result}_${track}` : result;
+}
+
+// ==========================================
+// 🌱 自用和解模型
+// 统一主评分中，已录入的和解不再被简单忽略，也不按完整和解统计处理。
+// 它表示：玩家至少曾经遇到过 k 只和解线个体，并从中留下了 k 只自用。
+// 因此其概率用 P(X >= k)，X 为该宝在当前捕捉次数/锁金阶段下出现“和解但未毕业”的次数。
+// 这能避免“没完整记录和解就被扣分”，同时认可玩家珍惜的自用和解。
+// ==========================================
+function getTiedBandProbabilityForScoring(pType, lockType, track = null) {
+    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]).tied || 0;
+    if (pType === 'food' && track) {
+        return Math.min(0.999999, Math.max(0, base * (FOOD_TRACK_META[track]?.probWeight || 1)));
+    }
+    return Math.min(0.999999, Math.max(0, base));
+}
+
+function poissonBinomialAtLeastProbability(probs, k) {
+    const target = Math.max(0, Math.floor(Number(k) || 0));
+    if (target <= 0) return 1;
+    if (!Array.isArray(probs) || probs.length === 0 || target > probs.length) return 0;
+
+    // 只保留 P(0),...,P(k-1)，最后用 1-P(<k) 得到 P(>=k)。
+    const dp = new Array(target).fill(0);
+    dp[0] = 1;
+
+    probs.forEach(rawP => {
+        const p = Math.min(1, Math.max(0, Number(rawP) || 0));
+        for (let c = target - 1; c >= 0; c--) {
+            const stay = dp[c] * (1 - p);
+            const hit = c > 0 ? dp[c - 1] * p : 0;
+            dp[c] = stay + hit;
         }
+    });
 
-        function getTypeLuckZ(targetType) {
-            let sumZ = 0;
-            let countValidElements = 0;
-            playerBox.forEach(p => {
-                if (!p.count || p.count === 0) return;
-                let dict = pokemonDictionary[p.name];
-                if (!dict || dict.type === 'special_skill') return;
+    const lessThanK = dp.reduce((sum, v) => sum + v, 0);
+    return Math.min(1, Math.max(0, 1 - lessThanK));
+}
 
-                let match = false;
-                if (targetType === 'skill') {
-                    match = (dict.type === 'skill' || dict.type === 'special_skill');
-                } else {
-                    match = (dict.type === targetType);
-                }
-                if (!match) return;
+function getSelfUseTiedAtLeastProbability(p, pType, track, k) {
+    const count = Math.max(0, Number(p?.count) || 0);
+    const need = Math.max(0, Math.floor(Number(k) || 0));
+    if (count <= 0 || need <= 0) return 0;
 
-                let metrics = getPokemonLuckMetrics(p);
-                if (metrics && metrics.variance > 0) {
-                    let zIndividual = (metrics.actual - metrics.expected) / Math.sqrt(metrics.variance);
-                    sumZ += zIndividual;
-                    countValidElements++;
-                }
+    const probs = [];
+    for (let i = 1; i <= count; i++) {
+        const lockType = getLuckLockTypeForCatchIndex(p, i);
+        probs.push(getTiedBandProbabilityForScoring(pType, lockType, track));
+    }
+    return poissonBinomialAtLeastProbability(probs, need);
+}
+
+function getSelfUseTiedEvents(p, pType, isTiedIncluded) {
+    // 特殊降档宝：和解线已经作为该物种认可的降档毕业线进入模型，不再额外算“自用和解”。
+    if (isTiedIncluded || !p || !p.count || SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) return [];
+
+    const events = [];
+
+    if (pType === 'food') {
+        ensureFoodTrackCounts(p);
+        FOOD_TRACK_KEYS.forEach(track => {
+            const k = Math.max(0, Number(p[`tiedCount_${track}`]) || 0);
+            if (k <= 0) return;
+            const prob = getSelfUseTiedAtLeastProbability(p, pType, track, k);
+            if (prob <= 0) return;
+            events.push({
+                key: `selfTied_${track}_${k}`,
+                label: `${getFoodTrackShortName(track)}自用和解≥${k}`,
+                track,
+                count: k,
+                probability: prob,
+                scoreKey: infoScoreKeyFromProbability(prob)
             });
-            if (countValidElements === 0) return null;
-            return sumZ / Math.sqrt(countValidElements);
-        }
+        });
+        return events;
+    }
 
-        function convertRateToObjectiveScore(rate) {
-            if (rate === null) return null;
-            let p = rate / 100;
-            let score = 50;
-            if (p >= 0.5) {
-                score = 100 - 50 * Math.pow(2 * (1 - p), 0.43);
-            } else {
-                score = 50 * Math.pow(2 * p, 0.43);
+    const k = Math.max(0, Number(p.tiedCount) || 0);
+    if (k > 0) {
+        const prob = getSelfUseTiedAtLeastProbability(p, pType, null, k);
+        if (prob > 0) {
+            events.push({
+                key: `selfTied_${k}`,
+                label: `自用和解≥${k}`,
+                track: null,
+                count: k,
+                probability: prob,
+                scoreKey: infoScoreKeyFromProbability(prob)
+            });
+        }
+    }
+    return events;
+}
+
+function convolveSelfUseTiedEvents(dist, events) {
+    let out = dist;
+    (events || []).forEach(event => {
+        if (!event || !event.scoreKey || !event.probability) return;
+        const p = Math.min(1, Math.max(0, Number(event.probability) || 0));
+        const eventDist = { 0: 1 - p };
+        eventDist[event.scoreKey] = (eventDist[event.scoreKey] || 0) + p;
+        out = convolveLuckDistribution(out, normalizeLuckDistribution(eventDist));
+    });
+    return out;
+}
+
+function normalizeLuckDistribution(dist) {
+    let total = 0;
+    Object.keys(dist).forEach(k => total += dist[k]);
+    if (total <= 0) return { 0: 1 };
+    Object.keys(dist).forEach(k => dist[k] = dist[k] / total);
+    return dist;
+}
+
+function compressLuckDistribution(dist, maxStates = LUCK_DIST_MAX_STATES) {
+    let entries = Object.entries(dist)
+        .map(([k, v]) => [Number(k), v])
+        .filter(([_, v]) => v > LUCK_DIST_MIN_PROB);
+
+    if (entries.length === 0) return { 0: 1 };
+
+    if (entries.length <= maxStates) {
+        const out = {};
+        entries.forEach(([k, v]) => out[k] = (out[k] || 0) + v);
+        return normalizeLuckDistribution(out);
+    }
+
+    // 重要修正：不能再“只保留最高概率状态”。
+    // 高分低概率尾部正是欧气判定的核心；砍掉尾部会把实际高分误判成 99.9%。
+    // 这里改成分数轴等宽分桶：保留全部概率质量，同时把相邻分数并入同一代表点。
+    let minKey = Infinity;
+    let maxKey = -Infinity;
+    entries.forEach(([k]) => {
+        if (k < minKey) minKey = k;
+        if (k > maxKey) maxKey = k;
+    });
+
+    const width = Math.max(1, Math.ceil((maxKey - minKey + 1) / maxStates));
+    const bucketProb = {};
+    const bucketWeightedKey = {};
+
+    entries.forEach(([k, v]) => {
+        const bucket = Math.floor((k - minKey) / width);
+        bucketProb[bucket] = (bucketProb[bucket] || 0) + v;
+        bucketWeightedKey[bucket] = (bucketWeightedKey[bucket] || 0) + k * v;
+    });
+
+    const out = {};
+    Object.keys(bucketProb).forEach(bucket => {
+        const prob = bucketProb[bucket];
+        if (prob <= 0) return;
+        const representativeKey = Math.round(bucketWeightedKey[bucket] / prob);
+        out[representativeKey] = (out[representativeKey] || 0) + prob;
+    });
+
+    return normalizeLuckDistribution(out);
+}
+
+function convolveLuckDistribution(a, b) {
+    const out = {};
+    const aEntries = Object.entries(a);
+    const bEntries = Object.entries(b);
+    for (const [ka, pa] of aEntries) {
+        const ia = Number(ka);
+        for (const [kb, pb] of bEntries) {
+            const key = ia + Number(kb);
+            out[key] = (out[key] || 0) + pa * pb;
+        }
+    }
+    return compressLuckDistribution(out);
+}
+
+function getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTiedIncluded) {
+    const dist = { 0: 0 };
+    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]);
+    const rows = pType === 'food' ? getLuckFoodRowsForScoring(p) : [{ track: null, probWeight: 1 }];
+    let nonZeroProb = 0;
+
+    rows.forEach(row => {
+        LUCK_RESULT_ORDER.forEach(result => {
+            const prob = base[result] * row.probWeight;
+            if (prob <= 0) return;
+
+            // 玩家选择“毕业及以上”时，和解作为普通未计分事件，但仍保留其概率。
+            if (result === 'tied' && !isTiedIncluded) {
+                dist[0] += prob;
+                nonZeroProb += prob;
+                return;
             }
-            return Math.min(100, Math.max(0, score));
+
+            const resultKey = getLuckResultKey(result, row.track);
+            const scoreKey = scoreKeyMap[resultKey] || 0;
+            dist[scoreKey] = (dist[scoreKey] || 0) + prob;
+            nonZeroProb += prob;
+        });
+    });
+
+    dist[0] += Math.max(0, 1 - nonZeroProb);
+    return normalizeLuckDistribution(dist);
+}
+
+function buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded) {
+    let dist = { 0: 1 };
+    for (let i = 1; i <= Number(p.count || 0); i++) {
+        const lockType = getLuckLockTypeForCatchIndex(p, i);
+        const catchDist = getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTiedIncluded);
+        dist = convolveLuckDistribution(dist, catchDist);
+    }
+
+    // 默认毕业口径下，已录入和解视为“自用和解”证据：
+    // 不要求完整记录所有和解，只按“至少出现过 k 只和解线个体”的概率给一份温和加成。
+    const selfUseTiedEvents = getSelfUseTiedEvents(p, pType, isTiedIncluded);
+    dist = convolveSelfUseTiedEvents(dist, selfUseTiedEvents);
+
+    return dist;
+}
+
+function getDistributionMoments(dist) {
+    let meanKey = 0;
+    Object.entries(dist).forEach(([k, prob]) => meanKey += Number(k) * prob);
+    let varKey = 0;
+    Object.entries(dist).forEach(([k, prob]) => {
+        const d = Number(k) - meanKey;
+        varKey += d * d * prob;
+    });
+    return {
+        meanKey,
+        varianceKey: varKey,
+        mean: meanKey / LUCK_INFO_SCORE_SCALE,
+        variance: varKey / (LUCK_INFO_SCORE_SCALE * LUCK_INFO_SCORE_SCALE)
+    };
+}
+
+function getMidrankPercentileFromDistribution(dist, actualKey) {
+    let less = 0;
+    let equal = 0;
+    const target = Math.round(actualKey);
+    Object.entries(dist).forEach(([k, prob]) => {
+        const key = Number(k);
+        if (key < target) less += prob;
+        else if (key === target) equal += prob;
+    });
+    return (less + 0.5 * equal) * 100;
+}
+
+function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
+    let totalKey = 0;
+
+    const addCount = (result, count, track = null) => {
+        const n = Math.max(0, Number(count) || 0);
+        if (n <= 0) return;
+        if (result === 'tied' && !isTiedIncluded) return;
+        const key = getLuckResultKey(result, track);
+        totalKey += n * (scoreKeyMap[key] || 0);
+    };
+
+    if (pType === 'food') {
+        ensureFoodTrackCounts(p);
+        FOOD_TRACK_KEYS.forEach(track => {
+            addCount('tied', p[`tiedCount_${track}`], track);
+            addCount('grad', p[`gradCount_${track}`], track);
+            addCount('bigGrad', p[`bigGradCount_${track}`], track);
+            addCount('goldGrad', p[`goldGradCount_${track}`], track);
+        });
+
+        if (!isTiedIncluded) {
+            getSelfUseTiedEvents(p, pType, isTiedIncluded).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
         }
+        return totalKey;
+    }
+
+    // 旧版特殊标准：这些技能型用“降一档”的记录口径，保留原本网站的直觉。
+    if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+        addCount('tied', p.gradCount || 0);
+        addCount('grad', p.bigGradCount || 0);
+        addCount('bigGrad', p.goldGradCount || 0);
+        return totalKey;
+    }
+
+    addCount('tied', p.tiedCount || 0);
+    addCount('grad', p.gradCount || 0);
+    addCount('bigGrad', p.bigGradCount || 0);
+    addCount('goldGrad', p.goldGradCount || 0);
+
+    if (!isTiedIncluded) {
+        getSelfUseTiedEvents(p, pType, isTiedIncluded).forEach(event => {
+            totalKey += event.scoreKey || 0;
+        });
+    }
+    return totalKey;
+}
+
+function normalInverseCDF(p) {
+    // Peter J. Acklam 近似，供星盘能量展示使用。
+    if (p <= 0) return -8;
+    if (p >= 1) return 8;
+    const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.3577518672690, -30.66479806614716, 2.506628277459239];
+    const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+    const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+    const plow = 0.02425;
+    const phigh = 1 - plow;
+    let q, r;
+    if (p < plow) {
+        q = Math.sqrt(-2 * Math.log(p));
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
+    if (p > phigh) {
+        q = Math.sqrt(-2 * Math.log(1 - p));
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+                ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
+    q = p - 0.5;
+    r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+           (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+
+function getPokemonLuckMetrics(p) {
+    if (!p || !p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50, z: 0 };
+
+    const cacheKey = getLuckSpeciesCacheKey(p);
+    if (__luckInfoScoreCache.has(cacheKey)) return __luckInfoScoreCache.get(cacheKey);
+
+    let dict = pokemonDictionary[p.name];
+    if (!dict || dict.type === 'special_skill') return null;
+
+    const pType = dict.type;
+    const isTiedIncluded = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
+    const scoreKeyMap = getLuckScoreKeyMap(p, pType, isTiedIncluded);
+    const dist = buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded);
+    const actualKey = getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded);
+    const moments = getDistributionMoments(dist);
+    const percentile = getMidrankPercentileFromDistribution(dist, actualKey);
+    const rate = clampLuckRate(percentile);
+    const z = moments.varianceKey > 0 ? (actualKey - moments.meanKey) / Math.sqrt(moments.varianceKey) : normalInverseCDF(rate / 100);
+
+    const result = {
+        actual: actualKey / LUCK_INFO_SCORE_SCALE,
+        expected: moments.mean,
+        variance: moments.variance,
+        rate,
+        z,
+        dist,
+        actualKey,
+        scoreKeyMap,
+        selfUseTiedEvents: getSelfUseTiedEvents(p, pType, isTiedIncluded),
+        algorithm: 'infoScoreDistribution'
+    };
+    __luckInfoScoreCache.set(cacheKey, result);
+    return result;
+}
+
+function calculateLuckPercentile(p) {
+    let metrics = getPokemonLuckMetrics(p);
+    return metrics ? metrics.rate : null;
+}
+
+function getLuckTargetTypeMatch(dict, targetType) {
+    if (!dict) return false;
+    if (targetType === 'all') return dict.type !== 'special_skill';
+    if (targetType === 'skill') return (dict.type === 'skill' || dict.type === 'special_skill');
+    return dict.type === targetType;
+}
+
+function getAggregateLuckMetrics(targetType) {
+    const cacheKey = getLuckAggregateCacheKey(targetType);
+    if (__luckAggregateCache.has(cacheKey)) return __luckAggregateCache.get(cacheKey);
+
+    let dist = { 0: 1 };
+    let actualKey = 0;
+    let validCount = 0;
+
+    playerBox.forEach(p => {
+        if (!p.count || p.count === 0) return;
+        let dict = pokemonDictionary[p.name];
+        if (!getLuckTargetTypeMatch(dict, targetType)) return;
+
+        let metrics = getPokemonLuckMetrics(p);
+        if (!metrics || !metrics.dist) return;
+        dist = convolveLuckDistribution(dist, metrics.dist);
+        actualKey += metrics.actualKey || 0;
+        validCount++;
+    });
+
+    const calibrationInfo = getTotalCatchCalibrationInfo();
+    const calibrationTypes = targetType === 'all' ? ['berry', 'food', 'skill'] : [targetType];
+    let calibrationUnrecorded = 0;
+    calibrationTypes.forEach(tk => {
+        if (!['berry', 'food', 'skill'].includes(tk)) return;
+        const n = calibrationInfo.enabled ? (Number(calibrationInfo.missingByType[tk]) || 0) : 0;
+        if (n <= 0) return;
+        dist = convolveLuckDistribution(dist, buildCalibrationUnrecordedDistribution(tk, n));
+        calibrationUnrecorded += n;
+    });
+
+    if (validCount === 0 && calibrationUnrecorded === 0) return null;
+
+    const moments = getDistributionMoments(dist);
+    const percentile = getMidrankPercentileFromDistribution(dist, actualKey);
+    const rate = clampLuckRate(percentile);
+    const z = moments.varianceKey > 0 ? (actualKey - moments.meanKey) / Math.sqrt(moments.varianceKey) : normalInverseCDF(rate / 100);
+
+    const result = {
+        actual: actualKey / LUCK_INFO_SCORE_SCALE,
+        expected: moments.mean,
+        variance: moments.variance,
+        rate,
+        z,
+        dist,
+        actualKey,
+        validCount,
+        calibrationUnrecorded,
+        calibrationInfo,
+        algorithm: calibrationUnrecorded > 0 ? 'aggregateInfoScoreDistributionWithTotalCatchCalibration' : 'aggregateInfoScoreDistribution'
+    };
+    __luckAggregateCache.set(cacheKey, result);
+    return result;
+}
+
+function getTypeLuckInfo(targetType) {
+    const metrics = getAggregateLuckMetrics(targetType);
+    return metrics ? metrics.rate : null;
+}
+
+function getTypeLuckZ(targetType) {
+    const metrics = getAggregateLuckMetrics(targetType);
+    return metrics ? metrics.z : null;
+}
+
+function convertRateToObjectiveScore(rate) {
+    if (rate === null) return null;
+    let p = rate / 100;
+    let score = 50;
+    if (p >= 0.5) {
+        score = 100 - 50 * Math.pow(2 * (1 - p), 0.43);
+    } else {
+        score = 50 * Math.pow(2 * p, 0.43);
+    }
+    return Math.min(100, Math.max(0, score));
+}
 
         function saveInlineEdit(index) {
     let count = parseInt(document.getElementById(`edit-count-${index}`).value) || 0;
@@ -2888,6 +5104,8 @@ function getActiveFoodTrackProbabilityRows(p) {
 
             currentCloudUser = data.user || null;
             updateAuthUI();
+            loadBoxSortModeFromLocal();
+            loadTotalCatchCalibrationFromLocal();
 
             if (currentCloudUser) {
                 await loadBoxFromCloud();
