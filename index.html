@@ -160,7 +160,7 @@
                         <li><strong>老玩家可启用总捕捉数校准</strong>：如果历史捕捉太多无法全部补录，可以填写游戏内总捕捉数与三系体感比例，系统会把未录入捕捉作为未毕业背景样本进行近似补正。</li>
                         <li><strong>大仓和毕业库分工不同</strong>：大仓负责统计总捕捉与出货数量；毕业库负责保存具体出货个体面板。补录毕业库不会自动增加大仓捕捉数。</li>
                         <li><strong>编辑历史记录会影响大仓</strong>：历史抽卡库是真实流水，修改或删除历史记录可能改变大仓统计；出货库里的“编辑当前”只改展示档案，不会影响大仓。</li>
-                        <li><strong>特殊技能型暂定评分</strong>：特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后，除拉帝亚斯、拉帝欧斯、伊布及伊布进化型外，暂按树果宝概率映射参与运气测评。</li>
+                        <li><strong>特殊技能型暂定评分</strong>：特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后，除伊布及伊布进化型外暂按树果宝概率映射参与运气测评；拉帝欧斯/拉帝亚斯使用专用三线。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
                         <li><strong>和解口径说明</strong>：默认主评分不要求完整记录所有和解；已录入的少量和解会按“自用和解”处理，理解为该品种至少曾出现过可留用的和解个体，而不是完整和解总数。</li>
                         <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，已录入的闪光和解及以上个体会作为额外稀有加成参与评分。</li>
@@ -1512,9 +1512,9 @@ function getRecordedEvaluableCatchesBySummaryType() {
     (playerBox || []).forEach(p => {
         const dict = pokemonDictionary[p.name];
         if (!dict) return;
-        if (dict.type === 'special_skill' && !isSpecialSkillScoredByBerryModel(p.name)) return;
+        if (dict.type === 'special_skill' && !isSpecialSkillScoredForLuck(p.name)) return;
         const type = getPokemonSummaryType(p.name);
-        if (type && out[type] !== undefined) out[type] += Number(p.count) || 0;
+        if (type && out[type] !== undefined) out[type] += getEffectiveLuckCatchCount(p);
     });
     return out;
 }
@@ -1910,11 +1910,11 @@ function getEvaluableStandardPokemonByType(pType) {
     Object.values(pokemonDictionary || {}).forEach(item => {
         if (!item || !item.standard) return;
         if (pType === 'skill') {
-            if (!(item.type === 'skill' || isSpecialSkillScoredByBerryModel(item.standard))) return;
+            if (!(item.type === 'skill' || isSpecialSkillScoredForLuck(item.standard))) return;
         } else {
             if (item.type !== pType) return;
         }
-        if (!['berry', 'food', 'skill'].includes(item.type) && !isSpecialSkillScoredByBerryModel(item.standard)) return;
+        if (!['berry', 'food', 'skill'].includes(item.type) && !isSpecialSkillScoredForLuck(item.standard)) return;
         if (!map.has(item.standard)) map.set(item.standard, item);
     });
     return Array.from(map.keys());
@@ -3391,6 +3391,8 @@ function getEvolutionCatchWeight(name) {
     let dict = pokemonDictionary[standardName];
     let isFood = dict && dict.type === 'food';
     let isSpecialThreeTier = dict && dict.type === 'special_skill';
+    let isLatiosLine = isLatiCustomScoringName(standardName);
+    let latiLabel = getLatiCustomLabel(standardName);
 
     if (isFood) {
         container.innerHTML = `
@@ -3412,17 +3414,17 @@ function getEvolutionCatchWeight(name) {
                 <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
                 <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
             </div>
-            ${isSpecialThreeTier ? '' : `
+            ${isSpecialThreeTier && !isLatiosLine ? '' : `
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-purple-600 mb-1">追加大毕业</span>
                 <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
             </div>`}
-            <div class="text-center">
+            ${isLatiosLine ? '' : `<div class="text-center">
                 <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮毕业</span>
                 <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
-            </div>
+            </div>`}
         </div>
-        ${isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1 px-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档位。</div>` : ''}`;
+        ${isLatiosLine ? `<div class="text-[9px] text-cyan-500 font-bold mt-1 px-1">${latiLabel}专用三线：和解 / 毕业 / 大毕业；不设置金帮毕业线。</div>` : (isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1 px-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档位。</div>` : '')}`;
     }
 }
 
@@ -3646,8 +3648,8 @@ function getEvolutionCatchWeight(name) {
             
             let totalEvalCatches = playerBox.reduce((sum, item) => {
                 let dict = pokemonDictionary[item.name];
-                if (dict && dict.type === 'special_skill' && !isSpecialSkillScoredByBerryModel(item.name)) return sum;
-                return sum + item.count;
+                if (dict && dict.type === 'special_skill' && !isSpecialSkillScoredForLuck(item.name)) return sum;
+                return sum + getEffectiveLuckCatchCount(item);
             }, 0);
 
             let totalTied = playerBox.reduce((sum, item) => sum + item.tiedCount, 0);
@@ -3898,8 +3900,10 @@ function getEvolutionCatchWeight(name) {
                 let isAbbOnly = FOOD_MODE_ABB_ONLY.includes(p.name);
                 let isSpecialDowngrade = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
                 let isSpecialThreeTier = isSpecialSkillThreeTierDisplay(p.name);
+                let isLatiosLine = isLatiCustomScoringName(p.name);
+                let latiLabel = getLatiCustomLabel(p.name);
                 let isSpecialScored = isSpecialSkillScoredByBerryModel(p.name);
-                let isSpecialExcluded = isSpecialSkillPokemonName(p.name) && !isSpecialScored;
+                let isSpecialExcluded = isSpecialSkillPokemonName(p.name) && !isSpecialSkillScoredForLuck(p.name);
                 let typeLabel = '未知';
                 if (dict) typeLabel = dict.type === 'berry' ? '树果' : (dict.type === 'food' ? '食材' : (dict.type === 'skill' ? '技能' : '特殊技能'));
                 if (isBoth) typeLabel += "·双轨模式";
@@ -3957,10 +3961,10 @@ function getEvolutionCatchWeight(name) {
                                 <div><span class="block text-[9px] text-amber-600 font-bold mb-0.5">总和解</span><input type="number" id="edit-tied-${idx}" value="${p.tiedCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-amber-600"></div>
                             `}
                             <div><span class="block text-[9px] text-slate-600 font-bold mb-0.5">总毕业</span><input type="number" id="edit-grad-${idx}" value="${p.gradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-slate-800"></div>
-                            ${isSpecialThreeTier ? '' : `<div><span class="block text-[9px] text-purple-600 font-bold mb-0.5">总大毕业</span><input type="number" id="edit-big-grad-${idx}" value="${p.bigGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-purple-600"></div>`}
-                            <div><span class="block text-[9px] text-red-600 font-bold mb-0.5">总金帮毕业</span><input type="number" id="edit-gold-grad-${idx}" value="${p.goldGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-red-600"></div>
+                            ${isSpecialThreeTier && !isLatiosLine ? '' : `<div><span class="block text-[9px] text-purple-600 font-bold mb-0.5">总大毕业</span><input type="number" id="edit-big-grad-${idx}" value="${p.bigGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-purple-600"></div>`}
+                            ${isLatiosLine ? '' : `<div><span class="block text-[9px] text-red-600 font-bold mb-0.5">总金帮毕业</span><input type="number" id="edit-gold-grad-${idx}" value="${p.goldGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-red-600"></div>`}
                         </div>
-                        ${isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档。</div>` : ''}
+                        ${isLatiosLine ? `<div class="text-[9px] text-cyan-500 font-bold mt-1">${latiLabel}专用三线：和解 / 毕业 / 大毕业；无金帮毕业线。</div>` : (isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档。</div>` : '')}
                         <div class="bg-yellow-50/70 border border-yellow-200 rounded-xl p-2 text-center">
                             <span class="block text-[9px] text-yellow-700 font-black mb-0.5">✨ 闪光出货总数</span>
                             <input type="number" id="edit-shiny-${idx}" value="${p.shinyUsefulCount || 0}" class="w-full border border-yellow-200 rounded text-center text-xs font-mono py-0.5 text-yellow-700 bg-white">
@@ -3980,6 +3984,7 @@ function getEvolutionCatchWeight(name) {
                             </div>
                             <div class="text-[11px] text-slate-400 mt-1 font-mono font-semibold">
                                 已累计捕捉: <span class="text-slate-950 font-bold bg-slate-100 px-2 py-0.5 rounded-md text-xs">${p.count}</span> 只
+                                ${isLegendaryFirstFixedBadName(p.name) ? `<span class="ml-1 text-[10px] text-cyan-600 font-bold bg-cyan-50 border border-cyan-100 px-1.5 py-0.5 rounded-md">首只固定不毕业，纳入测评 ${getEffectiveLuckCatchCount(p)} 只</span>` : ''}
                             </div>
                         </div>
                         <div class="flex gap-3 items-center">
@@ -3999,15 +4004,15 @@ function getEvolutionCatchWeight(name) {
                             <div class="text-[9px]">毕业</div><div class="text-xs font-mono mt-0.5">${p.gradCount}</div>
                             ${isFoodType && p.gradCount > 0 ? getFoodTrackBreakdownHTML(p, 'grad') : ''}
                         </div>
-                        ${isSpecialThreeTier ? '' : `
+                        ${isSpecialThreeTier && !isLatiosLine ? '' : `
                         <div class="px-1 py-1 rounded-lg ${p.bigGradCount > 0 ? 'bg-purple-50 text-purple-600 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">大毕业</div><div class="text-xs font-mono mt-0.5">${p.bigGradCount}</div>
                             ${isFoodType && p.bigGradCount > 0 ? getFoodTrackBreakdownHTML(p, 'bigGrad') : ''}
                         </div>`}
-                        <div class="px-1 py-1 rounded-lg ${p.goldGradCount > 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-300'}">
+                        ${isLatiosLine ? '' : `<div class="px-1 py-1 rounded-lg ${p.goldGradCount > 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">金帮毕业</div><div class="text-xs font-mono mt-0.5">${p.goldGradCount}</div>
                             ${isFoodType && p.goldGradCount > 0 ? getFoodTrackBreakdownHTML(p, 'goldGrad') : ''}
-                        </div>
+                        </div>`}
                     </div>
                     <div class="rounded-xl border ${p.shinyUsefulCount > 0 ? 'border-yellow-200 bg-yellow-50 text-yellow-700' : 'border-slate-100 bg-slate-50/60 text-slate-300'} px-3 py-1.5 text-[10px] font-black flex items-center justify-between">
                         <span><i class="fa-solid fa-sparkles"></i> 闪光出货（和解及以上）</span>
@@ -4015,6 +4020,7 @@ function getEvolutionCatchWeight(name) {
                     </div>
                     <div class="border-t border-slate-50 pt-2.5 text-[11px] flex items-center justify-between">
                         <div class="flex items-center gap-1">${adviceHTML}</div>
+                        ${isLatiosLine ? `<div class="text-[10px] text-cyan-600 font-bold bg-cyan-50 px-2 py-0.5 rounded-lg border border-cyan-200/50"><i class="fa-solid fa-dragon mr-0.5"></i> ${latiLabel}专用三线：和解/毕业/大毕业，无金帮线</div>` : ''}
                         ${isSpecialScored ? `<div class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200/50"><i class="fa-solid fa-flask mr-0.5"></i> 特殊技能暂定三档评分：按树果毕业/大毕业/金帮概率映射</div>` : ''}
                         ${isSpecialExcluded ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-shield-halved text-slate-400 mr-0.5"></i> 暂不计入运气计算</div>` : ''}
                         ${SPECIAL_STANDARD_DOWNGRADE.includes(p.name) ? `<div class="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/40"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 毕业标准降级，一般的和解即视为毕业</div>` : ''}
@@ -4065,7 +4071,7 @@ function getEvolutionCatchWeight(name) {
         addedTied = parseInt(document.getElementById('num-tied').value) || 0;
         addedGrad = parseInt(document.getElementById('num-grad').value) || 0;
         addedBigGrad = parseInt(document.getElementById('num-big-grad')?.value) || 0;
-        addedGoldGrad = parseInt(document.getElementById('num-gold-grad').value) || 0;
+        addedGoldGrad = isLatiCustomScoringName(standardName) ? 0 : (parseInt(document.getElementById('num-gold-grad')?.value) || 0);
     }
 
     let existingIndex = playerBox.findIndex(item => item.name === standardName);
@@ -4625,7 +4631,42 @@ function getActiveFoodTrackProbabilityRows(p) {
 
     
         const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
-        const SPECIAL_SKILL_LUCK_EXCLUDED = ["拉帝亚斯", "拉帝欧斯", "伊布", "水伊布", "雷伊布", "火伊布", "太阳伊布", "月亮伊布", "叶伊布", "冰伊布", "仙子伊布"];
+        const SPECIAL_SKILL_LUCK_EXCLUDED = ["伊布", "水伊布", "雷伊布", "火伊布", "太阳伊布", "月亮伊布", "叶伊布", "冰伊布", "仙子伊布"];
+        const LEGENDARY_FIRST_FIXED_BAD_NAMES = ["雷公", "炎帝", "水君", "克雷色利亚", "拉帝欧斯", "拉帝亚斯"];
+        const LATIOS_CUSTOM_NAME = "拉帝欧斯";
+        const LATIAS_CUSTOM_NAME = "拉帝亚斯";
+
+function normalizeStandardName(name) {
+    return pokemonDictionary[name]?.standard || name;
+}
+
+function isLatiosCustomScoringName(name) {
+    return normalizeStandardName(name) === LATIOS_CUSTOM_NAME;
+}
+
+function isLatiasCustomScoringName(name) {
+    return normalizeStandardName(name) === LATIAS_CUSTOM_NAME;
+}
+
+function isLatiCustomScoringName(name) {
+    const standard = normalizeStandardName(name);
+    return standard === LATIOS_CUSTOM_NAME || standard === LATIAS_CUSTOM_NAME;
+}
+
+function getLatiCustomLabel(name) {
+    return isLatiasCustomScoringName(name) ? '拉帝亚斯' : '拉帝欧斯';
+}
+
+function isLegendaryFirstFixedBadName(name) {
+    return LEGENDARY_FIRST_FIXED_BAD_NAMES.includes(normalizeStandardName(name));
+}
+
+function getEffectiveLuckCatchCount(pOrName, maybeCount = null) {
+    const name = typeof pOrName === 'string' ? pOrName : pOrName?.name;
+    const rawCount = maybeCount !== null ? maybeCount : (pOrName?.count || 0);
+    const count = Math.max(0, Math.floor(Number(rawCount) || 0));
+    return isLegendaryFirstFixedBadName(name) ? Math.max(0, count - 1) : count;
+}
 
 function isSpecialSkillPokemonName(name) {
     const dict = pokemonDictionary[name];
@@ -4633,27 +4674,39 @@ function isSpecialSkillPokemonName(name) {
 }
 
 function isSpecialSkillExcludedFromLuck(name) {
-    const standard = pokemonDictionary[name]?.standard || name;
+    const standard = normalizeStandardName(name);
+    // 拉帝欧斯/拉帝亚斯改走专用三线评分系统，不再按“特殊技能排除”处理。
+    if (isLatiCustomScoringName(standard)) return false;
     return SPECIAL_SKILL_LUCK_EXCLUDED.includes(standard);
 }
 
 function isSpecialSkillScoredByBerryModel(name) {
-    const standard = pokemonDictionary[name]?.standard || name;
-    return isSpecialSkillPokemonName(standard) && !isSpecialSkillExcludedFromLuck(standard);
+    const standard = normalizeStandardName(name);
+    return isSpecialSkillPokemonName(standard) && !isSpecialSkillExcludedFromLuck(standard) && !isLatiCustomScoringName(standard);
+}
+
+function isSpecialSkillScoredForLuck(name) {
+    return isLatiCustomScoringName(name) || isSpecialSkillScoredByBerryModel(name);
 }
 
 function isSpecialSkillThreeTierDisplay(name) {
-    const standard = pokemonDictionary[name]?.standard || name;
+    const standard = normalizeStandardName(name);
     return isSpecialSkillPokemonName(standard);
 }
 
+function isLatiosThreeLineDisplay(name) {
+    return isLatiCustomScoringName(name);
+}
+
 function isTiedLineScoredDirectly(name) {
-    return SPECIAL_STANDARD_DOWNGRADE.includes(name) || isSpecialSkillScoredByBerryModel(name);
+    return SPECIAL_STANDARD_DOWNGRADE.includes(normalizeStandardName(name)) || isSpecialSkillScoredByBerryModel(name) || isLatiCustomScoringName(name);
 }
 
 function getLuckScoringTypeForPokemon(name) {
     const dict = pokemonDictionary[name];
     if (!dict) return null;
+    if (isLatiosCustomScoringName(name)) return 'latios';
+    if (isLatiasCustomScoringName(name)) return 'latias';
     if (dict.type === 'special_skill') {
         return isSpecialSkillScoredByBerryModel(name) ? 'special_skill' : null;
     }
@@ -4694,6 +4747,20 @@ const LUCK_PROB_MATRIX = {
         none: { gold: 0.0025, bigGrad: 0.0025, grad: 0.0056, tied: 0.0065 },
         one:  { gold: 0.0124, bigGrad: 0.0124, grad: 0.0207, tied: 0.0228 },
         two:  { gold: 0.0526, bigGrad: 0.0526, grad: 0.0592, tied: 0.0598 }
+    },
+    // 拉帝欧斯专用三线：和解=Rank≤53，毕业=Rank≤42，大毕业=Rank≤26，不设置金帮毕业线。
+    // 概率来自当前副技能抽取模型下的三线累计概率。
+    latios: {
+        none: { gold: 0, bigGrad: 0.0047, grad: 0.0170, tied: 0.0630 },
+        one:  { gold: 0, bigGrad: 0.0190, grad: 0.0395, tied: 0.0833 },
+        two:  { gold: 0, bigGrad: 0.0619, grad: 0.0788, tied: 0.1197 }
+    },
+    // 拉帝亚斯专用三线：可同时按拉帝欧斯专用线或普通技能线达标，二者满足其一即可；不设置金帮毕业线。
+    // 暂定采用双标准并集的保守累计概率口径，用于大仓运气评分。
+    latias: {
+        none: { gold: 0, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
+        one:  { gold: 0, bigGrad: 0.0311, grad: 0.0412, tied: 0.0833 },
+        two:  { gold: 0, bigGrad: 0.0619, grad: 0.0788, tied: 0.1197 }
     }
 };
 
@@ -4770,7 +4837,8 @@ function getAverageResultProbabilities(p, pType, isTiedIncluded) {
         });
     });
 
-    for (let i = 1; i <= Number(p.count || 0); i++) {
+    const effectiveCount = getEffectiveLuckCatchCount(p);
+    for (let i = 1; i <= effectiveCount; i++) {
         const lockType = getLuckLockTypeForCatchIndex(p, i);
         const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]);
         rows.forEach(row => {
@@ -4783,7 +4851,7 @@ function getAverageResultProbabilities(p, pType, isTiedIncluded) {
     }
 
     Object.keys(avg).forEach(key => {
-        avg[key] = avg[key] / Math.max(1, Number(p.count || 0));
+        avg[key] = avg[key] / Math.max(1, effectiveCount);
     });
     return avg;
 }
@@ -4822,7 +4890,7 @@ function getUsefulCumulativeProbabilityForShiny(p, pType, lockType) {
 }
 
 function getShinyUsefulAtLeastProbability(p, pType, k) {
-    const count = Math.max(0, Number(p?.count) || 0);
+    const count = getEffectiveLuckCatchCount(p);
     const need = Math.max(0, Math.floor(Number(k) || 0));
     if (count <= 0 || need <= 0) return 0;
     const probs = [];
@@ -4899,7 +4967,7 @@ function poissonBinomialAtLeastProbability(probs, k) {
 }
 
 function getSelfUseTiedAtLeastProbability(p, pType, track, k) {
-    const count = Math.max(0, Number(p?.count) || 0);
+    const count = getEffectiveLuckCatchCount(p);
     const need = Math.max(0, Math.floor(Number(k) || 0));
     if (count <= 0 || need <= 0) return 0;
 
@@ -5062,7 +5130,8 @@ function getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTied
 
 function buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded) {
     let dist = { 0: 1 };
-    for (let i = 1; i <= Number(p.count || 0); i++) {
+    const effectiveCount = getEffectiveLuckCatchCount(p);
+    for (let i = 1; i <= effectiveCount; i++) {
         const lockType = getLuckLockTypeForCatchIndex(p, i);
         const catchDist = getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTiedIncluded);
         dist = convolveLuckDistribution(dist, catchDist);
@@ -5131,6 +5200,19 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
                 totalKey += event.scoreKey || 0;
             });
         }
+        if (includeShinyLuckBonus) {
+            getShinyUsefulEvents(p, pType).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
+        }
+        return totalKey;
+    }
+
+    // 拉帝欧斯/拉帝亚斯专用三线：和解 / 毕业 / 大毕业，不设置金帮毕业线。
+    if (isLatiCustomScoringName(p.name)) {
+        addCount('tied', p.tiedCount || 0);
+        addCount('grad', p.gradCount || 0);
+        addCount('bigGrad', p.bigGradCount || 0);
         if (includeShinyLuckBonus) {
             getShinyUsefulEvents(p, pType).forEach(event => {
                 totalKey += event.scoreKey || 0;
@@ -5216,7 +5298,7 @@ function clearLuckInfoScoreCache() {
 }
 
 function getPokemonLuckMetrics(p) {
-    if (!p || !p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50, z: 0 };
+    if (!p || !p.count || p.count === 0 || getEffectiveLuckCatchCount(p) <= 0) return { actual: 0, expected: 0, variance: 0, rate: 50, z: 0 };
 
     const cacheKey = getLuckSpeciesCacheKey(p);
     if (__luckInfoScoreCache.has(cacheKey)) return __luckInfoScoreCache.get(cacheKey);
@@ -5259,7 +5341,7 @@ function getLuckTargetTypeMatch(dict, targetType, name = null) {
     if (!dict) return false;
     const standard = name || dict.standard;
     if (dict.type === 'special_skill') {
-        const scored = isSpecialSkillScoredByBerryModel(standard);
+        const scored = isSpecialSkillScoredForLuck(standard);
         if (targetType === 'all') return scored;
         if (targetType === 'skill') return scored;
         return false;
@@ -5278,7 +5360,7 @@ function getAggregateLuckMetrics(targetType) {
     let validCount = 0;
 
     playerBox.forEach(p => {
-        if (!p.count || p.count === 0) return;
+        if (!p.count || p.count === 0 || getEffectiveLuckCatchCount(p) <= 0) return;
         let dict = pokemonDictionary[p.name];
         if (!getLuckTargetTypeMatch(dict, targetType, p.name)) return;
 
@@ -5373,7 +5455,7 @@ function convertRateToObjectiveScore(rate) {
         }
         gradCount = parseInt(document.getElementById(`edit-grad-${index}`).value) || 0;
         bigGradCount = parseInt(document.getElementById(`edit-big-grad-${index}`)?.value) || 0;
-        goldGradCount = parseInt(document.getElementById(`edit-gold-grad-${index}`).value) || 0;
+        goldGradCount = isLatiCustomScoringName(p.name) ? 0 : (parseInt(document.getElementById(`edit-gold-grad-${index}`)?.value) || 0);
     }
 
     let totalGolds = tiedCount + gradCount + bigGradCount + goldGradCount;
@@ -5724,6 +5806,7 @@ function openDailyCheckInModal() {
         applyRecommendedLockModeForName('', 'checkin-lock');
     }
 
+    updateCheckInResultOptionsForName(document.getElementById('checkin-name')?.value || '');
     refreshSubskillSlotsUI();
     refreshNaturePickerUI();
     triggerLivePanelAudit();
@@ -5740,6 +5823,7 @@ function handleCheckInNameInput() {
         suggestEl.innerHTML = '';
         suggestEl.classList.add('hidden');
         toggleCheckInFoodTrack();
+        updateCheckInResultOptionsForName('');
         return;
     }
 
@@ -5774,6 +5858,7 @@ function handleCheckInNameInput() {
         applyRecommendedLockModeForName(inputEl.value.trim(), 'checkin-lock');
     }
     toggleCheckInFoodTrack();
+    updateCheckInResultOptionsForName(inputEl.value.trim());
 }
 
 // 🚀 局部新增：打卡下拉框选中触发现场对齐
@@ -5785,6 +5870,7 @@ function selectCheckInSuggestion(name) {
     inputEl.value = name;
     suggestEl.classList.add('hidden');
     applyRecommendedLockModeForName(name, 'checkin-lock');
+    updateCheckInResultOptionsForName(name);
     toggleCheckInFoodTrack(); // 自动触发食材宠的双轨检测
     triggerLivePanelAudit();
 }
@@ -7637,6 +7723,203 @@ function refreshSubskillSlotsUI() {
     pickerWrapper.innerHTML = gridHTML;
 }
 
+
+// ==========================================
+// 🐉 拉帝欧斯专用三线与排名判定
+// 线定义：Rank≤53 和解，Rank≤42 毕业，Rank≤26 大毕业；不设置金帮毕业线。
+// “性格帮”= 帮速↑且不减技能；“性格概”= 技能↑且不减帮速。
+// ==========================================
+const LATIOS_RANK_ROWS = [
+    { rank: 1,  skills: ['bfs','hb','hsm'], nature: 'speedGood', label: '树果S + 帮手奖励 + 帮忙速度M + 性格帮' },
+    { rank: 2,  skills: ['bfs','hb','stm'], nature: 'speedGood', label: '树果S + 帮手奖励 + 技能概率M + 性格帮' },
+    { rank: 3,  skills: ['bfs','hb','hsm'], nature: 'skillGood', label: '树果S + 帮手奖励 + 帮忙速度M + 性格概' },
+    { rank: 4,  skills: ['bfs','hb','stm'], nature: 'skillGood', label: '树果S + 帮手奖励 + 技能概率M + 性格概' },
+    { rank: 5,  skills: ['bfs','hb','hsm'], nature: 'naughty', label: '树果S + 帮手奖励 + 帮忙速度M + 顽皮' },
+    { rank: 6,  skills: ['hb','stm','hsm'], nature: 'speedGood', label: '帮手奖励 + 技能概率M + 帮忙速度M + 性格帮' },
+    { rank: 7,  skills: ['hb','stm','hsm'], nature: 'skillGood', label: '帮手奖励 + 技能概率M + 帮忙速度M + 性格概' },
+    { rank: 8,  skills: ['bfs','hb','hsm'], nature: 'none', label: '树果S + 帮手奖励 + 帮忙速度M' },
+    { rank: 9,  skills: ['bfs','hb','hsm'], nature: 'calm', label: '树果S + 帮手奖励 + 帮忙速度M + 温和' },
+    { rank: 10, skills: ['bfs','hb','stm'], nature: 'naughty', label: '树果S + 帮手奖励 + 技能概率M + 顽皮' },
+    { rank: 11, skills: ['bfs','hb','stm'], nature: 'calm', label: '树果S + 帮手奖励 + 技能概率M + 温和' },
+    { rank: 12, skills: ['bfs','hb','stm'], nature: 'none', label: '树果S + 帮手奖励 + 技能概率M' },
+    { rank: 13, skills: ['bfs','hb'], nature: 'speedGood', label: '树果S + 帮手奖励 + 性格帮' },
+    { rank: 14, skills: ['hb','stm','sts'], nature: 'skillGood', label: '帮手奖励 + 技能概率M + 技能概率S + 性格概' },
+    { rank: 15, skills: ['hb','stm','sts'], nature: 'speedGood', label: '帮手奖励 + 技能概率M + 技能概率S + 性格帮' },
+    { rank: 16, skills: ['hb','stm','hsm'], nature: 'calm', label: '帮手奖励 + 技能概率M + 帮忙速度M + 温和' },
+    { rank: 17, skills: ['bfs','stm','hsm'], nature: 'speedGood', label: '树果S + 技能概率M + 帮忙速度M + 性格帮' },
+    { rank: 18, skills: ['bfs','hb'], nature: 'skillGood', label: '树果S + 帮手奖励 + 性格概' },
+    { rank: 19, skills: ['bfs','stm','hsm'], nature: 'skillGood', label: '树果S + 技能概率M + 帮忙速度M + 性格概' },
+    { rank: 20, skills: ['hb','stm','hsm'], nature: 'none', label: '帮手奖励 + 技能概率M + 帮忙速度M' },
+    { rank: 21, skills: ['hb','stm','hsm'], nature: 'naughty', label: '帮手奖励 + 技能概率M + 帮忙速度M + 顽皮' },
+    { rank: 22, skills: ['bfs','hb'], nature: 'naughty', label: '树果S + 帮手奖励 + 顽皮' },
+    { rank: 23, skills: ['hb','stm','sts'], nature: 'calm', label: '帮手奖励 + 技能概率M + 技能概率S + 温和' },
+    { rank: 24, skills: ['hb','stm'], nature: 'speedGood', label: '帮手奖励 + 技能概率M + 性格帮' },
+    { rank: 25, skills: ['hb','stm'], nature: 'skillGood', label: '帮手奖励 + 技能概率M + 性格概' },
+    { rank: 26, skills: ['bfs','hb'], nature: 'none', label: '树果S + 帮手奖励' },
+    { rank: 27, skills: ['bfs','stm','hsm'], nature: 'naughty', label: '树果S + 技能概率M + 帮忙速度M + 顽皮' },
+    { rank: 28, skills: ['bfs','stm','hsm'], nature: 'calm', label: '树果S + 技能概率M + 帮忙速度M + 温和' },
+    { rank: 29, skills: ['bfs','hb'], nature: 'calm', label: '树果S + 帮手奖励 + 温和' },
+    { rank: 30, skills: ['hb','stm','sts'], nature: 'none', label: '帮手奖励 + 技能概率M + 技能概率S' },
+    { rank: 31, skills: ['bfs','stm','hsm'], nature: 'none', label: '树果S + 技能概率M + 帮忙速度M' },
+    { rank: 32, skills: ['bfs','hsm'], nature: 'speedGood', label: '树果S + 帮忙速度M + 性格帮' },
+    { rank: 33, skills: ['stm','hsm','sts'], nature: 'skillGood', label: '技能概率M + 帮忙速度M + 技能概率S + 性格概' },
+    { rank: 34, skills: ['stm','hsm','sts'], nature: 'speedGood', label: '技能概率M + 帮忙速度M + 技能概率S + 性格帮' },
+    { rank: 35, skills: ['hb','stm'], nature: 'calm', label: '帮手奖励 + 技能概率M + 温和' },
+    { rank: 36, skills: ['bfs','hsm'], nature: 'skillGood', label: '树果S + 帮忙速度M + 性格概' },
+    { rank: 37, skills: ['hb','stm'], nature: 'none', label: '帮手奖励 + 技能概率M' },
+    { rank: 38, skills: ['bfs','stm'], nature: 'speedGood', label: '树果S + 技能概率M + 性格帮' },
+    { rank: 39, skills: ['bfs','hsm'], nature: 'naughty', label: '树果S + 帮忙速度M + 顽皮' },
+    { rank: 40, skills: ['stm','hsm','sts'], nature: 'calm', label: '技能概率M + 帮忙速度M + 技能概率S + 温和' },
+    { rank: 41, skills: ['stm','hsm'], nature: 'speedGood', label: '技能概率M + 帮忙速度M + 性格帮' },
+    { rank: 42, skills: ['stm','hsm'], nature: 'skillGood', label: '技能概率M + 帮忙速度M + 性格概' },
+    { rank: 43, skills: ['stm','hsm','hss'], nature: 'none', label: '技能概率M + 帮忙速度M + 帮忙速度S' },
+    { rank: 44, skills: ['bfs','hsm'], nature: 'none', label: '树果S + 帮忙速度M' },
+    { rank: 45, skills: ['stm','hsm','sts'], nature: 'none', label: '技能概率M + 帮忙速度M + 技能概率S' },
+    { rank: 46, skills: ['bfs','hsm'], nature: 'calm', label: '树果S + 帮忙速度M + 温和' },
+    { rank: 47, skills: ['bfs','stm'], nature: 'calm', label: '树果S + 技能概率M + 温和' },
+    { rank: 48, skills: ['stm','hsm'], nature: 'calm', label: '技能概率M + 帮忙速度M + 温和' },
+    { rank: 49, skills: ['stm','sts'], nature: 'speedGood', label: '技能概率M + 技能概率S + 性格帮' },
+    { rank: 50, skills: ['bfs'], nature: 'speedGood', label: '树果S + 性格帮' },
+    { rank: 51, skills: ['stm','sts'], nature: 'skillGood', label: '技能概率M + 技能概率S + 性格概' },
+    { rank: 52, skills: ['stm','hsm'], nature: 'none', label: '技能概率M + 帮忙速度M' },
+    { rank: 53, skills: ['stm'], nature: 'skillGood', label: '技能概率M + 性格概' }
+];
+
+function getLatiosNatureTag(natureKey) {
+    const parts = getNaturePartsFromKey(natureKey);
+    if (natureKey === 'naughty') return 'naughty';
+    if (natureKey === 'calm') return 'calm';
+    if (parts.up === 'speed' && parts.down !== 'skill') return 'speedGood';
+    if (parts.up === 'skill' && parts.down !== 'speed') return 'skillGood';
+    return 'none';
+}
+
+function getLatiosRelevantResolvedSkills(subskillsObj = {}) {
+    const all5 = ['sub1','sub2','sub3','sub4','sub5'].map(slot => subskillsObj[slot] || 'none');
+    const hasAnyHSM = all5.includes('hsm');
+    const hasAnySTM = all5.includes('stm');
+    const resolved = ['sub1','sub2','sub3'].map(slot => {
+        const skill = subskillsObj[slot] || 'none';
+        if (skill === 'hss' && !hasAnyHSM) return 'hsm';
+        if (skill === 'sts' && !hasAnySTM) return 'stm';
+        return skill;
+    });
+    const relevant = ['bfs','hb','hsm','hss','stm','sts'];
+    return Array.from(new Set(resolved.filter(s => relevant.includes(s)))).sort();
+}
+
+function latiosSkillsMatch(actualSkills, requiredSkills) {
+    if (actualSkills.length !== requiredSkills.length) return false;
+    const a = [...actualSkills].sort().join('|');
+    const b = [...requiredSkills].sort().join('|');
+    return a === b;
+}
+
+function getLatiosRankInfo(subskillsObj = {}, natureKey = 'blank') {
+    const actualSkills = getLatiosRelevantResolvedSkills(subskillsObj);
+    const natureTag = getLatiosNatureTag(natureKey);
+    const row = LATIOS_RANK_ROWS.find(r => r.nature === natureTag && latiosSkillsMatch(actualSkills, r.skills));
+    if (!row) {
+        return { rank: null, line: 'none', label: '未进入 Rank 53 以内', comboLabel: '未命中速查表前 53 名', skills: actualSkills, natureTag };
+    }
+    const line = row.rank <= 26 ? 'bigGrad' : (row.rank <= 42 ? 'grad' : 'tied');
+    const lineLabel = { tied: '🔸通过和解线', grad: '🟩通过毕业线', bigGrad: '🔮大毕业线达成' }[line];
+    return { rank: row.rank, line, label: lineLabel, comboLabel: row.label, skills: actualSkills, natureTag };
+}
+
+function runLatiosPanelAudit(subskillsObj = {}, natureKey = 'blank') {
+    return getLatiosRankInfo(subskillsObj, natureKey);
+}
+
+function getLineLevelValue(line) {
+    return ({ none: 0, tied: 1, grad: 2, bigGrad: 3, goldGrad: 4 })[line] || 0;
+}
+
+function maxThreeLineValue(a, b) {
+    return getLineLevelValue(a) >= getLineLevelValue(b) ? a : b;
+}
+
+function getPlainSkillLineFromEfficiency(eff) {
+    const value = Number(eff) || 0;
+    if (value >= 1.848) return 'bigGrad';
+    if (value >= 1.755) return 'grad';
+    if (value >= 1.632) return 'tied';
+    return 'none';
+}
+
+function getPlainSkillLineLabel(line) {
+    return {
+        none: '未达普通技能线',
+        tied: '普通技能和解线',
+        grad: '普通技能毕业线',
+        bigGrad: '普通技能大毕业线'
+    }[line] || '未达普通技能线';
+}
+
+function runLatiasPanelAudit(subskillsObj = {}, natureKey = 'blank') {
+    const latiosReport = runLatiosPanelAudit(subskillsObj, natureKey);
+    const skillReport = runPanelAuditMath('skill', LATIAS_CUSTOM_NAME, subskillsObj, natureKey, 'ABB');
+    const plainSkillLine = getPlainSkillLineFromEfficiency(skillReport.effCurrent);
+    const finalLine = maxThreeLineValue(latiosReport.line, plainSkillLine);
+    const lineLabel = {
+        none: '未通过拉帝亚斯线',
+        tied: '🔸通过和解线',
+        grad: '🟩通过毕业线',
+        bigGrad: '🔮大毕业线达成'
+    }[finalLine] || '未通过拉帝亚斯线';
+
+    let hitSources = [];
+    if (latiosReport.line !== 'none') hitSources.push(`拉帝欧斯侧：${latiosReport.label.replace(/[🔸🟩🔮]/g, '').trim()}${latiosReport.rank ? `（Rank ${latiosReport.rank}）` : ''}`);
+    if (plainSkillLine !== 'none') hitSources.push(`普通技能侧：${getPlainSkillLineLabel(plainSkillLine)}（效率 ${skillReport.effCurrent.toFixed(3)}）`);
+
+    return {
+        line: finalLine,
+        label: lineLabel,
+        latiosLine: latiosReport.line,
+        latiosRank: latiosReport.rank,
+        latiosComboLabel: latiosReport.comboLabel,
+        skillLine: plainSkillLine,
+        skillEfficiency: skillReport.effCurrent,
+        hitSources: hitSources.length ? hitSources : ['未命中拉帝欧斯侧或普通技能侧达线'],
+        futureSkillLine: getPlainSkillLineFromEfficiency(skillReport.effFuture),
+        futureSkillEfficiency: skillReport.effFuture
+    };
+}
+
+function updateCheckInResultOptionsForName(name) {
+    const select = document.getElementById('checkin-result');
+    if (!select) return;
+    const oldVal = select.value || 'none';
+    const standardName = normalizeStandardName(name || document.getElementById('checkin-name')?.value?.trim() || '');
+    if (isLatiCustomScoringName(standardName)) {
+        const label = getLatiCustomLabel(standardName);
+        const suffix = isLatiosCustomScoringName(standardName) ? 'Rank≤53/42/26' : '双标准并集';
+        select.innerHTML = `
+            <option value="none" class="text-slate-400 font-bold">❌ 没货/白条</option>
+            <option value="tied" class="text-amber-400 font-bold">🔸 和解（${label} ${suffix}）</option>
+            <option value="grad" class="text-emerald-400 font-bold">🟩 毕业（${label} ${suffix}）</option>
+            <option value="bigGrad" class="text-purple-400 font-bold">🔮 大毕业（${label} ${suffix}）</option>`;
+        select.value = ['none','tied','grad','bigGrad'].includes(oldVal) ? oldVal : 'none';
+        return;
+    }
+    if (isSpecialSkillPokemonName(standardName)) {
+        select.innerHTML = `
+            <option value="none" class="text-slate-400 font-bold">❌ 没货/白条</option>
+            <option value="tied" class="text-amber-400 font-bold">🔸 和解（特殊技能暂定）</option>
+            <option value="grad" class="text-emerald-400 font-bold">🟩 毕业（特殊技能暂定）</option>
+            <option value="goldGrad" class="text-red-400 font-bold">👑 金帮毕业（特殊技能暂定）</option>`;
+        select.value = ['none','tied','grad','goldGrad'].includes(oldVal) ? oldVal : 'none';
+        return;
+    }
+    select.innerHTML = `
+        <option value="none" class="text-slate-400 font-bold">❌ 没货/白条 (给大盘做慈善)</option>
+        <option value="tied" class="text-amber-400 font-bold">🔸 和解 (能当个过渡帮手)</option>
+        <option value="grad" class="text-emerald-400 font-bold">🟩 毕业 (核心功能完全解锁)</option>
+        <option value="bigGrad" class="text-purple-400 font-bold">🔮 大毕业 (双技能正性格神兵)</option>
+        <option value="goldGrad" class="text-red-400 font-bold">👑 金帮毕业 (自带光环图腾)</option>`;
+    select.value = ['none','tied','grad','bigGrad','goldGrad'].includes(oldVal) ? oldVal : 'none';
+}
+
 // 🚀 核心对齐：在这里完美、完备、干净地写入你的智能大算盘定义！
 function triggerLivePanelAudit() {
     const nameInput = document.getElementById('checkin-name');
@@ -7655,11 +7938,73 @@ function triggerLivePanelAudit() {
         if (foodSlotsZone) foodSlotsZone.classList.add('hidden');
     }
 
-    if (!dict || dict.type === 'special_skill') {
+    updateCheckInResultOptionsForName(standardName);
+
+    if (!dict) {
         auditBox.innerHTML = `<p class="text-center py-2 text-[11px] text-slate-400 font-medium">请输入品类激活实时算盘...</p>`; return;
     }
 
     let natureKey = document.getElementById('checkin-nature').value;
+
+    if (isLatiosCustomScoringName(standardName)) {
+        const latiosReport = runLatiosPanelAudit(window.checkinSubskills, natureKey);
+        const rankText = latiosReport.rank ? `Rank ${latiosReport.rank}` : 'Rank 53 外';
+        const lineText = latiosReport.label;
+        auditBox.innerHTML = `
+        <div class="bg-cyan-50/70 p-3 rounded-2xl border border-cyan-200/80 text-[11px] space-y-2 text-cyan-950 font-medium">
+            <div class="flex items-center justify-between gap-2 border-b border-cyan-100 pb-2">
+                <span class="font-black text-cyan-700"><i class="fa-solid fa-dragon"></i> 拉帝欧斯专用词条速查</span>
+                <span class="font-mono font-black text-cyan-700 bg-white border border-cyan-100 px-2 py-0.5 rounded-lg">${rankText}</span>
+            </div>
+            <div class="leading-relaxed">
+                当前命中：<span class="font-black text-slate-900 bg-white px-1.5 py-0.5 rounded border border-cyan-100">${latiosReport.comboLabel}</span>
+            </div>
+            <div class="flex items-center justify-between bg-white/80 border border-cyan-100 rounded-xl px-3 py-2">
+                <span class="text-slate-500 font-bold">系统参考档</span>
+                <span class="font-black text-cyan-700">${lineText}</span>
+            </div>
+            <div class="text-[10px] text-cyan-700/80 font-bold">线定义：Rank≤53 和解；Rank≤42 毕业；Rank≤26 大毕业；拉帝欧斯不设置金帮毕业线。</div>
+        </div>`;
+        window.currentSystemRecommendValue = latiosReport.line;
+        if (!window.userManuallyOverrodeResult) {
+            const resSelect = document.getElementById('checkin-result');
+            if (resSelect) resSelect.value = latiosReport.line;
+        }
+        return;
+    }
+
+    if (isLatiasCustomScoringName(standardName)) {
+        const latiasReport = runLatiasPanelAudit(window.checkinSubskills, natureKey);
+        const lineText = latiasReport.label;
+        const sourceHTML = latiasReport.hitSources.map(src => `<li>${src}</li>`).join('');
+        auditBox.innerHTML = `
+        <div class="bg-indigo-50/70 p-3 rounded-2xl border border-indigo-200/80 text-[11px] space-y-2 text-indigo-950 font-medium">
+            <div class="flex items-center justify-between gap-2 border-b border-indigo-100 pb-2">
+                <span class="font-black text-indigo-700"><i class="fa-solid fa-dragon"></i> 拉帝亚斯双标准速查</span>
+                <span class="font-mono font-black text-indigo-700 bg-white border border-indigo-100 px-2 py-0.5 rounded-lg">不显示 Rank</span>
+            </div>
+            <div class="leading-relaxed">
+                判定来源：
+                <ul class="list-disc pl-5 mt-1 text-slate-700 font-bold space-y-0.5">${sourceHTML}</ul>
+            </div>
+            <div class="flex items-center justify-between bg-white/80 border border-indigo-100 rounded-xl px-3 py-2">
+                <span class="text-slate-500 font-bold">系统参考档</span>
+                <span class="font-black text-indigo-700">${lineText}</span>
+            </div>
+            <div class="text-[10px] text-indigo-700/80 font-bold">线定义：拉帝欧斯专用线或普通技能线二者满足其一即可；拉帝亚斯不设置金帮毕业线。</div>
+        </div>`;
+        window.currentSystemRecommendValue = latiasReport.line;
+        if (!window.userManuallyOverrodeResult) {
+            const resSelect = document.getElementById('checkin-result');
+            if (resSelect) resSelect.value = latiasReport.line;
+        }
+        return;
+    }
+
+    if (dict.type === 'special_skill') {
+        auditBox.innerHTML = `<p class="text-center py-2 text-[11px] text-slate-400 font-medium">特殊技能宝暂不提供系统推荐；请按玩家自定义标准手动选择档位。</p>`; return;
+    }
+
     let slot1 = document.getElementById('checkin-slot1') ? document.getElementById('checkin-slot1').value : 'A';
     let slot2 = document.getElementById('checkin-slot2') ? document.getElementById('checkin-slot2').value : 'B';
     let slot3 = document.getElementById('checkin-slot3') ? document.getElementById('checkin-slot3').value : 'B';
