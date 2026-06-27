@@ -891,6 +891,7 @@ function scheduleSaveHistoryToCloud() {
 // ==========================================
 
 let graduationDex = [];
+let graduationBackfillSubmitting = false;
 
 function getGraduationDexStorageKey() {
     return currentCloudUser ? 'sleep_graduation_dex_' + currentCloudUser.id : 'sleep_graduation_dex_guest';
@@ -1699,6 +1700,46 @@ function hideCalibrationCalculatingOverlay() {
     if (overlay) overlay.classList.add('hidden');
 }
 
+function showBlockingProcessOverlay(message = '正在处理…', detail = '数据保存与刷新可能需要几秒钟，请不要重复点击。') {
+    let overlay = document.getElementById('blocking-process-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'blocking-process-overlay';
+        overlay.className = 'fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-[10000] flex items-center justify-center p-4';
+        overlay.innerHTML = `
+            <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 px-6 py-5 flex flex-col items-center gap-3 max-w-sm text-center">
+                <div class="w-12 h-12 rounded-full border-4 border-amber-100 border-t-amber-500 animate-spin"></div>
+                <div class="text-sm font-black text-slate-800" id="blocking-process-message"></div>
+                <div class="text-[11px] text-slate-500 leading-relaxed" id="blocking-process-detail"></div>
+            </div>`;
+        document.body.appendChild(overlay);
+    }
+    const msgEl = document.getElementById('blocking-process-message');
+    const detailEl = document.getElementById('blocking-process-detail');
+    if (msgEl) msgEl.textContent = message;
+    if (detailEl) detailEl.textContent = detail;
+    overlay.classList.remove('hidden');
+}
+
+function hideBlockingProcessOverlay() {
+    const overlay = document.getElementById('blocking-process-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function setGraduationBackfillSubmitting(isSubmitting) {
+    graduationBackfillSubmitting = !!isSubmitting;
+    const btn = document.querySelector('#daily-checkin-modal button[onclick="submitGraduationDexBackfill()"]');
+    if (!btn) return;
+    btn.disabled = !!isSubmitting;
+    btn.classList.toggle('opacity-60', !!isSubmitting);
+    btn.classList.toggle('cursor-not-allowed', !!isSubmitting);
+    if (isSubmitting) {
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在补录，请稍候…';
+    } else {
+        btn.innerHTML = '<i class="fa-solid fa-box-archive"></i> 只补录进毕业库';
+    }
+}
+
 function applyTotalCatchCalibrationSettings() {
     totalCatchCalibration = totalCatchCalibrationDraft || readTotalCatchCalibrationSettingsFromDOM();
     totalCatchCalibrationDraft = null;
@@ -1951,7 +1992,7 @@ function buildCalibrationSpeciesHiddenDistribution(name, pType, hiddenCount, mod
     const pLike = {
         name,
         count: Math.max(1, recorded + n),
-        lockMode: dict.defaultLock || getRecommendedLockModeForName(name) || (pType === 'berry' ? 'two' : 'none'),
+        lockMode: getRecommendedLockModeForName(name) || dict.defaultLock || (pType === 'berry' ? 'two' : 'none'),
         tiedCount: 0,
         gradCount: 0,
         bigGradCount: 0,
@@ -2075,7 +2116,7 @@ function normalizePlayerBox() {
             '雷丘': { standard: '雷丘', type: 'berry', defaultLock: 'two' }, '皮皮': { standard: '皮皮', type: 'berry', defaultLock: 'two' }, '皮可西': { standard: '皮可西', type: 'berry', defaultLock: 'two' },
             '六尾': { standard: '六尾', type: 'berry', defaultLock: 'two' }, '六尾(阿罗拉的样子)': { standard: '六尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' }, '六尾（阿羅拉的樣子）': { standard: '六尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' },
             '九尾': { standard: '九尾', type: 'berry', defaultLock: 'two' }, '九尾(阿罗拉的样子)': { standard: '九尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' }, '九尾（阿羅拉的樣子）': { standard: '九尾(阿罗拉的样子)', type: 'berry', defaultLock: 'two' },
-            '猴怪': { standard: '猴怪', type: 'berry', defaultLock: 'two' }, '火暴猴': { standard: '火暴猴', type: 'berry', defaultLock: 'two' }, '火爆猴': { standard: '火暴猴', type: 'berry', defaultLock: 'two' },
+            '猴怪': { standard: '猴怪', type: 'berry', defaultLock: 'two' }, '火爆猴': { standard: '火爆猴', type: 'berry', defaultLock: 'two' }, '火爆猴': { standard: '火爆猴', type: 'berry', defaultLock: 'two' },
             '嘟嘟': { standard: '嘟嘟', type: 'berry', defaultLock: 'two' }, '嘟嘟利': { standard: '嘟嘟利', type: 'berry', defaultLock: 'two' }, '大岩蛇': { standard: '大岩蛇', type: 'berry', defaultLock: 'two' },
             '卡拉卡拉': { standard: '卡拉卡拉', type: 'berry', defaultLock: 'two' }, '嘎啦嘎啦': { standard: '嘎啦嘎啦', type: 'berry', defaultLock: 'two' },
             '伊布(佳节)': { standard: '伊布(佳节)', type: 'berry', defaultLock: 'two' }, '伊布（佳節）': { standard: '伊布(佳节)', type: 'berry', defaultLock: 'two' },
@@ -2173,7 +2214,7 @@ function normalizePlayerBox() {
             '皮卡丘(佳节)': { standard: '皮卡丘(佳节)', type: 'skill', defaultLock: 'none' }, '皮卡丘（佳節）': { standard: '皮卡丘(佳节)', type: 'skill', defaultLock: 'none' },
             '穿山鼠': { standard: '穿山鼠', type: 'skill', defaultLock: 'none' }, '穿山王': { standard: '穿山王', type: 'skill', defaultLock: 'none' },
             '宝宝丁': { standard: '宝宝丁', type: 'skill', defaultLock: 'none' },'胖丁': { standard: '胖丁', type: 'skill', defaultLock: 'none' }, '胖可丁': { standard: '胖可丁', type: 'skill', defaultLock: 'none' },
-            '喵喵': { standard: '喵喵', type: 'skill', defaultLock: 'none' }, '穿山王': { standard: '猫老大', type: 'skill', defaultLock: 'none' }, '貓老大': { standard: '猫老大', type: 'skill', defaultLock: 'none' },
+            '喵喵': { standard: '喵喵', type: 'skill', defaultLock: 'none' }, '猫老大': { standard: '猫老大', type: 'skill', defaultLock: 'none' }, '貓老大': { standard: '猫老大', type: 'skill', defaultLock: 'none' },
             '小磁怪': { standard: '小磁怪', type: 'skill', defaultLock: 'none' }, '三合一磁怪': { standard: '三合一磁怪', type: 'skill', defaultLock: 'none' },
             '波克比': { standard: '波克比', type: 'skill', defaultLock: 'none' }, '波克基古': { standard: '波克基古', type: 'skill', defaultLock: 'none' },
             '雷公': { standard: '雷公', type: 'skill', defaultLock: 'none' }, '炎帝': { standard: '炎帝', type: 'skill', defaultLock: 'none' }, '水君': { standard: '水君', type: 'skill', defaultLock: 'none' },
@@ -2327,7 +2368,7 @@ const EVOLUTION_STAGE_META = {
         "stage": 0,
         "familySize": 2
     },
-    "火暴猴": {
+    "火爆猴": {
         "line": "猴怪",
         "stage": 1,
         "familySize": 2
@@ -4326,9 +4367,9 @@ function getRecommendedLockModeForName(rawName) {
     const dict = pokemonDictionary[standardName] || pokemonDictionary[rawName];
 
     // 39级后默认策略：
-    // 树果型默认锁2金；食材型、技能型、特殊技能型默认不锁金。
+    // 树果型与特殊技能型默认锁2金；食材型、普通技能型默认不锁金。
     if (!dict) return 'two';
-    return dict.type === 'berry' ? 'two' : 'none';
+    return (dict.type === 'berry' || dict.type === 'special_skill') ? 'two' : 'none';
 }
 
 function applyRecommendedLockModeForName(rawName, selectId = 'checkin-lock') {
@@ -4339,7 +4380,7 @@ function applyRecommendedLockModeForName(rawName, selectId = 'checkin-lock') {
 
 const FOOD_MODE_BOTH = [
             "迷你龙", "哈克龙", "快龙", "幼基拉斯", "沙基拉斯", "班基拉斯", 
-            "润水鸭", "涌跃鸭", "狂欢浪舞鸭", "强颚鸡母虫", "虫电宝", "锹农炮虫", 
+            "强颚鸡母虫", "虫电宝", "锹农炮虫", 
             "杰尼龟", "卡咪龟", "水箭龟", "小猫怪", "勒克猫", "伦琴猫", "童偶熊", "穿着熊", "萌虻", "蝶结萌虻"
         ];
         const FOOD_MODE_ABB_ONLY = ["鬼斯", "鬼斯通", "耿鬼"];
@@ -6693,7 +6734,29 @@ function maybeSyncBackfilledGraduationToBox(state) {
     return { synced: true, cancelled: false, parts };
 }
 
+function closeDailyCheckInModalSafely() {
+    const modal = document.getElementById('daily-checkin-modal');
+    if (!modal) return;
+
+    // 先立刻隐藏，避免 confirm 结束后用户看到旧面板还停着，误以为没有提交成功。
+    modal.classList.add('hidden');
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+
+    // 再从 DOM 中移除。双保险：同步移除 + 下一轮事件循环再检查一次。
+    if (modal.parentNode) modal.parentNode.removeChild(modal);
+    setTimeout(() => {
+        const stillThere = document.getElementById('daily-checkin-modal');
+        if (stillThere && stillThere.parentNode) stillThere.parentNode.removeChild(stillThere);
+    }, 0);
+}
+
 function submitGraduationDexBackfill() {
+    if (graduationBackfillSubmitting) {
+        showToast('正在补录中，请稍候，不要重复点击');
+        return;
+    }
+
     const state = readCurrentCheckInPanelState();
 
     if (!state.name) {
@@ -6706,33 +6769,66 @@ function submitGraduationDexBackfill() {
         return;
     }
 
-    addGraduationDexEntry({
-        source: 'manual',
-        nickname: state.nickname || state.name,
-        capture: state,
-        current: Object.assign({}, state, { nickname: state.nickname || state.name })
-    });
+    setGraduationBackfillSubmitting(true);
+    showBlockingProcessOverlay(
+        '正在保存补录出货档案…',
+        '如果接下来弹出“大仓总账同步”提示，请完成选择。保存期间请不要重复点击，避免重复补录。'
+    );
 
-    const syncResult = maybeSyncBackfilledGraduationToBox(state);
+    // 让“录入中”遮罩先绘制出来，再执行可能较重的保存 / 同步 / 刷新逻辑。
+    setTimeout(() => {
+        let syncResult = { synced: false, cancelled: false, parts: [] };
+        let syncError = null;
 
-    const modal = document.getElementById('daily-checkin-modal');
-    if (modal) modal.remove();
+        try {
+            addGraduationDexEntry({
+                source: 'manual',
+                nickname: state.nickname || state.name,
+                capture: state,
+                current: Object.assign({}, state, { nickname: state.nickname || state.name })
+            });
 
-    const dexModal = document.getElementById('graduation-dex-modal');
-    if (dexModal) {
-        renderGraduationDexList();
-    } else {
-        openGraduationDexModal();
-    }
+            // 这里会弹出“是否同步补足大仓总账”的确认框。
+            // 无论用户点确定还是取消，补录动作都已经完成，后续都必须关闭补录面板。
+            syncResult = maybeSyncBackfilledGraduationToBox(state) || syncResult;
 
-    updateBoxUI(false);
-    if (syncResult && syncResult.synced) {
-        showToast(`已补录并同步大仓：${syncResult.parts.join(' / ')}`);
-    } else if (syncResult && syncResult.cancelled) {
-        showToast(`已补录【${state.name}】到出货库，未同步大仓`);
-    } else {
-        showToast(`已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
-    }
+            showBlockingProcessOverlay(
+                syncResult && syncResult.synced ? '正在同步大仓并刷新评分…' : '正在刷新出货库档案…',
+                '补录已经写入，请稍候完成界面刷新。'
+            );
+        } catch (err) {
+            console.error('补录出货库同步大仓时发生错误：', err);
+            syncError = err;
+        }
+
+        try {
+            // 保存完成后必须关闭补录面板，避免用户误以为“点确定后没有反应”。
+            closeDailyCheckInModalSafely();
+
+            const dexModal = document.getElementById('graduation-dex-modal');
+            if (dexModal) {
+                renderGraduationDexList();
+            }
+
+            updateBoxUI(false);
+
+            if (syncError) {
+                showToast(`已补录【${state.name}】到出货库；同步大仓时发生错误，请稍后核对`);
+                return;
+            }
+
+            if (syncResult && syncResult.synced) {
+                showToast(`已补录并同步大仓：${syncResult.parts.join(' / ')}`);
+            } else if (syncResult && syncResult.cancelled) {
+                showToast(`已补录【${state.name}】到出货库，未同步大仓`);
+            } else {
+                showToast(`已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
+            }
+        } finally {
+            setGraduationBackfillSubmitting(false);
+            hideBlockingProcessOverlay();
+        }
+    }, 40);
 }
 
 function openEditGraduationDexModal(id, mode = 'current') {
@@ -6931,14 +7027,13 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
 
     saveGraduationDexToLocal();
 
+    // 保存完成后必须关闭补录面板，避免用户误以为“点确定后没有反应”。
     const modal = document.getElementById('daily-checkin-modal');
     if (modal) modal.remove();
 
     const dexModal = document.getElementById('graduation-dex-modal');
     if (dexModal) {
         renderGraduationDexList();
-    } else {
-        openGraduationDexModal();
     }
 
     updateBoxUI(false);
@@ -7525,7 +7620,7 @@ function refreshSubskillSlotsUI() {
                 : sk.name;
 
             return `
-            <button onclick="handleGridSkillSelect('${sk.key}')" class="px-1 py-1.5 rounded-xl border text-[10px] transition duration-150 truncate hover:scale-[1.02] active:scale-95 text-center ${btnClass}" title="${titleText}">
+            <button onclick="handleGridSkillSelect('${sk.key}')" class="px-1.5 py-1.5 min-h-[38px] rounded-xl border text-[10px] leading-tight whitespace-normal break-keep transition duration-150 hover:scale-[1.02] active:scale-95 text-center flex items-center justify-center ${btnClass}" title="${titleText}">
                 ${sk.name}
             </button>`;
         }).join('');
