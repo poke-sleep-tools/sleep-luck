@@ -160,9 +160,10 @@
                         <li><strong>老玩家可启用总捕捉数校准</strong>：如果历史捕捉太多无法全部补录，可以填写游戏内总捕捉数与三系体感比例，系统会把未录入捕捉作为未毕业背景样本进行近似补正。</li>
                         <li><strong>大仓和毕业库分工不同</strong>：大仓负责统计总捕捉与出货数量；毕业库负责保存具体出货个体面板。补录毕业库不会自动增加大仓捕捉数。</li>
                         <li><strong>编辑历史记录会影响大仓</strong>：历史抽卡库是真实流水，修改或删除历史记录可能改变大仓统计；出货库里的“编辑当前”只改展示档案，不会影响大仓。</li>
-                        <li><strong>特殊技能型暂不参与完整测评</strong>：部分特殊技能型宝可梦由于计算模型限制，暂时无法完整纳入运气和气运计算。</li>
+                        <li><strong>特殊技能型暂定评分</strong>：特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后，除拉帝亚斯、拉帝欧斯、伊布及伊布进化型外，暂按树果宝概率映射参与运气测评。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
                         <li><strong>和解口径说明</strong>：默认主评分不要求完整记录所有和解；已录入的少量和解会按“自用和解”处理，理解为该品种至少曾出现过可留用的和解个体，而不是完整和解总数。</li>
+                        <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，已录入的闪光和解及以上个体会作为额外稀有加成参与评分。</li>
                     </ul>
                 </div>
 
@@ -287,8 +288,8 @@
             </div>
         </div>
 
-        <!-- 顶栏七列统计卡片 -->
-        <div class="grid grid-cols-2 md:grid-cols-7 gap-4">
+        <!-- 顶栏八列统计卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-8 gap-4">
             <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
                 <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">总收录宝可梦</div>
                 <div class="text-2xl font-black text-slate-800 mt-1" id="total-species">0 种</div>
@@ -327,6 +328,12 @@
                 </div>
                 <div class="text-2xl font-black text-red-600 mt-1 font-mono" id="total-gold-grad">0</div>
             </div>
+            <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center col-span-2 md:col-span-1 border-l-4 border-l-yellow-400">
+                <div class="text-[10px] text-yellow-600 font-bold uppercase tracking-wider flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-sparkles text-yellow-500"></i>闪光出货数
+                </div>
+                <div class="text-2xl font-black text-yellow-600 mt-1 font-mono" id="total-shiny-useful">0</div>
+            </div>
         </div>
 
         <!-- 🚀 气运天命星盘看板 -->
@@ -336,7 +343,8 @@
                     <div class="w-24 h-24 bg-white rounded-full shadow-sm flex flex-col items-center justify-center text-center p-1">
                         <span class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">大仓总分</span>
                         <span class="text-2xl font-black text-slate-900 tracking-tight leading-none my-0.5 font-mono" id="pie-total-score">-</span>
-                        <span class="text-[9px] text-slate-500 font-extrabold" id="pie-dominant-type">-</span>
+                        <span class="text-[9px] text-indigo-600 font-black leading-none" id="pie-total-rate">击败 -%</span>
+                        <span class="text-[9px] text-slate-500 font-extrabold mt-0.5" id="pie-dominant-type">-</span>
                     </div>
                 </div>
             </div>
@@ -351,8 +359,8 @@
         </div>
 
         <!-- 战绩追加录入面板 -->
-        <div class="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm flex flex-col lg:flex-row gap-4 items-end">
-            <div class="w-full lg:flex-1 relative" onclick="event.stopPropagation()">
+        <div class="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 items-end">
+            <div class="w-full md:col-span-2 xl:col-span-4 relative" onclick="event.stopPropagation()">
                 <label class="block text-xs font-bold text-slate-500 mb-1.5">
                     宝可梦名字 <span class="text-[10px] text-slate-400 font-normal">(自动弹出下拉提示栏)</span>
                 </label>
@@ -360,12 +368,12 @@
                 <div id="suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-60 overflow-y-auto"></div>
             </div>
             
-            <div class="w-full lg:w-[100px]">
+            <div class="w-full xl:col-span-2">
                 <label class="block text-xs font-bold text-slate-500 mb-1.5">追加捕捉数</label>
                 <input type="number" id="input-count" min="0" value="0" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-mono font-bold text-center focus:outline-none focus:border-slate-400">
             </div>
             
-            <div class="w-full lg:w-[120px]">
+            <div class="w-full xl:col-span-2">
                 <label class="block text-xs font-bold text-slate-500 mb-1.5">40+锁金策略</label>
                 <select id="input-lock-mode" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold focus:outline-none focus:border-slate-400">
                     <option value="none">不锁金</option>
@@ -374,7 +382,7 @@
                 </select>
             </div>
 
-            <div class="w-full lg:w-[430px]">
+            <div class="w-full md:col-span-2 xl:col-span-12 xl:order-last">
                 <label class="block text-xs font-bold text-slate-500 mb-1.5">本次追加的具体出货数量</label>
                 <div id="add-quantities-container" class="w-full">
                     <div class="grid grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
@@ -398,7 +406,11 @@
                 </div>
             </div>
             
-            <button onclick="addPokemon()" class="w-full lg:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-6 py-3 rounded-xl transition duration-150 flex items-center justify-center gap-2 whitespace-nowrap">
+            <div class="w-full xl:col-span-2">
+                <label class="block text-xs font-bold text-yellow-600 mb-1.5">✨ 闪光出货</label>
+                <input type="number" id="num-shiny-useful" min="0" value="0" class="w-full bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-2.5 text-xs font-mono font-black text-center text-yellow-700 focus:outline-none focus:border-yellow-400" title="闪光和解及以上数量，不细分和解/毕业/大毕业/金帮">
+            </div>
+            <button onclick="addPokemon()" class="w-full xl:col-span-2 h-[42px] bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-6 py-3 rounded-xl transition duration-150 flex items-center justify-center gap-2 whitespace-nowrap">
                 <i class="fa-solid fa-pen-fancy"></i> 录入到 Box
             </button>
         </div>
@@ -431,6 +443,9 @@
                     </span>
                     <button onclick="toggleShowOnlyGraduated()" id="filter-only-graduated" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="切换是否只显示已经有记录出货或自用和解的宝可梦">
                         <i class="fa-solid fa-eye-slash"></i> 只看已出货: 关
+                    </button>
+                    <button onclick="toggleShinyLuckBonus()" id="toggle-shiny-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="切换是否把闪光和解及以上个体作为额外幸运加成纳入评分">
+                        <i class="fa-solid fa-sparkles"></i> 闪光加成: 关
                     </button>
                     <label class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-black text-slate-400 shadow-sm">
                         <i class="fa-solid fa-arrow-down-wide-short text-slate-400"></i>
@@ -600,6 +615,7 @@ let editingIndices = {};
 let currentFilterType = 'all'; 
 let showOnlyGraduated = false;
 let boxSortMode = 'entry_desc';
+let includeShinyLuckBonus = false;
 
 let saveBoxTimer = null;
 let saveHistoryTimer = null;
@@ -710,7 +726,8 @@ function rebuildTodayCheckInsFromHistory() {
             track: log.track || null,
             subskills: log.subskills || { sub1: 'none', sub2: 'none', sub3: 'none', sub4: 'none', sub5: 'none' },
             nature: log.nature || 'blank',
-            foodCombo: log.foodCombo || 'ABB'
+            foodCombo: log.foodCombo || 'ABB',
+            isShiny: !!log.isShiny
         }));
 
     todayCheckIns = mergeTodayCheckIns(todayCheckIns, historyTodayLogs);
@@ -896,7 +913,8 @@ function cloneGraduationPanelState(payload = {}) {
             payload.subskills || {}
         ))),
         nature: payload.nature || 'blank',
-        foodCombo: payload.foodCombo || 'ABB'
+        foodCombo: payload.foodCombo || 'ABB',
+        isShiny: !!payload.isShiny
     };
 }
 
@@ -1175,16 +1193,18 @@ function getBoxGraduationDexAudit(p) {
     };
 
     const expectedTotal = expected.grad + expected.bigGrad + expected.goldGrad;
+    const expectedShiny = Math.max(0, Number(p.shinyUsefulCount || 0));
 
     const recorded = { grad: 0, bigGrad: 0, goldGrad: 0 };
+    let recordedShiny = 0;
     normalizeGraduationDex();
 
     graduationDex.forEach(item => {
         const cap = getGraduationCapture(item);
         if (!cap || cap.name !== p.name) return;
         if (!isGraduationResult(cap.result)) return;
-        if (recorded[cap.result] === undefined) recorded[cap.result] = 0;
-        recorded[cap.result] += 1;
+        if (recorded[cap.result] !== undefined) recorded[cap.result] += 1;
+        if (cap.isShiny) recordedShiny += 1;
     });
 
     const recordedTotal = recorded.grad + recorded.bigGrad + recorded.goldGrad;
@@ -1203,6 +1223,8 @@ function getBoxGraduationDexAudit(p) {
 
     const missingTotal = missing.grad + missing.bigGrad + missing.goldGrad;
     const extraTotal = extra.grad + extra.bigGrad + extra.goldGrad;
+    const missingShiny = Math.max(0, expectedShiny - recordedShiny);
+    const extraShiny = Math.max(0, recordedShiny - expectedShiny);
 
     return {
         expected,
@@ -1213,7 +1235,11 @@ function getBoxGraduationDexAudit(p) {
         extra,
         missingTotal,
         extraTotal,
-        isComplete: expectedTotal > 0 && missingTotal === 0 && extraTotal === 0
+        expectedShiny,
+        recordedShiny,
+        missingShiny,
+        extraShiny,
+        isComplete: expectedTotal > 0 && missingTotal === 0 && extraTotal === 0 && missingShiny === 0 && extraShiny === 0
     };
 }
 
@@ -1227,20 +1253,23 @@ function makeGraduationAuditPieces(counts) {
 function getGraduationDexAuditHTML(p) {
     const audit = getBoxGraduationDexAudit(p);
 
-    // 和解不进入毕业库，所以只有毕业 / 大毕业 / 金帮毕业总数大于 0 时才显示对账条
-    if (audit.expectedTotal <= 0) return '';
+    if (audit.expectedTotal <= 0 && audit.recordedTotal <= 0 && audit.expectedShiny <= 0 && audit.recordedShiny <= 0) return '';
 
     const firstMissingKey = ['bigGrad', 'goldGrad', 'grad'].find(key => (audit.missing[key] || 0) > 0) || 'bigGrad';
     const prefillPayload = JSON.stringify({ name: p.name, result: firstMissingKey }).replace(/'/g, '&apos;');
+    const shinyLine = (audit.expectedShiny > 0 || audit.recordedShiny > 0)
+        ? `；闪光出货 <span class="font-mono">${audit.recordedShiny}/${audit.expectedShiny}</span>${audit.missingShiny > 0 ? `，还缺 ${audit.missingShiny}` : ''}${audit.extraShiny > 0 ? `，档案多出 ${audit.extraShiny}` : ''}`
+        : '';
 
-    if (audit.missingTotal > 0) {
+    if (audit.missingTotal > 0 || audit.missingShiny > 0) {
         const missingText = makeGraduationAuditPieces(audit.missing).join(' / ');
+        const normalText = audit.missingTotal > 0 ? `还缺 ${missingText}` : '普通毕业档案已对齐';
         const extraText = audit.extraTotal > 0 ? `；另有未对上的档案：${makeGraduationAuditPieces(audit.extra).join(' / ')}` : '';
         return `
         <div class="rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[10px]">
             <div class="flex items-start gap-1.5 text-amber-800 font-bold leading-relaxed">
                 <i class="fa-solid fa-triangle-exclamation mt-0.5 text-amber-500"></i>
-                <span>毕业库待补录：已录 <span class="font-mono">${audit.recordedTotal}/${audit.expectedTotal}</span>，还缺 ${missingText}${extraText}</span>
+                <span>出货库待补录/核对：已录 <span class="font-mono">${audit.recordedTotal}/${audit.expectedTotal}</span>，${normalText}${extraText}${shinyLine}</span>
             </div>
             <button onclick='openGraduationBackfillModal(${prefillPayload})' class="self-start sm:self-center bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-2.5 py-1 rounded-lg shadow-sm whitespace-nowrap">
                 <i class="fa-solid fa-plus"></i> 补录档案
@@ -1248,19 +1277,20 @@ function getGraduationDexAuditHTML(p) {
         </div>`;
     }
 
-    if (audit.extraTotal > 0) {
-        const extraText = makeGraduationAuditPieces(audit.extra).join(' / ');
+    if (audit.extraTotal > 0 || audit.extraShiny > 0) {
+        const extraText = audit.extraTotal > 0 ? makeGraduationAuditPieces(audit.extra).join(' / ') : '';
+        const normalText = audit.extraTotal > 0 ? `普通档案多出 ${extraText}` : '普通毕业档案已对齐';
         return `
         <div class="rounded-2xl border border-rose-200 bg-rose-50/70 px-3 py-2 flex items-start gap-1.5 text-[10px] text-rose-700 font-bold leading-relaxed">
             <i class="fa-solid fa-circle-exclamation mt-0.5 text-rose-500"></i>
-            <span>毕业库档案多于大仓统计：已录 <span class="font-mono">${audit.recordedTotal}/${audit.expectedTotal}</span>，多出 ${extraText}。未来做精确运势前建议核对。</span>
+            <span>出货库档案多于大仓统计：已录 <span class="font-mono">${audit.recordedTotal}/${audit.expectedTotal}</span>，${normalText}${shinyLine}。建议同步或核对大仓总账。</span>
         </div>`;
     }
 
     return `
     <div class="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 flex items-center gap-1.5 text-[10px] text-emerald-700 font-black">
         <i class="fa-solid fa-circle-check text-emerald-500"></i>
-        <span>毕业库已全部录入：<span class="font-mono">${audit.recordedTotal}/${audit.expectedTotal}</span></span>
+        <span>出货库已全部录入：<span class="font-mono">${audit.recordedTotal}/${audit.expectedTotal}</span>${shinyLine}</span>
     </div>`;
 }
 
@@ -1297,7 +1327,8 @@ function syncGraduationDexFromHistoryRecord(item) {
             track: item.track,
             subskills: item.subskills,
             nature: item.nature,
-            foodCombo: item.foodCombo
+            foodCombo: item.foodCombo,
+            isShiny: !!item.isShiny
         });
 
         if (existing) {
@@ -1475,11 +1506,12 @@ function getRecordedCatchesBySummaryType() {
 }
 
 function getRecordedEvaluableCatchesBySummaryType() {
-    // 用于评分校准：special_skill 不参与完整测评，但仍可被记录在大仓总捕捉中。
+    // 用于评分校准：普通三系 + 暂定参与评分的特殊技能宝纳入测评；拉帝/伊布系等特殊技能仍排除。
     const out = { berry: 0, food: 0, skill: 0 };
     (playerBox || []).forEach(p => {
         const dict = pokemonDictionary[p.name];
-        if (!dict || dict.type === 'special_skill') return;
+        if (!dict) return;
+        if (dict.type === 'special_skill' && !isSpecialSkillScoredByBerryModel(p.name)) return;
         const type = getPokemonSummaryType(p.name);
         if (type && out[type] !== undefined) out[type] += Number(p.count) || 0;
     });
@@ -1835,9 +1867,13 @@ function getRecordedCatchesBySpeciesName() {
 function getEvaluableStandardPokemonByType(pType) {
     const map = new Map();
     Object.values(pokemonDictionary || {}).forEach(item => {
-        if (!item || !item.standard || item.type !== pType) return;
-        // 当前完整评分只覆盖 berry / food / skill；special_skill 暂不进入校准模型。
-        if (!['berry', 'food', 'skill'].includes(item.type)) return;
+        if (!item || !item.standard) return;
+        if (pType === 'skill') {
+            if (!(item.type === 'skill' || isSpecialSkillScoredByBerryModel(item.standard))) return;
+        } else {
+            if (item.type !== pType) return;
+        }
+        if (!['berry', 'food', 'skill'].includes(item.type) && !isSpecialSkillScoredByBerryModel(item.standard)) return;
         if (!map.has(item.standard)) map.set(item.standard, item);
     });
     return Array.from(map.keys());
@@ -1893,7 +1929,7 @@ function getCalibrationSpeciesAllocations(pType) {
             const meta = getEvolutionStageMeta(name);
             return {
                 name,
-                pType,
+                pType: getLuckScoringTypeForPokemon(name) || pType,
                 count: allocated[name],
                 recorded,
                 estimatedTotal: recorded + allocated[name],
@@ -1919,7 +1955,8 @@ function buildCalibrationSpeciesHiddenDistribution(name, pType, hiddenCount, mod
         tiedCount: 0,
         gradCount: 0,
         bigGradCount: 0,
-        goldGradCount: 0
+        goldGradCount: 0,
+        shinyUsefulCount: 0
     };
 
     const isTiedIncluded = SPECIAL_STANDARD_DOWNGRADE.includes(name);
@@ -1952,7 +1989,7 @@ function buildCalibrationUnrecordedSpeciesModelDistribution(pType, count, mode =
 
     let dist = { 0: 1 };
     allocations.forEach(item => {
-        dist = convolveLuckDistribution(dist, buildCalibrationSpeciesHiddenDistribution(item.name, pType, item.count, mode));
+        dist = convolveLuckDistribution(dist, buildCalibrationSpeciesHiddenDistribution(item.name, item.pType || pType, item.count, mode));
     });
     return dist;
 }
@@ -1992,6 +2029,8 @@ function normalizePlayerBox() {
         if (!p.lockMode) p.lockMode = getRecommendedLockModeForName(p.name); 
         if (!p.evalMode) p.evalMode = 'grad'; 
         ensureFoodTrackCounts(p);
+        if (p.shinyUsefulCount === undefined) p.shinyUsefulCount = 0;
+        p.shinyUsefulCount = Math.max(0, Number(p.shinyUsefulCount) || 0);
 
         // 旧版双轨数据迁移：如果旧字段只有 AAA/ABB，保留；非主流从 0 开始。
         if (p.tiedCount_AAA === undefined) p.tiedCount_AAA = 0;
@@ -2148,7 +2187,7 @@ function normalizePlayerBox() {
             '小果然': { standard: '小果然', type: 'skill', defaultLock: 'none' },
             '海豹球(佳节)': { standard: '海豹球(佳节)', type: 'skill', defaultLock: 'none' }, '海豹球（佳節）': { standard: '海豹球(佳节)', type: 'skill', defaultLock: 'none' },
             '拉帝亚斯': { standard: '拉帝亚斯', type: 'special_skill', defaultLock: 'none' }, '拉帝亞斯': { standard: '拉帝亚斯', type: 'special_skill', defaultLock: 'none' },
-            '拉帝欧斯': { standard: '拉帝欧斯', type: 'special_skill', defaultLock: 'none' }, '拉帝歐斯': { standard: '拉帝欧斯', type: 'skill', defaultLock: 'none' },
+            '拉帝欧斯': { standard: '拉帝欧斯', type: 'special_skill', defaultLock: 'none' }, '拉帝歐斯': { standard: '拉帝欧斯', type: 'special_skill', defaultLock: 'none' },
             '自爆磁怪': { standard: '自爆磁怪', type: 'skill', defaultLock: 'none' }, '波克基斯': { standard: '波克基斯', type: 'skill', defaultLock: 'none' },
             '艾路雷朵': { standard: '艾路雷朵', type: 'skill', defaultLock: 'none' }, '克雷色利亚': { standard: '克雷色利亚', type: 'skill', defaultLock: 'none' }, '克雷色利亞': { standard: '克雷色利亚', type: 'skill', defaultLock: 'none' },
             '石居蟹': { standard: '石居蟹', type: 'skill', defaultLock: 'none' }, '岩殿居蟹': { standard: '岩殿居蟹', type: 'skill', defaultLock: 'none' },
@@ -3310,6 +3349,7 @@ function getEvolutionCatchWeight(name) {
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
     let dict = pokemonDictionary[standardName];
     let isFood = dict && dict.type === 'food';
+    let isSpecialThreeTier = dict && dict.type === 'special_skill';
 
     if (isFood) {
         container.innerHTML = `
@@ -3322,7 +3362,7 @@ function getEvolutionCatchWeight(name) {
         </div>`;
     } else {
         container.innerHTML = `
-        <div class="grid grid-cols-4 gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
+        <div class="grid ${isSpecialThreeTier ? 'grid-cols-3' : 'grid-cols-4'} gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
                 <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
@@ -3331,15 +3371,17 @@ function getEvolutionCatchWeight(name) {
                 <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
                 <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
             </div>
+            ${isSpecialThreeTier ? '' : `
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-purple-600 mb-1">追加大毕业</span>
                 <input type="number" id="num-big-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-purple-600 focus:outline-none focus:border-purple-400">
-            </div>
+            </div>`}
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-red-600 mb-1">追加金帮毕业</span>
                 <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
             </div>
-        </div>`;
+        </div>
+        ${isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1 px-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档位。</div>` : ''}`;
     }
 }
 
@@ -3446,9 +3488,9 @@ function getEvolutionCatchWeight(name) {
             }
 
             const stats = {
-                berry: { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
-                food:  { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
-                skill: { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 }
+                berry: { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0, shinyUseful: 0 },
+                food:  { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0, shinyUseful: 0 },
+                skill: { species: 0, catches: 0, tied: 0, grad: 0, bigGrad: 0, goldGrad: 0, shinyUseful: 0 }
             };
 
             playerBox.forEach(p => {
@@ -3461,6 +3503,7 @@ function getEvolutionCatchWeight(name) {
                 stats[type].grad += Number(p.gradCount || 0);
                 stats[type].bigGrad += Number(p.bigGradCount || 0);
                 stats[type].goldGrad += Number(p.goldGradCount || 0);
+                stats[type].shinyUseful += Number(p.shinyUsefulCount || 0);
             });
 
             const configs = [
@@ -3524,11 +3567,12 @@ function getEvolutionCatchWeight(name) {
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
                         ${makeMiniStat('自用和解', s.tied, 'text-amber-600')}
                         ${makeMiniStat('毕业', s.grad, 'text-slate-700')}
                         ${makeMiniStat('大毕业', s.bigGrad, 'text-purple-600')}
                         ${makeMiniStat('金帮', s.goldGrad, 'text-red-600')}
+                        ${makeMiniStat('闪光出货', s.shinyUseful, 'text-yellow-600')}
                     </div>
                 </div>`;
             }).join('');
@@ -3561,7 +3605,7 @@ function getEvolutionCatchWeight(name) {
             
             let totalEvalCatches = playerBox.reduce((sum, item) => {
                 let dict = pokemonDictionary[item.name];
-                if (dict && dict.type === 'special_skill') return sum;
+                if (dict && dict.type === 'special_skill' && !isSpecialSkillScoredByBerryModel(item.name)) return sum;
                 return sum + item.count;
             }, 0);
 
@@ -3569,6 +3613,7 @@ function getEvolutionCatchWeight(name) {
             let totalGrad = playerBox.reduce((sum, item) => sum + item.gradCount, 0);
             let totalBigGrad = playerBox.reduce((sum, item) => sum + item.bigGradCount, 0);
             let totalGoldGrad = playerBox.reduce((sum, item) => sum + item.goldGradCount, 0);
+            let totalShinyUseful = playerBox.reduce((sum, item) => sum + (Number(item.shinyUsefulCount) || 0), 0);
 
             document.getElementById('total-species').innerText = totalSpecies + ' 种';
             document.getElementById('total-catches').innerText = totalCatches + ' 只';
@@ -3578,6 +3623,8 @@ function getEvolutionCatchWeight(name) {
             document.getElementById('total-grad').innerText = totalGrad;
             document.getElementById('total-big-grad').innerText = totalBigGrad;
             document.getElementById('total-gold-grad').innerText = totalGoldGrad;
+            const shinyTotalEl = document.getElementById('total-shiny-useful');
+            if (shinyTotalEl) shinyTotalEl.innerText = totalShinyUseful;
 
             renderTotalCatchCalibrationUI();
             renderTypeSummaryPanel();
@@ -3601,7 +3648,7 @@ function getEvolutionCatchWeight(name) {
                 let matchGraduated = true;
                 if (showOnlyGraduated) {
                     // 统一口径：已录入和解视为“自用和解”，也属于已出货/已留用档案。
-                    let qualifiesCount = (p.goldGradCount || 0) + (p.bigGradCount || 0) + (p.gradCount || 0) + (p.tiedCount || 0);
+                    let qualifiesCount = (p.goldGradCount || 0) + (p.bigGradCount || 0) + (p.gradCount || 0) + (p.tiedCount || 0) + (p.shinyUsefulCount || 0);
                     matchGraduated = qualifiesCount > 0;
                 }
                 
@@ -3622,6 +3669,17 @@ function getEvolutionCatchWeight(name) {
                 } else {
                     onlyGradBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1 ml-2";
                     onlyGradBtn.innerHTML = `<i class="fa-solid fa-eye-slash"></i> 只看已出货: 关`;
+                }
+            }
+
+            const shinyBtn = document.getElementById('toggle-shiny-luck');
+            if (shinyBtn) {
+                if (includeShinyLuckBonus) {
+                    shinyBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-yellow-500 text-slate-950 shadow-sm flex items-center gap-1 border border-yellow-400";
+                    shinyBtn.innerHTML = `<i class="fa-solid fa-sparkles"></i> 闪光加成: 开`;
+                } else {
+                    shinyBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1";
+                    shinyBtn.innerHTML = `<i class="fa-solid fa-sparkles"></i> 闪光加成: 关`;
                 }
             }
             
@@ -3686,6 +3744,8 @@ function getEvolutionCatchWeight(name) {
                     // 刷新圆环正中心的全局打分显示
                     const totalScoreEl = document.getElementById('pie-total-score');
                     if (totalScoreEl) totalScoreEl.innerText = scoreBoxTotal.toFixed(1);
+                    const totalRateEl = document.getElementById('pie-total-rate');
+                    if (totalRateEl) totalRateEl.innerText = rateAll !== null ? `击败 ${rateAll}%` : '击败 -%';
 
                     let dominantText = "平庸之辈";
                     if (eBerry >= eFood && eBerry >= eSkill) dominantText = "树果天命";
@@ -3720,6 +3780,7 @@ function getEvolutionCatchWeight(name) {
                                 <div class="text-2xl font-black text-amber-400 mt-1 font-mono">${scoreBoxTotal.toFixed(1)} <span class="text-xs font-bold text-slate-400">pts</span></div>
                             </div>
                             <div class="flex flex-col gap-1">
+                                <div class="mt-0.5">${makeAbsBadge(rateAll)}</div>
                                 <div class="mt-0.5">${getBoxTotalBadge(scoreBoxTotal)}</div>
                                 <div class="text-[9px] text-slate-400 font-semibold">有效测评品类: ${countValidPairs} 种</div>
                                 <div class="text-[9px] text-slate-500 font-semibold">${calibrationNoteText}</div>
@@ -3795,6 +3856,9 @@ function getEvolutionCatchWeight(name) {
                 let isFoodType = dict && dict.type === 'food';
                 let isAbbOnly = FOOD_MODE_ABB_ONLY.includes(p.name);
                 let isSpecialDowngrade = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
+                let isSpecialThreeTier = isSpecialSkillThreeTierDisplay(p.name);
+                let isSpecialScored = isSpecialSkillScoredByBerryModel(p.name);
+                let isSpecialExcluded = isSpecialSkillPokemonName(p.name) && !isSpecialScored;
                 let typeLabel = '未知';
                 if (dict) typeLabel = dict.type === 'berry' ? '树果' : (dict.type === 'food' ? '食材' : (dict.type === 'skill' ? '技能' : '特殊技能'));
                 if (isBoth) typeLabel += "·双轨模式";
@@ -3842,14 +3906,23 @@ function getEvolutionCatchWeight(name) {
                                 </select>
                             </div>
                         </div>
-                        ${isFoodType ? getFoodTrackEditHTML(p, idx) : `
-                        <div class="grid ${isSpecialDowngrade ? 'grid-cols-3' : 'grid-cols-4'} gap-1 text-center bg-white p-2 rounded-xl border border-slate-200">
+                        ${isFoodType ? getFoodTrackEditHTML(p, idx) + `
+                        <div class="bg-yellow-50/70 border border-yellow-200 rounded-xl p-2 text-center">
+                            <span class="block text-[9px] text-yellow-700 font-black mb-0.5">✨ 闪光出货总数</span>
+                            <input type="number" id="edit-shiny-${idx}" value="${p.shinyUsefulCount || 0}" class="w-full border border-yellow-200 rounded text-center text-xs font-mono py-0.5 text-yellow-700 bg-white">
+                        </div>` : `
+                        <div class="grid ${isSpecialDowngrade || isSpecialThreeTier ? 'grid-cols-3' : 'grid-cols-4'} gap-1 text-center bg-white p-2 rounded-xl border border-slate-200">
                             ${isSpecialDowngrade ? '' : `
                                 <div><span class="block text-[9px] text-amber-600 font-bold mb-0.5">总和解</span><input type="number" id="edit-tied-${idx}" value="${p.tiedCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-amber-600"></div>
                             `}
                             <div><span class="block text-[9px] text-slate-600 font-bold mb-0.5">总毕业</span><input type="number" id="edit-grad-${idx}" value="${p.gradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-slate-800"></div>
-                            <div><span class="block text-[9px] text-purple-600 font-bold mb-0.5">总大毕业</span><input type="number" id="edit-big-grad-${idx}" value="${p.bigGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-purple-600"></div>
+                            ${isSpecialThreeTier ? '' : `<div><span class="block text-[9px] text-purple-600 font-bold mb-0.5">总大毕业</span><input type="number" id="edit-big-grad-${idx}" value="${p.bigGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-purple-600"></div>`}
                             <div><span class="block text-[9px] text-red-600 font-bold mb-0.5">总金帮毕业</span><input type="number" id="edit-gold-grad-${idx}" value="${p.goldGradCount}" class="w-full border border-slate-200 rounded text-center text-xs font-mono py-0.5 text-red-600"></div>
+                        </div>
+                        ${isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档。</div>` : ''}
+                        <div class="bg-yellow-50/70 border border-yellow-200 rounded-xl p-2 text-center">
+                            <span class="block text-[9px] text-yellow-700 font-black mb-0.5">✨ 闪光出货总数</span>
+                            <input type="number" id="edit-shiny-${idx}" value="${p.shinyUsefulCount || 0}" class="w-full border border-yellow-200 rounded text-center text-xs font-mono py-0.5 text-yellow-700 bg-white">
                         </div>`}
                     </div>`;
                 }
@@ -3874,10 +3947,10 @@ function getEvolutionCatchWeight(name) {
                         </div>
                     </div>
                     ${graduationDexAuditHTML}
-                    <div class="grid ${isSpecialDowngrade ? 'grid-cols-3' : 'grid-cols-4'} gap-2 text-center bg-slate-50/50 p-2 rounded-xl border border-slate-100">
+                    <div class="grid ${isSpecialDowngrade || isSpecialThreeTier ? 'grid-cols-3' : 'grid-cols-4'} gap-2 text-center bg-slate-50/50 p-2 rounded-xl border border-slate-100">
                         ${isSpecialDowngrade ? '' : `
                         <div class="px-1 py-1 rounded-lg ${p.tiedCount > 0 ? 'bg-amber-50 text-amber-700 font-bold' : 'text-slate-300'}">
-                            <div class="text-[9px]">自用和解</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
+                            <div class="text-[9px]">${isSpecialThreeTier ? '和解' : '自用和解'}</div><div class="text-xs font-mono mt-0.5">${p.tiedCount}</div>
                             ${isFoodType && p.tiedCount > 0 ? getFoodTrackBreakdownHTML(p, 'tied') : ''}
                         </div>
                         `}
@@ -3885,18 +3958,24 @@ function getEvolutionCatchWeight(name) {
                             <div class="text-[9px]">毕业</div><div class="text-xs font-mono mt-0.5">${p.gradCount}</div>
                             ${isFoodType && p.gradCount > 0 ? getFoodTrackBreakdownHTML(p, 'grad') : ''}
                         </div>
+                        ${isSpecialThreeTier ? '' : `
                         <div class="px-1 py-1 rounded-lg ${p.bigGradCount > 0 ? 'bg-purple-50 text-purple-600 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">大毕业</div><div class="text-xs font-mono mt-0.5">${p.bigGradCount}</div>
                             ${isFoodType && p.bigGradCount > 0 ? getFoodTrackBreakdownHTML(p, 'bigGrad') : ''}
-                        </div>
+                        </div>`}
                         <div class="px-1 py-1 rounded-lg ${p.goldGradCount > 0 ? 'bg-red-50 text-red-600 font-bold' : 'text-slate-300'}">
                             <div class="text-[9px]">金帮毕业</div><div class="text-xs font-mono mt-0.5">${p.goldGradCount}</div>
                             ${isFoodType && p.goldGradCount > 0 ? getFoodTrackBreakdownHTML(p, 'goldGrad') : ''}
                         </div>
                     </div>
+                    <div class="rounded-xl border ${p.shinyUsefulCount > 0 ? 'border-yellow-200 bg-yellow-50 text-yellow-700' : 'border-slate-100 bg-slate-50/60 text-slate-300'} px-3 py-1.5 text-[10px] font-black flex items-center justify-between">
+                        <span><i class="fa-solid fa-sparkles"></i> 闪光出货（和解及以上）</span>
+                        <span class="font-mono text-xs">${p.shinyUsefulCount || 0}</span>
+                    </div>
                     <div class="border-t border-slate-50 pt-2.5 text-[11px] flex items-center justify-between">
                         <div class="flex items-center gap-1">${adviceHTML}</div>
-                        ${dict && dict.type === 'special_skill' ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-shield-halved text-slate-400 mr-0.5"></i> 因技术问题暂不计入运气计算</div>` : ''}
+                        ${isSpecialScored ? `<div class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200/50"><i class="fa-solid fa-flask mr-0.5"></i> 特殊技能暂定三档评分：按树果毕业/大毕业/金帮概率映射</div>` : ''}
+                        ${isSpecialExcluded ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-shield-halved text-slate-400 mr-0.5"></i> 暂不计入运气计算</div>` : ''}
                         ${SPECIAL_STANDARD_DOWNGRADE.includes(p.name) ? `<div class="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/40"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 毕业标准降级，一般的和解即视为毕业</div>` : ''}
                     </div>
                 </div>`;
@@ -3921,6 +4000,7 @@ function getEvolutionCatchWeight(name) {
     let rawName = nameInput.value.trim();
     let addedCount = parseInt(countInput.value) || 0;
     let lockMode = lockInput.value;
+    let addedShinyUseful = parseInt(document.getElementById('num-shiny-useful')?.value) || 0;
     
     if (!rawName) {
         showToast("请输入宝可梦名字！");
@@ -3943,7 +4023,7 @@ function getEvolutionCatchWeight(name) {
     } else {
         addedTied = parseInt(document.getElementById('num-tied').value) || 0;
         addedGrad = parseInt(document.getElementById('num-grad').value) || 0;
-        addedBigGrad = parseInt(document.getElementById('num-big-grad').value) || 0;
+        addedBigGrad = parseInt(document.getElementById('num-big-grad')?.value) || 0;
         addedGoldGrad = parseInt(document.getElementById('num-gold-grad').value) || 0;
     }
 
@@ -3957,14 +4037,21 @@ function getEvolutionCatchWeight(name) {
         let newGrad = p.gradCount + addedGrad;
         let newBigGrad = p.bigGradCount + addedBigGrad;
         let newGoldGrad = p.goldGradCount + addedGoldGrad;
+        let newShinyUseful = (Number(p.shinyUsefulCount) || 0) + addedShinyUseful;
 
         if (newTied + newGrad + newBigGrad + newGoldGrad > newTotalCount) {
             showToast(`累加后矛盾！总出货数不能大于总捕捉数`);
             return;
         }
+        if (newShinyUseful > newTied + newGrad + newBigGrad + newGoldGrad) {
+            showToast(`累加后矛盾！闪光出货数不能大于和解及以上总数`);
+            return;
+        }
 
         p.count = newTotalCount;
         p.lockMode = lockMode;
+
+        p.shinyUsefulCount = newShinyUseful;
 
         if (isFood) {
             addFoodTrackCountsToBoxRecord(p, trackCounts);
@@ -3982,7 +4069,13 @@ function getEvolutionCatchWeight(name) {
             return;
         }
 
+        if (addedShinyUseful > totalGolds) {
+            showToast(`数据矛盾！闪光出货数不能大于和解及以上总数`);
+            return;
+        }
+
         let newRecord = createEmptyBoxRecord(standardName, addedCount, lockMode);
+        newRecord.shinyUsefulCount = addedShinyUseful;
         if (isFood) {
             addFoodTrackCountsToBoxRecord(newRecord, trackCounts);
         } else {
@@ -3997,6 +4090,8 @@ function getEvolutionCatchWeight(name) {
     
     nameInput.value = '';
     countInput.value = '0';
+    const shinyInput = document.getElementById('num-shiny-useful');
+    if (shinyInput) shinyInput.value = '0';
     applyRecommendedLockModeForName('', 'input-lock-mode');
 
     updateAddPanelWeights();
@@ -4198,7 +4293,28 @@ function updateAuthUI() {
     }
 }
 
-        function toggleShowOnlyGraduated() {
+        
+function getShinyLuckStorageKey() {
+    return currentCloudUser ? 'sleep_shiny_luck_bonus_' + currentCloudUser.id : 'sleep_shiny_luck_bonus_guest';
+}
+
+function loadShinyLuckBonusFromLocal() {
+    includeShinyLuckBonus = localStorage.getItem(getShinyLuckStorageKey()) === 'true';
+}
+
+function saveShinyLuckBonusToLocal() {
+    localStorage.setItem(getShinyLuckStorageKey(), includeShinyLuckBonus ? 'true' : 'false');
+}
+
+function toggleShinyLuckBonus() {
+    includeShinyLuckBonus = !includeShinyLuckBonus;
+    saveShinyLuckBonusToLocal();
+    clearLuckInfoScoreCache();
+    updateBoxUI(false);
+    showToast(includeShinyLuckBonus ? '已开启闪光出货幸运加成' : '已关闭闪光出货幸运加成');
+}
+
+function toggleShowOnlyGraduated() {
             showOnlyGraduated = !showOnlyGraduated;
             updateBoxUI(); 
             showToast(showOnlyGraduated ? "已开启过滤：当前仅展现有出货/自用和解记录的宝可梦！" : "已关闭过滤：展现全盘大仓！");
@@ -4335,6 +4451,17 @@ function applyResultToBoxRecord(p, result, track, delta = 1) {
     p[key] = Math.max(0, (Number(p[key]) || 0) + safeDelta);
 }
 
+function applyShinyUsefulToBoxRecord(p, delta = 1) {
+    if (!p) return;
+    const safeDelta = Number(delta) || 0;
+    p.shinyUsefulCount = Math.max(0, (Number(p.shinyUsefulCount) || 0) + safeDelta);
+}
+
+function getBoxUsefulTotal(p) {
+    if (!p) return 0;
+    return (Number(p.tiedCount) || 0) + (Number(p.gradCount) || 0) + (Number(p.bigGradCount) || 0) + (Number(p.goldGradCount) || 0);
+}
+
 function readFoodTrackCountsFromInputs(prefix = 'num', index = null) {
     const out = {};
     FOOD_TRACK_KEYS.forEach(track => {
@@ -4457,6 +4584,40 @@ function getActiveFoodTrackProbabilityRows(p) {
 
     
         const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
+        const SPECIAL_SKILL_LUCK_EXCLUDED = ["拉帝亚斯", "拉帝欧斯", "伊布", "水伊布", "雷伊布", "火伊布", "太阳伊布", "月亮伊布", "叶伊布", "冰伊布", "仙子伊布"];
+
+function isSpecialSkillPokemonName(name) {
+    const dict = pokemonDictionary[name];
+    return !!(dict && dict.type === 'special_skill');
+}
+
+function isSpecialSkillExcludedFromLuck(name) {
+    const standard = pokemonDictionary[name]?.standard || name;
+    return SPECIAL_SKILL_LUCK_EXCLUDED.includes(standard);
+}
+
+function isSpecialSkillScoredByBerryModel(name) {
+    const standard = pokemonDictionary[name]?.standard || name;
+    return isSpecialSkillPokemonName(standard) && !isSpecialSkillExcludedFromLuck(standard);
+}
+
+function isSpecialSkillThreeTierDisplay(name) {
+    const standard = pokemonDictionary[name]?.standard || name;
+    return isSpecialSkillPokemonName(standard);
+}
+
+function isTiedLineScoredDirectly(name) {
+    return SPECIAL_STANDARD_DOWNGRADE.includes(name) || isSpecialSkillScoredByBerryModel(name);
+}
+
+function getLuckScoringTypeForPokemon(name) {
+    const dict = pokemonDictionary[name];
+    if (!dict) return null;
+    if (dict.type === 'special_skill') {
+        return isSpecialSkillScoredByBerryModel(name) ? 'special_skill' : null;
+    }
+    return dict.type;
+}
 
 
 // ==========================================
@@ -4469,6 +4630,7 @@ const LUCK_INFO_SCORE_SCALE = 1000;      // 0.001 信息量精度
 const LUCK_MIN_PROB = 1e-12;
 const LUCK_DIST_MAX_STATES = 9000;
 const LUCK_DIST_MIN_PROB = 1e-14;
+const SHINY_RATE_FOR_LUCK_BONUS = 0.007;
 
 const LUCK_PROB_MATRIX = {
     berry: {
@@ -4485,6 +4647,12 @@ const LUCK_PROB_MATRIX = {
         none: { gold: 0.0085, bigGrad: 0.0385, grad: 0.0723, tied: 0.1123 },
         one:  { gold: 0.0225, bigGrad: 0.0311, grad: 0.0412, tied: 0.0679 },
         two:  { gold: 0.0140, bigGrad: 0.0140, grad: 0.0140, tied: 0.0285 }
+    },
+    // 特殊技能宝暂定三档评分：和解=树果毕业线，毕业=树果大毕业线，金帮=树果金帮线；不设大毕业档。
+    special_skill: {
+        none: { gold: 0.0025, bigGrad: 0.0025, grad: 0.0056, tied: 0.0065 },
+        one:  { gold: 0.0124, bigGrad: 0.0124, grad: 0.0207, tied: 0.0228 },
+        two:  { gold: 0.0526, bigGrad: 0.0526, grad: 0.0592, tied: 0.0598 }
     }
 };
 
@@ -4501,7 +4669,7 @@ let __luckAggregateCache = new Map();
 
 function getLuckSpeciesCacheKey(p) {
     if (!p) return 'null';
-    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount];
+    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount, p.shinyUsefulCount, includeShinyLuckBonus ? 'shinyOn' : 'shinyOff'];
     if (isFoodPokemonName(p.name)) {
         ensureFoodTrackCounts(p);
         FOOD_TRACK_KEYS.forEach(track => {
@@ -4596,6 +4764,61 @@ function getLuckScoreKeyMap(p, pType, isTiedIncluded) {
 function getLuckResultKey(result, track = null) {
     return track ? `${result}_${track}` : result;
 }
+
+// ==========================================
+// ✨ 闪光出货加成
+// 闪光不改变实用档位；只在全局开关开启时，把已录入的“闪光和解及以上”作为附加稀有事件计入评分。
+// 大仓只记录总数，不细分闪光和解/毕业/大毕业/金帮。
+// ==========================================
+function getUsefulCumulativeProbabilityForShiny(p, pType, lockType) {
+    const baseTied = Number(LUCK_PROB_MATRIX[pType]?.[lockType]?.tied) || 0;
+    if (pType === 'food') {
+        const rows = getLuckFoodRowsForScoring(p);
+        const prob = rows.reduce((sum, row) => sum + baseTied * (Number(row.probWeight) || 0), 0);
+        return Math.min(0.999999, Math.max(0, prob));
+    }
+    return Math.min(0.999999, Math.max(0, baseTied));
+}
+
+function getShinyUsefulAtLeastProbability(p, pType, k) {
+    const count = Math.max(0, Number(p?.count) || 0);
+    const need = Math.max(0, Math.floor(Number(k) || 0));
+    if (count <= 0 || need <= 0) return 0;
+    const probs = [];
+    for (let i = 1; i <= count; i++) {
+        const lockType = getLuckLockTypeForCatchIndex(p, i);
+        probs.push(getUsefulCumulativeProbabilityForShiny(p, pType, lockType) * SHINY_RATE_FOR_LUCK_BONUS);
+    }
+    return poissonBinomialAtLeastProbability(probs, need);
+}
+
+function getShinyUsefulEvents(p, pType) {
+    if (!includeShinyLuckBonus || !p) return [];
+    const k = Math.max(0, Number(p.shinyUsefulCount) || 0);
+    if (k <= 0) return [];
+    const prob = getShinyUsefulAtLeastProbability(p, pType, k);
+    if (prob <= 0) return [];
+    return [{
+        key: `shinyUseful_${k}`,
+        label: `闪光出货≥${k}`,
+        count: k,
+        probability: prob,
+        scoreKey: infoScoreKeyFromProbability(prob)
+    }];
+}
+
+function convolveBinaryEvidenceEvents(dist, events) {
+    let out = dist;
+    (events || []).forEach(event => {
+        if (!event || !event.scoreKey || !event.probability) return;
+        const p = Math.min(1, Math.max(0, Number(event.probability) || 0));
+        const eventDist = { 0: 1 - p };
+        eventDist[event.scoreKey] = (eventDist[event.scoreKey] || 0) + p;
+        out = convolveLuckDistribution(out, normalizeLuckDistribution(eventDist));
+    });
+    return out;
+}
+
 
 // ==========================================
 // 🌱 自用和解模型
@@ -4809,6 +5032,8 @@ function buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded
     const selfUseTiedEvents = getSelfUseTiedEvents(p, pType, isTiedIncluded);
     dist = convolveSelfUseTiedEvents(dist, selfUseTiedEvents);
 
+    dist = convolveBinaryEvidenceEvents(dist, getShinyUsefulEvents(p, pType));
+
     return dist;
 }
 
@@ -4865,6 +5090,24 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
                 totalKey += event.scoreKey || 0;
             });
         }
+        if (includeShinyLuckBonus) {
+            getShinyUsefulEvents(p, pType).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
+        }
+        return totalKey;
+    }
+
+    // 暂定特殊技能宝：玩家手动录入三档，概率按树果宝毕业/大毕业/金帮线映射；不使用大毕业档。
+    if (isSpecialSkillScoredByBerryModel(p.name)) {
+        addCount('tied', p.tiedCount || 0);
+        addCount('grad', p.gradCount || 0);
+        addCount('goldGrad', p.goldGradCount || 0);
+        if (includeShinyLuckBonus) {
+            getShinyUsefulEvents(p, pType).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
+        }
         return totalKey;
     }
 
@@ -4873,6 +5116,11 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
         addCount('tied', p.gradCount || 0);
         addCount('grad', p.bigGradCount || 0);
         addCount('bigGrad', p.goldGradCount || 0);
+        if (includeShinyLuckBonus) {
+            getShinyUsefulEvents(p, pType).forEach(event => {
+                totalKey += event.scoreKey || 0;
+            });
+        }
         return totalKey;
     }
 
@@ -4883,6 +5131,11 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
 
     if (!isTiedIncluded) {
         getSelfUseTiedEvents(p, pType, isTiedIncluded).forEach(event => {
+            totalKey += event.scoreKey || 0;
+        });
+    }
+    if (includeShinyLuckBonus) {
+        getShinyUsefulEvents(p, pType).forEach(event => {
             totalKey += event.scoreKey || 0;
         });
     }
@@ -4916,6 +5169,11 @@ function normalInverseCDF(p) {
            (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
 
+function clearLuckInfoScoreCache() {
+    __luckInfoScoreCache.clear();
+    __luckAggregateCache.clear();
+}
+
 function getPokemonLuckMetrics(p) {
     if (!p || !p.count || p.count === 0) return { actual: 0, expected: 0, variance: 0, rate: 50, z: 0 };
 
@@ -4923,10 +5181,10 @@ function getPokemonLuckMetrics(p) {
     if (__luckInfoScoreCache.has(cacheKey)) return __luckInfoScoreCache.get(cacheKey);
 
     let dict = pokemonDictionary[p.name];
-    if (!dict || dict.type === 'special_skill') return null;
+    const pType = getLuckScoringTypeForPokemon(p.name);
+    if (!dict || !pType) return null;
 
-    const pType = dict.type;
-    const isTiedIncluded = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
+    const isTiedIncluded = isTiedLineScoredDirectly(p.name);
     const scoreKeyMap = getLuckScoreKeyMap(p, pType, isTiedIncluded);
     const dist = buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded);
     const actualKey = getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded);
@@ -4956,10 +5214,17 @@ function calculateLuckPercentile(p) {
     return metrics ? metrics.rate : null;
 }
 
-function getLuckTargetTypeMatch(dict, targetType) {
+function getLuckTargetTypeMatch(dict, targetType, name = null) {
     if (!dict) return false;
-    if (targetType === 'all') return dict.type !== 'special_skill';
-    if (targetType === 'skill') return (dict.type === 'skill' || dict.type === 'special_skill');
+    const standard = name || dict.standard;
+    if (dict.type === 'special_skill') {
+        const scored = isSpecialSkillScoredByBerryModel(standard);
+        if (targetType === 'all') return scored;
+        if (targetType === 'skill') return scored;
+        return false;
+    }
+    if (targetType === 'all') return true;
+    if (targetType === 'skill') return dict.type === 'skill';
     return dict.type === targetType;
 }
 
@@ -4974,7 +5239,7 @@ function getAggregateLuckMetrics(targetType) {
     playerBox.forEach(p => {
         if (!p.count || p.count === 0) return;
         let dict = pokemonDictionary[p.name];
-        if (!getLuckTargetTypeMatch(dict, targetType)) return;
+        if (!getLuckTargetTypeMatch(dict, targetType, p.name)) return;
 
         let metrics = getPokemonLuckMetrics(p);
         if (!metrics || !metrics.dist) return;
@@ -5029,21 +5294,17 @@ function getTypeLuckZ(targetType) {
 }
 
 function convertRateToObjectiveScore(rate) {
-    if (rate === null) return null;
-    let p = rate / 100;
-    let score = 50;
-    if (p >= 0.5) {
-        score = 100 - 50 * Math.pow(2 * (1 - p), 0.43);
-    } else {
-        score = 50 * Math.pow(2 * p, 0.43);
-    }
-    return Math.min(100, Math.max(0, score));
+    if (rate === null || rate === undefined || Number.isNaN(Number(rate))) return null;
+    // 直观分：分数直接贴近“击败率”。
+    // 旧版曲线会把击败 80%+ 压到 60 多分，玩家感知偏低；这里改成 80%≈80分。
+    return Math.min(100, Math.max(0, Number(rate)));
 }
 
         function saveInlineEdit(index) {
     let count = parseInt(document.getElementById(`edit-count-${index}`).value) || 0;
     let lockMode = document.getElementById(`edit-lock-${index}`).value;
     let tiedCount = 0, gradCount = 0, bigGradCount = 0, goldGradCount = 0;
+    let shinyUsefulCount = parseInt(document.getElementById(`edit-shiny-${index}`)?.value) || 0;
     const p = playerBox[index];
     const isFood = isFoodPokemonName(p.name);
 
@@ -5070,12 +5331,13 @@ function convertRateToObjectiveScore(rate) {
             tiedCount = parseInt(document.getElementById(`edit-tied-${index}`).value) || 0;
         }
         gradCount = parseInt(document.getElementById(`edit-grad-${index}`).value) || 0;
-        bigGradCount = parseInt(document.getElementById(`edit-big-grad-${index}`).value) || 0;
+        bigGradCount = parseInt(document.getElementById(`edit-big-grad-${index}`)?.value) || 0;
         goldGradCount = parseInt(document.getElementById(`edit-gold-grad-${index}`).value) || 0;
     }
 
     let totalGolds = tiedCount + gradCount + bigGradCount + goldGradCount;
     if (totalGolds > count) { alert("数据矛盾！出货总数不能大于总捕捉数"); return; }
+    if (shinyUsefulCount > totalGolds) { alert("数据矛盾！闪光出货数不能大于和解及以上总数"); return; }
 
     p.count = count;
     p.lockMode = lockMode;
@@ -5083,6 +5345,7 @@ function convertRateToObjectiveScore(rate) {
     p.gradCount = gradCount;
     p.bigGradCount = bigGradCount;
     p.goldGradCount = goldGradCount;
+    p.shinyUsefulCount = shinyUsefulCount;
     if (isFood) recalcFoodTrackTotals(p);
 
     delete editingIndices[index]; updateBoxUI(); showToast("已成功同步修改数据明细！");
@@ -5106,6 +5369,7 @@ function convertRateToObjectiveScore(rate) {
             updateAuthUI();
             loadBoxSortModeFromLocal();
             loadTotalCatchCalibrationFromLocal();
+            loadShinyLuckBonusFromLocal();
 
             if (currentCloudUser) {
                 await loadBoxFromCloud();
@@ -5397,6 +5661,10 @@ function openDailyCheckInModal() {
                     <option value="bigGrad" class="text-purple-400 font-bold">🔮 大毕业 (双技能正性格神兵)</option>
                     <option value="goldGrad" class="text-red-400 font-bold">👑 金帮毕业 (自带光环图腾)</option>
                 </select>
+                <label class="mt-2 flex items-center justify-between gap-2 bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-2 text-[11px] font-black text-yellow-800">
+                    <span><i class="fa-solid fa-sparkles text-yellow-500"></i> 这只是闪光宝可梦</span>
+                    <input type="checkbox" id="checkin-shiny" class="w-4 h-4 accent-yellow-500">
+                </label>
             </div>
         </div>
 
@@ -5534,6 +5802,7 @@ function submitDailyCheckIn() {
     let lockMode = lockInput.value;
     let result = resultSelect.value;
     let natureKey = natureSelect ? natureSelect.value : 'blank';
+    let isShiny = !!document.getElementById('checkin-shiny')?.checked;
 
     if (!rawName) { alert("请输入今天打卡的宝可梦名字！"); return; }
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
@@ -5553,10 +5822,14 @@ function submitDailyCheckIn() {
         let p = playerBox[idx]; p.count += 1; p.lockMode = lockMode;
         if (result !== 'none') {
             applyResultToBoxRecord(p, result, getCheckInTrackMode(standardName, foodCombo), 1);
+            if (isShiny) applyShinyUsefulToBoxRecord(p, 1);
         }
     } else {
         let newRecord = createEmptyBoxRecord(standardName, 1, lockMode);
-        if (result !== 'none') applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
+        if (result !== 'none') {
+            applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
+            if (isShiny) applyShinyUsefulToBoxRecord(newRecord, 1);
+        }
         playerBox.unshift(newRecord); idx = 0;
     }
 
@@ -5572,14 +5845,14 @@ function submitDailyCheckIn() {
     todayCheckIns.unshift({ 
         id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, 
         name: standardName, result: result, lockMode: lockMode, track: trackMode,
-        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo
+        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny
     });
     saveTodayCheckInsToLocal();
 
     historyLogs.unshift({ 
         id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, 
         name: standardName, result: result, lockMode: lockMode, track: trackMode,
-        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo
+        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny
     });
     saveHistoryToLocal();
 
@@ -5603,7 +5876,8 @@ function submitDailyCheckIn() {
             track: trackMode,
             subskills: subskillsSnapshot,
             nature: natureKey,
-            foodCombo: foodCombo
+            foodCombo: foodCombo,
+            isShiny: isShiny
         });
     }
 
@@ -5839,6 +6113,11 @@ function submitEditDailyCheckIn(checkInId) {
     let rawName = nameInput.value.trim();
     let lockMode = lockInput.value;
     let result = resultSelect.value;
+    let isShiny = !!document.getElementById('checkin-shiny')?.checked;
+    const slot1El = document.getElementById('checkin-slot1');
+    const slot2El = document.getElementById('checkin-slot2');
+    const slot3El = document.getElementById('checkin-slot3');
+    let foodCombo = `${slot1El ? slot1El.value : 'A'}${slot2El ? slot2El.value : 'B'}${slot3El ? slot3El.value : 'B'}`;
 
     if (!rawName) { alert("请输入宝可梦名字！"); return; }
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
@@ -5852,6 +6131,7 @@ function submitEditDailyCheckIn(checkInId) {
     if (oldBoxIdx > -1) {
         let p = playerBox[oldBoxIdx]; if (p.count > 0) p.count -= 1;
         if (oldItem.result !== 'none') {
+            if (oldItem.isShiny) applyShinyUsefulToBoxRecord(p, -1);
             if (oldItem.track) {
                 let t = oldItem.track; if (p[`${oldItem.result}Count_${t}`] > 0) p[`${oldItem.result}Count_${t}`] -= 1;
                 recalcFoodTrackTotals(p);
@@ -5875,10 +6155,14 @@ function submitEditDailyCheckIn(checkInId) {
         let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
         if (result !== 'none') {
             applyResultToBoxRecord(p, result, getCheckInTrackMode(standardName, foodCombo), 1);
+            if (isShiny) applyShinyUsefulToBoxRecord(p, 1);
         }
     } else {
         let newRecord = createEmptyBoxRecord(standardName, 1, lockMode);
-        if (result !== 'none') applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
+        if (result !== 'none') {
+            applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
+            if (isShiny) applyShinyUsefulToBoxRecord(newRecord, 1);
+        }
         playerBox.unshift(newRecord); newBoxIdx = 0;
     }
     
@@ -5891,13 +6175,13 @@ function submitEditDailyCheckIn(checkInId) {
 
     // 精确覆写流水与时光大库的各项时空标签
     oldItem.name = standardName; oldItem.lockMode = lockMode; oldItem.result = result; oldItem.track = trackMode;
-    oldItem.date = stickyCheckInDate; oldItem.session = stickyCheckInSession;
+    oldItem.date = stickyCheckInDate; oldItem.session = stickyCheckInSession; oldItem.foodCombo = foodCombo; oldItem.isShiny = isShiny;
     saveTodayCheckInsToLocal();
 
     let histItem = historyLogs.find(h => h.id === checkInId);
     if (histItem) {
         histItem.name = standardName; histItem.lockMode = lockMode; histItem.result = result; histItem.track = trackMode;
-        histItem.date = stickyCheckInDate; histItem.session = stickyCheckInSession;
+        histItem.date = stickyCheckInDate; histItem.session = stickyCheckInSession; histItem.foodCombo = foodCombo; histItem.isShiny = isShiny;
         saveHistoryToLocal();
     }
     
@@ -5924,6 +6208,7 @@ function rollbackCheckInAsset(item) {
     if (p.count > 0) p.count -= 1;
 
     if (item.result && item.result !== 'none') {
+        if (item.isShiny) applyShinyUsefulToBoxRecord(p, -1);
         if (item.track) {
             let t = item.track;
             let key = `${item.result}Count_${t}`;
@@ -6097,7 +6382,8 @@ function renderGraduationDexList() {
             capSkillText,
             cap.date,
             cap.session,
-            item.source === 'daily' ? '每日打卡' : '手动补录'
+            item.source === 'daily' ? '每日打卡' : '手动补录',
+            (cur.isShiny || cap.isShiny) ? '闪光 shiny 色违' : ''
         ].join(' ').toLowerCase();
 
         return !query || haystack.includes(query);
@@ -6160,6 +6446,7 @@ function renderGraduationDexList() {
                         <span class="px-2 py-0.5 rounded-lg border text-[10px] font-black ${resultClass}">
                             ${getGraduationResultName(cur.result)}
                         </span>
+                        ${(cur.isShiny || cap.isShiny) ? `<span class="px-2 py-0.5 rounded-lg bg-yellow-50 border border-yellow-200 text-[10px] font-black text-yellow-700"><i class="fa-solid fa-sparkles"></i> 闪光</span>` : ''}
                         ${curFoodBadge ? `<span class="px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-[10px] font-bold text-slate-500">${curFoodBadge}</span>` : ''}
                         ${currentNameChip}
                     </div>
@@ -6195,6 +6482,7 @@ function renderGraduationDexList() {
                 <summary class="cursor-pointer text-[10px] font-black text-slate-500 flex flex-wrap gap-2 items-center">
                     <span>捕捉时原始档案</span>
                     <span class="px-2 py-0.5 rounded-md border ${capResultClass}">${getGraduationResultName(cap.result)}</span>
+                    ${cap.isShiny ? `<span class="px-2 py-0.5 rounded-md bg-yellow-50 border border-yellow-200 text-yellow-700"><i class="fa-solid fa-sparkles"></i> 闪光</span>` : ''}
                     ${capFoodBadge ? `<span class="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-500">${capFoodBadge}</span>` : ''}
                     <span>性格：${capNatureName}</span>
                 </summary>
@@ -6242,7 +6530,7 @@ function openGraduationBackfillModal(prefill = null) {
 
     const desc = title ? title.closest('.text-center')?.querySelector('p') : null;
     if (desc) {
-        desc.textContent = '本次补录会同时生成「捕捉时状态」和「当前状态」。补录只写入出货库，不增加捕捉数，不写入历史抽卡库。和解档案允许补录，但不参与大仓毕业库对账。';
+        desc.textContent = '本次补录会同时生成「捕捉时状态」和「当前状态」。保存后如发现大仓总账不足，会询问是否同步补足对应出货数与闪光出货数。';
     }
 
     window.userManuallyOverrodeResult = true;
@@ -6259,6 +6547,8 @@ function openGraduationBackfillModal(prefill = null) {
 
         if (nameEl && prefill.name) nameEl.value = prefill.name;
         if (trackEl && prefill.track) trackEl.value = prefill.track;
+        const shinyEl = document.getElementById('checkin-shiny');
+        if (shinyEl) shinyEl.checked = !!prefill.isShiny;
 
         // 预填宝可梦名后，刷新推荐面板和双轨食材轨道显隐
         triggerLivePanelAudit();
@@ -6285,6 +6575,7 @@ function readCurrentCheckInPanelState() {
     const dateInput = document.getElementById('checkin-date');
     const sessionSelect = document.getElementById('checkin-session');
     const nicknameInput = document.getElementById('checkin-nickname');
+    const shinyInput = document.getElementById('checkin-shiny');
 
     let rawName = nameInput ? nameInput.value.trim() : '';
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
@@ -6310,8 +6601,96 @@ function readCurrentCheckInPanelState() {
             window.checkinSubskills || {}
         ))),
         nature: natureSelect ? natureSelect.value : 'blank',
-        foodCombo: s1 + s2 + s3
+        foodCombo: s1 + s2 + s3,
+        isShiny: !!(shinyInput && shinyInput.checked)
     };
+}
+
+
+function getBoxRecordForNameOrCreate(name, lockMode = null) {
+    let idx = playerBox.findIndex(p => p.name === name);
+    if (idx >= 0) return playerBox[idx];
+    const record = createEmptyBoxRecord(name, 0, lockMode || getRecommendedLockModeForName(name));
+    playerBox.unshift(record);
+    return record;
+}
+
+function getBoxResultCount(p, result) {
+    if (!p || !result || result === 'none') return 0;
+    if (isFoodPokemonName(p.name)) {
+        ensureFoodTrackCounts(p);
+        return FOOD_TRACK_KEYS.reduce((sum, track) => sum + (Number(p[getFoodTrackCountKey(result, track)]) || 0), 0);
+    }
+    return Number(p[`${result}Count`]) || 0;
+}
+
+function ensureBoxCountCoversOutputs(p) {
+    const useful = getBoxUsefulTotal(p);
+    if ((Number(p.count) || 0) < useful) p.count = useful;
+}
+
+function countGraduationDexByNameAndResult(name, result) {
+    normalizeGraduationDex();
+    return graduationDex.filter(item => {
+        const cap = getGraduationCapture(item);
+        return cap && cap.name === name && cap.result === result;
+    }).length;
+}
+
+function countGraduationDexShinyUsefulByName(name) {
+    normalizeGraduationDex();
+    return graduationDex.filter(item => {
+        const cap = getGraduationCapture(item);
+        return cap && cap.name === name && isGraduationResult(cap.result) && !!cap.isShiny;
+    }).length;
+}
+
+function maybeSyncBackfilledGraduationToBox(state) {
+    if (!state || !state.name || !isGraduationResult(state.result)) {
+        return { synced: false, cancelled: false, parts: [] };
+    }
+
+    const existing = playerBox.find(p => p.name === state.name);
+    const currentResultCount = existing ? getBoxResultCount(existing, state.result) : 0;
+    const currentShinyCount = existing ? (Number(existing.shinyUsefulCount) || 0) : 0;
+
+    const recordedResultCount = countGraduationDexByNameAndResult(state.name, state.result);
+    const recordedShinyCount = countGraduationDexShinyUsefulByName(state.name);
+
+    const resultDelta = Math.max(0, recordedResultCount - currentResultCount);
+    const shinyDelta = Math.max(0, recordedShinyCount - currentShinyCount);
+
+    const needsResultSync = resultDelta > 0;
+    const needsShinySync = !!state.isShiny && shinyDelta > 0;
+
+    if (!needsResultSync && !needsShinySync) {
+        return { synced: false, cancelled: false, parts: [] };
+    }
+
+    const parts = [];
+    if (needsResultSync) parts.push(`${getGraduationResultName(state.result)} +${resultDelta}`);
+    if (needsShinySync) parts.push(`闪光出货 +${shinyDelta}`);
+
+    const ok = confirm(`检测到出货库档案已超过【${state.name}】的大仓总账：\n${parts.join(' / ')}\n\n是否同步补足大仓总账？\n选择“取消”则仅保存出货库档案，不影响大仓评分。`);
+    if (!ok) {
+        return { synced: false, cancelled: true, parts };
+    }
+
+    const p = getBoxRecordForNameOrCreate(state.name, state.lockMode);
+    ensureFoodTrackCounts(p);
+
+    const safeTrack = state.track || getCheckInTrackMode(state.name, state.foodCombo || 'ABB');
+
+    if (needsResultSync) applyResultToBoxRecord(p, state.result, safeTrack, resultDelta);
+    if (needsShinySync) applyShinyUsefulToBoxRecord(p, shinyDelta);
+
+    ensureBoxCountCoversOutputs(p);
+    normalizePlayerBox();
+    clearLuckInfoScoreCache();
+    saveBoxToLocal();
+    updateBoxUI(false);
+
+    return { synced: true, cancelled: false, parts };
 }
 
 function submitGraduationDexBackfill() {
@@ -6334,6 +6713,8 @@ function submitGraduationDexBackfill() {
         current: Object.assign({}, state, { nickname: state.nickname || state.name })
     });
 
+    const syncResult = maybeSyncBackfilledGraduationToBox(state);
+
     const modal = document.getElementById('daily-checkin-modal');
     if (modal) modal.remove();
 
@@ -6345,7 +6726,13 @@ function submitGraduationDexBackfill() {
     }
 
     updateBoxUI(false);
-    showToast(`已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
+    if (syncResult && syncResult.synced) {
+        showToast(`已补录并同步大仓：${syncResult.parts.join(' / ')}`);
+    } else if (syncResult && syncResult.cancelled) {
+        showToast(`已补录【${state.name}】到出货库，未同步大仓`);
+    } else {
+        showToast(`已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
+    }
 }
 
 function openEditGraduationDexModal(id, mode = 'current') {
@@ -6415,6 +6802,8 @@ function openEditGraduationDexModal(id, mode = 'current') {
 
     if (resultEl) resultEl.value = state.result || 'grad';
     if (trackEl && state.track) trackEl.value = state.track;
+    const shinyEl = document.getElementById('checkin-shiny');
+    if (shinyEl) shinyEl.checked = !!state.isShiny;
 
     refreshSubskillSlotsUI();
     triggerLivePanelAudit();
@@ -6706,6 +7095,8 @@ function openEditHistoryLogModal(logId) {
 
     if (resultEl) resultEl.value = item.result || 'none';
     if (trackEl && item.track) trackEl.value = item.track;
+    const shinyEl = document.getElementById('checkin-shiny');
+    if (shinyEl) shinyEl.checked = !!item.isShiny;
 
     refreshSubskillSlotsUI();
     triggerLivePanelAudit();
@@ -6737,6 +7128,7 @@ function submitEditHistoryLog(logId) {
     let rawName = nameInput.value.trim();
     let lockMode = lockInput.value;
     let result = resultSelect.value;
+    let isShiny = !!document.getElementById('checkin-shiny')?.checked;
 
     const natureSelect = document.getElementById('checkin-nature');
     const slot1El = document.getElementById('checkin-slot1');
@@ -6763,6 +7155,7 @@ function submitEditHistoryLog(logId) {
     if (oldBoxIdx > -1) {
         let p = playerBox[oldBoxIdx]; if (p.count > 0) p.count -= 1;
         if (oldItem.result !== 'none') {
+            if (oldItem.isShiny) applyShinyUsefulToBoxRecord(p, -1);
             if (oldItem.track) {
                 let t = oldItem.track; if (p[`${oldItem.result}Count_${t}`] > 0) p[`${oldItem.result}Count_${t}`] -= 1;
                 recalcFoodTrackTotals(p);
@@ -6779,10 +7172,14 @@ function submitEditHistoryLog(logId) {
         let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
         if (result !== 'none') {
             applyResultToBoxRecord(p, result, getCheckInTrackMode(standardName, foodCombo), 1);
+            if (isShiny) applyShinyUsefulToBoxRecord(p, 1);
         }
     } else {
         let newRecord = createEmptyBoxRecord(standardName, 1, lockMode);
-        if (result !== 'none') applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
+        if (result !== 'none') {
+            applyResultToBoxRecord(newRecord, result, getCheckInTrackMode(standardName, foodCombo), 1);
+            if (isShiny) applyShinyUsefulToBoxRecord(newRecord, 1);
+        }
         playerBox.unshift(newRecord);
     }
     
@@ -6797,6 +7194,7 @@ function submitEditHistoryLog(logId) {
     oldItem.subskills = subskillsSnapshot;
     oldItem.nature = natureKey;
     oldItem.foodCombo = foodCombo;
+    oldItem.isShiny = isShiny;
     saveHistoryToLocal();
 
     // 历史记录如果被改成毕业 / 大毕业 / 金帮，就同步进毕业库。
@@ -6815,6 +7213,7 @@ function submitEditHistoryLog(logId) {
         todayItem.subskills = subskillsSnapshot;
         todayItem.nature = natureKey;
         todayItem.foodCombo = foodCombo;
+        todayItem.isShiny = isShiny;
         saveTodayCheckInsToLocal();
     }
     if (currentCloudUser) {
@@ -6871,8 +7270,8 @@ const ALL_AVAILABLE_SUBSKILLS = {
             { key: 'invl', name: '持有上限L', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
             { key: 'invm', name: '持有上限M', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' },
             { key: 'invs', name: '持有上限S', color: 'bg-white text-slate-700 border-slate-300 font-bold', tier: 'white' },
-            { key: 'slm', name: '主技能提升M', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
-            { key: 'sls', name: '主技能提升S', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' }
+            { key: 'slm', name: '技能等级提升M', color: 'bg-amber-500 text-slate-950 border-amber-600 font-black', tier: 'gold' },
+            { key: 'sls', name: '技能等级提升S', color: 'bg-indigo-500 text-white border-indigo-600 font-bold', tier: 'blue' }
         ]
     },
     utilityZone: {
