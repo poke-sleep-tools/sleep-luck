@@ -64,6 +64,15 @@
                     >
                         登录
                     </button>
+
+                    <button
+                        type="button"
+                        onclick="openPasswordResetRequestModal()"
+                        class="bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold text-xs px-3 py-2 rounded-xl whitespace-nowrap"
+                        title="通过邮箱发送重置密码链接"
+                    >
+                        忘记密码？
+                    </button>
                 </div>
 
                 <button 
@@ -120,7 +129,7 @@
                         <i class="fa-solid fa-trophy text-amber-500"></i> 4. 毕业库：保存具体出货个体的面板档案
                     </h4>
                     <p class="text-slate-600 pl-5">
-                        <strong>【🏆 出货库】</strong>用于保存具体出货个体的面板。每日打卡中录入<strong>和解 / 毕业 / 大毕业 / 金帮毕业</strong>时，会自动进入出货库；玩家也可以手动<strong>补录出货面板</strong>。补录只会写入毕业库，<strong>不会增加捕捉数，不会写入历史抽卡库，也不会改变大仓气运</strong>。和解也可以进入出货库；但和解档案不会参与大仓对账提醒，因为很多玩家不会完整补录所有和解个体。
+                        <strong>【🏆 出货库】</strong>用于保存具体出货个体的面板。每日打卡中录入<strong>和解 / 毕业 / 大毕业 / 金帮毕业</strong>时，会自动进入出货库；玩家也可以手动<strong>补录出货面板</strong>。系统会尽量让出货库与大仓总账保持一致；若检测到档案数量超过大仓记录，会提示是否同步补足大仓。和解也可以进入出货库；但和解档案不会参与大仓对账提醒，因为很多玩家不会完整补录所有和解个体。
                     </p>
                 </div>
 
@@ -447,6 +456,10 @@
                     <button onclick="toggleShinyLuckBonus()" id="toggle-shiny-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="切换是否把闪光和解及以上个体作为额外幸运加成纳入评分">
                         <i class="fa-solid fa-sparkles"></i> 闪光加成: 关
                     </button>
+                    <button onclick="toggleLuckCalculation()" id="toggle-luck-calculation" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-600 text-white hover:bg-emerald-500 border border-emerald-500 shadow-sm flex items-center gap-1" title="大量补录时可先关闭评分计算，录完后再开启统一重算。">
+                        <i class="fa-solid fa-gauge-high"></i> 评分计算: 开
+                    </button>
+                    <button onclick="showLuckCalculationHelp(event)" class="w-6 h-6 rounded-full bg-slate-100 hover:bg-indigo-100 text-slate-400 hover:text-indigo-600 border border-slate-200 text-[10px] font-black flex items-center justify-center" title="为什么要有评分计算开关？">?</button>
                     <label class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-black text-slate-400 shadow-sm">
                         <i class="fa-solid fa-arrow-down-wide-short text-slate-400"></i>
                         排序
@@ -597,6 +610,66 @@
         <span id="toast-msg">已保存!</span>
     </div>
 
+    <!-- 找回密码：发送重置邮件 -->
+    <div id="password-reset-request-modal" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[80] hidden items-center justify-center p-4" onclick="closePasswordResetRequestModal()">
+        <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md p-6 flex flex-col gap-4" onclick="event.stopPropagation()">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <h3 class="text-base font-black text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-key text-indigo-500"></i> 找回密码
+                    </h3>
+                    <p class="text-[11px] text-slate-500 mt-1 leading-relaxed">输入注册邮箱，系统会发送一封密码重置邮件。请在邮件里点击链接后设置新密码。</p>
+                </div>
+                <button type="button" onclick="closePasswordResetRequestModal()" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">注册邮箱</label>
+                <input type="email" id="password-reset-email" placeholder="your@email.com" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div class="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3 text-[11px] text-indigo-900 leading-relaxed">
+                如果几分钟内没收到，请检查垃圾邮件；频繁请求可能会触发邮件发送限流。
+            </div>
+            <div class="flex gap-2 justify-end">
+                <button type="button" onclick="closePasswordResetRequestModal()" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black">取消</button>
+                <button type="button" id="password-reset-send-btn" onclick="requestPasswordResetEmail()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm">发送重置邮件</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 找回密码：设置新密码 -->
+    <div id="password-update-modal" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[90] hidden items-center justify-center p-4" onclick="closePasswordUpdateModal(false)">
+        <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md p-6 flex flex-col gap-4" onclick="event.stopPropagation()">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <h3 class="text-base font-black text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-lock text-emerald-500"></i> 设置新密码
+                    </h3>
+                    <p class="text-[11px] text-slate-500 mt-1 leading-relaxed">请输入新密码。修改成功后，建议重新登录一次。</p>
+                </div>
+                <button type="button" onclick="closePasswordUpdateModal(false)" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">新密码</label>
+                <input type="password" id="password-update-new" placeholder="至少 6 位" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-emerald-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">再次输入新密码</label>
+                <input type="password" id="password-update-confirm" placeholder="再次输入" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-emerald-400">
+            </div>
+            <div class="bg-emerald-50/70 border border-emerald-100 rounded-2xl p-3 text-[11px] text-emerald-900 leading-relaxed">
+                如果提示链接失效，请重新回到登录区点击“忘记密码？”再发送一次重置邮件。
+            </div>
+            <div class="flex gap-2 justify-end">
+                <button type="button" onclick="closePasswordUpdateModal(false)" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black">稍后再说</button>
+                <button type="button" id="password-update-btn" onclick="submitNewPassword()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow-sm">保存新密码</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         
 
@@ -616,6 +689,8 @@ let currentFilterType = 'all';
 let showOnlyGraduated = false;
 let boxSortMode = 'entry_desc';
 let includeShinyLuckBonus = false;
+// 🚀 性能模式：允许玩家在大量补录时临时暂停概率评分，避免每次录入都触发重计算。
+let luckCalculationEnabled = true;
 
 let saveBoxTimer = null;
 let saveHistoryTimer = null;
@@ -1030,6 +1105,7 @@ function loadGraduationDexFromLocal() {
     try {
         graduationDex = JSON.parse(localStorage.getItem(getGraduationDexStorageKey())) || [];
         normalizeGraduationDex();
+        reconcileBoxWithGraduationDex({ silent: true, save: true });
     } catch (e) {
         console.error('毕业库读取失败，已重置：', e);
         graduationDex = [];
@@ -1039,6 +1115,7 @@ function loadGraduationDexFromLocal() {
 function saveGraduationDexToLocal() {
     normalizeGraduationDex();
     localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
+    reconcileBoxWithGraduationDex({ silent: true, save: true });
     scheduleSaveGraduationDexToCloud();
 }
 
@@ -1121,11 +1198,13 @@ async function loadGraduationDexFromCloud() {
         if (graduationDex.length !== data.graduation_dex.length) {
             await saveGraduationDexToCloudNow();
         }
+        reconcileBoxWithGraduationDex({ silent: true, save: true });
         return;
     }
 
     graduationDex = localSnapshot;
     normalizeGraduationDex();
+    reconcileBoxWithGraduationDex({ silent: true, save: true });
     await saveGraduationDexToCloudNow();
 }
 
@@ -2000,7 +2079,7 @@ function buildCalibrationSpeciesHiddenDistribution(name, pType, hiddenCount, mod
         shinyUsefulCount: 0
     };
 
-    const isTiedIncluded = SPECIAL_STANDARD_DOWNGRADE.includes(name);
+    const isTiedIncluded = isSpecialStandardDowngradeName(name);
     const scoreKeyMap = getLuckScoreKeyMap(pLike, pType, isTiedIncluded);
     let startIndex = recorded + 1;
     if (mode === 'strict') startIndex = Math.max(startIndex, 39);
@@ -2054,6 +2133,12 @@ function loadBoxFromLocal() {
     }
 
     playerBox = localData ? JSON.parse(localData) : [];
+}
+
+function saveBoxToLocal(saveToCloud = true) {
+    normalizePlayerBox();
+    localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
+    if (saveToCloud) scheduleSaveBoxToCloud();
 }
 
 function hasRecordedTiedCount(p) {
@@ -2231,6 +2316,8 @@ function normalizePlayerBox() {
             '拉帝欧斯': { standard: '拉帝欧斯', type: 'special_skill', defaultLock: 'none' }, '拉帝歐斯': { standard: '拉帝欧斯', type: 'special_skill', defaultLock: 'none' },
             '自爆磁怪': { standard: '自爆磁怪', type: 'skill', defaultLock: 'none' }, '波克基斯': { standard: '波克基斯', type: 'skill', defaultLock: 'none' },
             '艾路雷朵': { standard: '艾路雷朵', type: 'skill', defaultLock: 'none' }, '克雷色利亚': { standard: '克雷色利亚', type: 'skill', defaultLock: 'none' }, '克雷色利亞': { standard: '克雷色利亚', type: 'skill', defaultLock: 'none' },
+            '壶壶': { standard: '壶壶', type: 'skill', defaultLock: 'none' }, '壺壺': { standard: '壶壶', type: 'skill', defaultLock: 'none' },
+            '赫拉克罗斯': { standard: '赫拉克罗斯', type: 'skill', defaultLock: 'none' }, '赫拉克羅斯': { standard: '赫拉克罗斯', type: 'skill', defaultLock: 'none' },
             '石居蟹': { standard: '石居蟹', type: 'skill', defaultLock: 'none' }, '岩殿居蟹': { standard: '岩殿居蟹', type: 'skill', defaultLock: 'none' },
             '托戈德玛尔': { standard: '托戈德玛尔', type: 'skill', defaultLock: 'none' }, '托戈德瑪爾': { standard: '托戈德玛尔', type: 'skill', defaultLock: 'none' },
             '毒电婴': { standard: '毒电婴', type: 'skill', defaultLock: 'none' }, '毒電嬰': { standard: '毒电婴', type: 'skill', defaultLock: 'none' },
@@ -3058,6 +3145,16 @@ const EVOLUTION_STAGE_META = {
         "stage": 0,
         "familySize": 2
     },
+    "壶壶": {
+        "line": "壶壶",
+        "stage": 0,
+        "familySize": 1
+    },
+    "赫拉克罗斯": {
+        "line": "赫拉克罗斯",
+        "stage": 0,
+        "familySize": 1
+    },
     "路卡利欧": {
         "line": "利欧路",
         "stage": 1,
@@ -3390,9 +3487,10 @@ function getEvolutionCatchWeight(name) {
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
     let dict = pokemonDictionary[standardName];
     let isFood = dict && dict.type === 'food';
+    let isSpecialDowngrade = isSpecialStandardDowngradeName(standardName);
     let isSpecialThreeTier = dict && isSpecialSkillThreeTierDisplay(standardName);
     let isLatiosLine = isLatiCustomScoringName(standardName);
-    let isThreeColumnResultGrid = isSpecialThreeTier || isLatiosLine;
+    let isThreeColumnResultGrid = isSpecialDowngrade || isSpecialThreeTier || isLatiosLine;
     let latiLabel = getLatiCustomLabel(standardName);
 
     if (isFood) {
@@ -3407,10 +3505,11 @@ function getEvolutionCatchWeight(name) {
     } else {
         container.innerHTML = `
         <div class="grid ${isThreeColumnResultGrid ? 'grid-cols-3' : 'grid-cols-4'} gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full">
+            ${isSpecialDowngrade ? '' : `
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-amber-600 mb-1">追加和解</span>
                 <input type="number" id="num-tied" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-amber-600 focus:outline-none focus:border-amber-400">
-            </div>
+            </div>`}
             <div class="text-center">
                 <span class="block text-[10px] font-bold text-slate-600 mb-1">追加毕业</span>
                 <input type="number" id="num-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-slate-800 focus:outline-none focus:border-slate-400">
@@ -3425,7 +3524,7 @@ function getEvolutionCatchWeight(name) {
                 <input type="number" id="num-gold-grad" min="0" value="0" class="w-full bg-white border border-slate-200 rounded-lg py-1 text-xs font-mono font-bold text-center text-red-600 focus:outline-none focus:border-red-400">
             </div>`}
         </div>
-        ${isLatiosLine ? `<div class="text-[9px] text-cyan-500 font-bold mt-1 px-1">${latiLabel}专用三线：和解 / 毕业 / 大毕业；不设置金帮毕业线。</div>` : (isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1 px-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档位。</div>` : '')}`;
+        ${isLatiosLine ? `<div class="text-[9px] text-cyan-500 font-bold mt-1 px-1">${latiLabel}专用三线：和解 / 毕业 / 大毕业；不设置金帮毕业线。</div>` : (isSpecialDowngrade ? `<div class="text-[9px] text-amber-500 font-bold mt-1 px-1">特异放宽标准：不设置和解录入；毕业 / 大毕业 / 金帮毕业三档。</div>` : (isSpecialThreeTier ? `<div class="text-[9px] text-slate-400 font-bold mt-1 px-1">特殊技能宝暂定三档：和解 / 毕业 / 金帮毕业；不使用大毕业档位。</div>` : ''))}`;
     }
 }
 
@@ -3726,6 +3825,7 @@ function getEvolutionCatchWeight(name) {
                     shinyBtn.innerHTML = `<i class="fa-solid fa-sparkles"></i> 闪光加成: 关`;
                 }
             }
+            updateLuckCalculationButton();
             
             Object.keys(typeKeys).forEach(tk => {
                 let btn = document.getElementById(`filter-${tk}`);
@@ -3899,7 +3999,7 @@ function getEvolutionCatchWeight(name) {
                 let isBoth = FOOD_MODE_BOTH.includes(p.name);
                 let isFoodType = dict && dict.type === 'food';
                 let isAbbOnly = FOOD_MODE_ABB_ONLY.includes(p.name);
-                let isSpecialDowngrade = SPECIAL_STANDARD_DOWNGRADE.includes(p.name);
+                let isSpecialDowngrade = isSpecialStandardDowngradeName(p.name);
                 let isSpecialThreeTier = isSpecialSkillThreeTierDisplay(p.name);
                 let isLatiosLine = isLatiCustomScoringName(p.name);
                 let isThreeColumnResultGrid = isSpecialDowngrade || isSpecialThreeTier || isLatiosLine;
@@ -3923,7 +4023,7 @@ function getEvolutionCatchWeight(name) {
                 else adviceHTML = `<span class="text-slate-500"><i class="fa-solid fa-fire mr-1"></i>区间：39只+ (锁二金)</span>`;
 
                 let strategyText = p.lockMode === 'none' ? '不锁金' : (p.lockMode === 'one' ? '锁 1 金' : '锁 2 金');
-                let rate = calculateLuckPercentile(p);
+                let rate = isLuckCalculationEnabled() ? calculateLuckPercentile(p) : null;
                 let badgeColor = "bg-slate-100 text-slate-600"; 
                 if (rate >= 95) badgeColor = "bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 text-white font-black shadow-md animate-pulse"; 
                 else if (rate >= 80) badgeColor = "bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold shadow-sm"; 
@@ -4033,7 +4133,7 @@ function getEvolutionCatchWeight(name) {
                         ${isEeveeOtherEvo ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-user-pen mr-0.5"></i> 该进化型暂不提供系统推荐，请自行选择档位</div>` : ''}
                         ${isSpecialScored ? `<div class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200/50"><i class="fa-solid fa-flask mr-0.5"></i> 特殊技能暂定三档评分：按树果毕业/大毕业/金帮概率映射</div>` : ''}
                         ${isSpecialExcluded ? `<div class="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50"><i class="fa-solid fa-shield-halved text-slate-400 mr-0.5"></i> 暂不计入运气计算</div>` : ''}
-                        ${SPECIAL_STANDARD_DOWNGRADE.includes(p.name) ? `<div class="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/40"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 毕业标准降级，一般的和解即视为毕业</div>` : ''}
+                        ${isSpecialStandardDowngradeName(p.name) ? `<div class="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200/40"><i class="fa-solid fa-wand-magic-sparkles mr-0.5"></i> 毕业标准降级，一般的和解即视为毕业</div>` : ''}
                     </div>
                 </div>`;
             }).join('');
@@ -4078,7 +4178,7 @@ function getEvolutionCatchWeight(name) {
         addedBigGrad = totals.bigGrad;
         addedGoldGrad = totals.goldGrad;
     } else {
-        addedTied = parseInt(document.getElementById('num-tied').value) || 0;
+        addedTied = parseInt(document.getElementById('num-tied')?.value) || 0;
         addedGrad = parseInt(document.getElementById('num-grad').value) || 0;
         addedBigGrad = parseInt(document.getElementById('num-big-grad')?.value) || 0;
         addedGoldGrad = isLatiCustomScoringName(standardName) ? 0 : (parseInt(document.getElementById('num-gold-grad')?.value) || 0);
@@ -4296,6 +4396,7 @@ async function signInUser() {
     updateAuthUI();
     loadBoxSortModeFromLocal();
     loadTotalCatchCalibrationFromLocal();
+    loadLuckCalculationSettingFromLocal();
     await loadBoxFromCloud();
     await loadHistoryFromCloud();
     await loadGraduationDexFromCloud();
@@ -4304,6 +4405,139 @@ async function signInUser() {
     renderTodayReportUI();
     showToast("登录成功，已切换到账号 Box");
 }
+
+function getPasswordResetRedirectUrl() {
+    // 让 Supabase 邮件链接回到当前页面，再由前端弹出“设置新密码”窗口。
+    // 生产环境请把这个完整 URL 加到 Supabase Auth 的 Redirect URLs 里。
+    return window.location.origin + window.location.pathname + '?reset_password=1';
+}
+
+function openPasswordResetRequestModal() {
+    const modal = document.getElementById('password-reset-request-modal');
+    const emailInput = document.getElementById('password-reset-email');
+    const loginEmail = document.getElementById('auth-email');
+    if (emailInput && loginEmail && loginEmail.value) emailInput.value = loginEmail.value.trim();
+    if (modal) modal.classList.remove('hidden'), modal.classList.add('flex');
+    setTimeout(() => { if (emailInput) emailInput.focus(); }, 30);
+}
+
+function closePasswordResetRequestModal() {
+    const modal = document.getElementById('password-reset-request-modal');
+    if (modal) modal.classList.add('hidden'), modal.classList.remove('flex');
+}
+
+async function requestPasswordResetEmail() {
+    const emailInput = document.getElementById('password-reset-email');
+    const sendBtn = document.getElementById('password-reset-send-btn');
+    const email = emailInput ? emailInput.value.trim() : '';
+
+    if (!email) {
+        showToast('请输入注册邮箱');
+        return;
+    }
+
+    if (sendBtn) {
+        sendBtn.disabled = true;
+        sendBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        sendBtn.innerText = '发送中...';
+    }
+
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+        redirectTo: getPasswordResetRedirectUrl()
+    });
+
+    if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        sendBtn.innerText = '发送重置邮件';
+    }
+
+    if (error) {
+        console.error(error);
+        showToast('重置邮件发送失败：' + error.message);
+        return;
+    }
+
+    closePasswordResetRequestModal();
+    showToast('如果邮箱存在，重置邮件已发送，请检查收件箱');
+}
+
+function isPasswordRecoveryRedirect() {
+    const params = new URLSearchParams(window.location.search || '');
+    const hash = window.location.hash || '';
+    return params.get('reset_password') === '1' || params.get('type') === 'recovery' || hash.includes('type=recovery');
+}
+
+function openPasswordUpdateModal() {
+    const modal = document.getElementById('password-update-modal');
+    const passwordInput = document.getElementById('password-update-new');
+    if (modal) modal.classList.remove('hidden'), modal.classList.add('flex');
+    setTimeout(() => { if (passwordInput) passwordInput.focus(); }, 30);
+}
+
+function cleanupPasswordResetUrl() {
+    if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, document.title, window.location.origin + window.location.pathname);
+    }
+}
+
+function closePasswordUpdateModal(cleanUrl = true) {
+    const modal = document.getElementById('password-update-modal');
+    if (modal) modal.classList.add('hidden'), modal.classList.remove('flex');
+    if (cleanUrl) cleanupPasswordResetUrl();
+}
+
+async function submitNewPassword() {
+    const passwordInput = document.getElementById('password-update-new');
+    const confirmInput = document.getElementById('password-update-confirm');
+    const saveBtn = document.getElementById('password-update-btn');
+    const password = passwordInput ? passwordInput.value : '';
+    const confirm = confirmInput ? confirmInput.value : '';
+
+    if (!password || !confirm) {
+        showToast('请输入两次新密码');
+        return;
+    }
+    if (password.length < 6) {
+        showToast('密码至少需要 6 位');
+        return;
+    }
+    if (password !== confirm) {
+        showToast('两次输入的密码不一致');
+        return;
+    }
+
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        saveBtn.innerText = '保存中...';
+    }
+
+    const { error } = await supabaseClient.auth.updateUser({ password });
+
+    if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        saveBtn.innerText = '保存新密码';
+    }
+
+    if (error) {
+        console.error(error);
+        showToast('密码修改失败：' + error.message);
+        return;
+    }
+
+    if (passwordInput) passwordInput.value = '';
+    if (confirmInput) confirmInput.value = '';
+    closePasswordUpdateModal(true);
+    showToast('密码已更新，请使用新密码登录');
+}
+
+supabaseClient.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+        openPasswordUpdateModal();
+    }
+});
 
 async function signOutUser() {
     const { error } = await supabaseClient.auth.signOut();
@@ -4318,6 +4552,7 @@ async function signOutUser() {
     updateAuthUI();
     loadBoxSortModeFromLocal();
     loadTotalCatchCalibrationFromLocal();
+    loadLuckCalculationSettingFromLocal();
 
     loadBoxFromLocal();
     normalizePlayerBox();
@@ -4369,6 +4604,49 @@ function toggleShinyLuckBonus() {
     clearLuckInfoScoreCache();
     updateBoxUI(false);
     showToast(includeShinyLuckBonus ? '已开启闪光出货幸运加成' : '已关闭闪光出货幸运加成');
+}
+
+
+function getLuckCalculationStorageKey() {
+    return currentCloudUser ? 'sleep_luck_calculation_enabled_' + currentCloudUser.id : 'sleep_luck_calculation_enabled_guest';
+}
+
+function loadLuckCalculationSettingFromLocal() {
+    const raw = localStorage.getItem(getLuckCalculationStorageKey());
+    luckCalculationEnabled = raw === null ? true : raw === 'true';
+}
+
+function saveLuckCalculationSettingToLocal() {
+    localStorage.setItem(getLuckCalculationStorageKey(), luckCalculationEnabled ? 'true' : 'false');
+}
+
+function isLuckCalculationEnabled() {
+    return luckCalculationEnabled !== false;
+}
+
+function updateLuckCalculationButton() {
+    const btn = document.getElementById('toggle-luck-calculation');
+    if (!btn) return;
+    if (isLuckCalculationEnabled()) {
+        btn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-600 text-white hover:bg-emerald-500 border border-emerald-500 shadow-sm flex items-center gap-1";
+        btn.innerHTML = `<i class="fa-solid fa-gauge-high"></i> 评分计算: 开`;
+    } else {
+        btn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-700 text-white hover:bg-slate-600 border border-slate-600 shadow-sm flex items-center gap-1";
+        btn.innerHTML = `<i class="fa-solid fa-pause"></i> 评分计算: 关`;
+    }
+}
+
+function toggleLuckCalculation() {
+    luckCalculationEnabled = !isLuckCalculationEnabled();
+    saveLuckCalculationSettingToLocal();
+    clearLuckInfoScoreCache();
+    updateBoxUI(false);
+    showToast(luckCalculationEnabled ? '已开启评分计算，并重新计算当前大仓' : '已暂停评分计算；大量录入时会更流畅');
+}
+
+function showLuckCalculationHelp(event) {
+    if (event) event.stopPropagation();
+    alert('大量补录大仓时，气运评分会随着每次录入重新计算，Box 越大越容易卡顿。可以先关闭“评分计算”，集中录入完后再开启，系统会一次性重新计算。关闭期间大仓数据仍会正常保存，只是暂时不显示击败率和星盘评分。');
 }
 
 function toggleShowOnlyGraduated() {
@@ -4656,6 +4934,26 @@ function normalizeStandardName(name) {
     return pokemonDictionary[name]?.standard || name;
 }
 
+function isSpecialStandardDowngradeName(name) {
+    return SPECIAL_STANDARD_DOWNGRADE.includes(normalizeStandardName(name));
+}
+
+function mapOrdinaryResultToSpecialDowngradeResult(result) {
+    if (result === 'tied') return 'grad';
+    if (result === 'grad' || result === 'bigGrad') return 'bigGrad';
+    if (result === 'goldGrad') return 'goldGrad';
+    return 'none';
+}
+
+function getSpecialDowngradeDisplayLabel(result) {
+    return {
+        none: '❌ 没货',
+        grad: '🟩 毕业',
+        bigGrad: '🔮 大毕业',
+        goldGrad: '👑 金帮毕业'
+    }[result] || '❌ 没货';
+}
+
 function isLatiosCustomScoringName(name) {
     return normalizeStandardName(name) === LATIOS_CUSTOM_NAME;
 }
@@ -4743,7 +5041,7 @@ function isLatiosThreeLineDisplay(name) {
 
 function isTiedLineScoredDirectly(name) {
     const standard = normalizeStandardName(name);
-    return SPECIAL_STANDARD_DOWNGRADE.includes(standard)
+    return isSpecialStandardDowngradeName(standard)
         || isSpecialSkillScoredByBerryModel(standard)
         || isLatiCustomScoringName(standard)
         || isEeveeBaseScoringName(standard)
@@ -5045,7 +5343,7 @@ function getSelfUseTiedAtLeastProbability(p, pType, track, k) {
 
 function getSelfUseTiedEvents(p, pType, isTiedIncluded) {
     // 特殊降档宝：和解线已经作为该物种认可的降档毕业线进入模型，不再额外算“自用和解”。
-    if (isTiedIncluded || !p || !p.count || SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) return [];
+    if (isTiedIncluded || !p || !p.count || isSpecialStandardDowngradeName(p.name)) return [];
 
     const events = [];
 
@@ -5324,11 +5622,11 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
         return totalKey;
     }
 
-    // 旧版特殊标准：这些技能型用“降一档”的记录口径，保留原本网站的直觉。
-    if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+    // 特异放宽标准：普通和解级记为毕业，普通毕业级记为大毕业；金帮毕业仍按金帮线计算。
+    if (isSpecialStandardDowngradeName(p.name)) {
         addCount('tied', p.gradCount || 0);
         addCount('grad', p.bigGradCount || 0);
-        addCount('bigGrad', p.goldGradCount || 0);
+        addCount('goldGrad', p.goldGradCount || 0);
         if (includeShinyLuckBonus) {
             getShinyUsefulEvents(p, pType).forEach(event => {
                 totalKey += event.scoreKey || 0;
@@ -5388,6 +5686,7 @@ function clearLuckInfoScoreCache() {
 }
 
 function getPokemonLuckMetrics(p) {
+    if (!isLuckCalculationEnabled()) return null;
     if (!p || !p.count || p.count === 0 || getEffectiveLuckCatchCount(p) <= 0) return { actual: 0, expected: 0, variance: 0, rate: 50, z: 0 };
 
     const cacheKey = getLuckSpeciesCacheKey(p);
@@ -5442,6 +5741,7 @@ function getLuckTargetTypeMatch(dict, targetType, name = null) {
 }
 
 function getAggregateLuckMetrics(targetType) {
+    if (!isLuckCalculationEnabled()) return null;
     const cacheKey = getLuckAggregateCacheKey(targetType);
     if (__luckAggregateCache.has(cacheKey)) return __luckAggregateCache.get(cacheKey);
 
@@ -5538,7 +5838,7 @@ function convertRateToObjectiveScore(rate) {
             p[`goldGradCount_${track}`] = Number(row.goldGrad) || 0;
         });
     } else {
-        if (SPECIAL_STANDARD_DOWNGRADE.includes(p.name)) {
+        if (isSpecialStandardDowngradeName(p.name)) {
             tiedCount = 0;
         } else {
             tiedCount = parseInt(document.getElementById(`edit-tied-${index}`).value) || 0;
@@ -5583,6 +5883,7 @@ function convertRateToObjectiveScore(rate) {
             loadBoxSortModeFromLocal();
             loadTotalCatchCalibrationFromLocal();
             loadShinyLuckBonusFromLocal();
+            loadLuckCalculationSettingFromLocal();
 
             if (currentCloudUser) {
                 await loadBoxFromCloud();
@@ -5602,6 +5903,10 @@ function convertRateToObjectiveScore(rate) {
             loadTodayCheckInsFromLocal();
             if (currentCloudUser) rebuildTodayCheckInsFromHistory();
             renderTodayReportUI();
+
+            if (isPasswordRecoveryRedirect()) {
+                openPasswordUpdateModal();
+            }
             
         };
 
@@ -6107,7 +6412,11 @@ function submitDailyCheckIn() {
     updateBoxUI(true); 
     renderTodayReportUI();
 
-    showDailyReportModal(standardName, result, beforeRate, afterRate);
+    if (isLuckCalculationEnabled()) {
+        showDailyReportModal(standardName, result, beforeRate, afterRate);
+    } else {
+        showToast(`已记录【${standardName}】，评分计算当前已暂停`);
+    }
 }
 
 // 3. 渲染最终的趣味欧气指数战报（直观满分制 + 动态因果律文案）
@@ -6407,7 +6716,11 @@ function submitEditDailyCheckIn(checkInId) {
     
     document.getElementById('daily-checkin-modal').remove();
     updateBoxUI(true); renderTodayReportUI();
-    showDailyReportModal(standardName, result, beforeRate, afterRate);
+    if (isLuckCalculationEnabled()) {
+        showDailyReportModal(standardName, result, beforeRate, afterRate);
+    } else {
+        showToast(`已记录【${standardName}】，评分计算当前已暂停`);
+    }
 }
 
     // ==========================================
@@ -6860,6 +7173,117 @@ function countGraduationDexShinyUsefulByName(name) {
         const cap = getGraduationCapture(item);
         return cap && cap.name === name && isGraduationResult(cap.result) && !!cap.isShiny;
     }).length;
+}
+
+
+function getGraduationDexBoxSyncSummary() {
+    normalizeGraduationDex();
+    const summary = new Map();
+
+    graduationDex.forEach(item => {
+        const cap = getGraduationCapture(item);
+        if (!cap || !cap.name || !isGraduationResult(cap.result)) return;
+        const name = pokemonDictionary[cap.name] ? pokemonDictionary[cap.name].standard : cap.name;
+        if (!name) return;
+        if (!summary.has(name)) {
+            summary.set(name, {
+                name,
+                lockMode: cap.lockMode || getRecommendedLockModeForName(name),
+                normal: { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
+                food: {},
+                shinyUseful: 0
+            });
+        }
+        const row = summary.get(name);
+        if (cap.lockMode) row.lockMode = cap.lockMode;
+        const safeTrack = cap.track || getCheckInTrackMode(name, cap.foodCombo || 'ABB');
+        if (isFoodPokemonName(name) && safeTrack) {
+            const track = normalizeFoodTrack(safeTrack) || safeTrack;
+            if (!row.food[track]) row.food[track] = { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 };
+            row.food[track][cap.result] = (Number(row.food[track][cap.result]) || 0) + 1;
+        } else {
+            row.normal[cap.result] = (Number(row.normal[cap.result]) || 0) + 1;
+        }
+        if (cap.isShiny) row.shinyUseful += 1;
+    });
+
+    return summary;
+}
+
+function reconcileBoxWithGraduationDex(options = {}) {
+    const silent = options.silent !== false;
+    const shouldSave = options.save !== false;
+    if (!Array.isArray(graduationDex) || graduationDex.length === 0) return { changed: false, parts: [] };
+
+    const summary = getGraduationDexBoxSyncSummary();
+    if (summary.size === 0) return { changed: false, parts: [] };
+
+    let changed = false;
+    const parts = [];
+
+    summary.forEach(row => {
+        const p = getBoxRecordForNameOrCreate(row.name, row.lockMode);
+        ensureFoodTrackCounts(p);
+        let nameChanged = false;
+        const localParts = [];
+
+        if (isFoodPokemonName(row.name)) {
+            Object.entries(row.food).forEach(([track, counts]) => {
+                ['tied', 'grad', 'bigGrad', 'goldGrad'].forEach(result => {
+                    const key = getFoodTrackCountKey(result, track);
+                    const current = Number(p[key]) || 0;
+                    const expected = Number(counts[result]) || 0;
+                    const delta = Math.max(0, expected - current);
+                    if (delta > 0) {
+                        applyResultToBoxRecord(p, result, track, delta);
+                        localParts.push(`${getGraduationResultName(result)} +${delta}`);
+                        nameChanged = true;
+                    }
+                });
+            });
+            recalcFoodTrackTotals(p);
+        } else {
+            ['tied', 'grad', 'bigGrad', 'goldGrad'].forEach(result => {
+                const current = Number(p[`${result}Count`]) || 0;
+                const expected = Number(row.normal[result]) || 0;
+                const delta = Math.max(0, expected - current);
+                if (delta > 0) {
+                    applyResultToBoxRecord(p, result, null, delta);
+                    localParts.push(`${getGraduationResultName(result)} +${delta}`);
+                    nameChanged = true;
+                }
+            });
+        }
+
+        const currentShiny = Number(p.shinyUsefulCount) || 0;
+        const shinyDelta = Math.max(0, (Number(row.shinyUseful) || 0) - currentShiny);
+        if (shinyDelta > 0) {
+            applyShinyUsefulToBoxRecord(p, shinyDelta);
+            localParts.push(`闪光出货 +${shinyDelta}`);
+            nameChanged = true;
+        }
+
+        const beforeCount = Number(p.count) || 0;
+        ensureBoxCountCoversOutputs(p);
+        if ((Number(p.count) || 0) !== beforeCount) {
+            localParts.push(`总捕捉补至 ${p.count}`);
+            nameChanged = true;
+        }
+
+        if (nameChanged) {
+            changed = true;
+            parts.push(`${row.name}：${localParts.join(' / ')}`);
+        }
+    });
+
+    if (changed) {
+        normalizePlayerBox();
+        clearLuckInfoScoreCache();
+        if (shouldSave) saveBoxToLocal(true);
+        if (!silent) showToast(`已同步出货库到大仓：${parts.slice(0, 2).join('；')}${parts.length > 2 ? ' 等' : ''}`);
+    }
+
+    return { changed, parts };
 }
 
 function maybeSyncBackfilledGraduationToBox(state) {
@@ -8117,6 +8541,15 @@ function updateCheckInResultOptionsForName(name) {
         select.value = ['none','tied','grad','bigGrad'].includes(oldVal) ? oldVal : 'none';
         return;
     }
+    if (isSpecialStandardDowngradeName(standardName)) {
+        select.innerHTML = `
+            <option value="none" class="text-slate-400 font-bold">❌ 没货/白条</option>
+            <option value="grad" class="text-emerald-400 font-bold">🟩 毕业（特异放宽标准）</option>
+            <option value="bigGrad" class="text-purple-400 font-bold">🔮 大毕业（特异放宽标准）</option>
+            <option value="goldGrad" class="text-red-400 font-bold">👑 金帮毕业（特异放宽标准）</option>`;
+        select.value = ['none','grad','bigGrad','goldGrad'].includes(oldVal) ? oldVal : 'none';
+        return;
+    }
     if (isEeveeFamilyName(standardName)) {
         const familyHint = isEeveeBaseScoringName(standardName) ? '伊布专用' : (isEspeonScoringName(standardName) ? '太阳伊布专用' : (isEeveeNormalSkillEvolutionName(standardName) ? '普通技能型' : '玩家自定义'));
         select.innerHTML = `
@@ -8171,6 +8604,36 @@ function triggerLivePanelAudit() {
     }
 
     let natureKey = document.getElementById('checkin-nature').value;
+
+    if (isSpecialStandardDowngradeName(standardName)) {
+        const report = runPanelAuditMath('skill', standardName, window.checkinSubskills, natureKey, 'ABB');
+        const mappedResult = mapOrdinaryResultToSpecialDowngradeResult(report.recommendValue);
+        const mappedFutureResult = mapOrdinaryResultToSpecialDowngradeResult(report.futureRecommendValue);
+        auditBox.innerHTML = `
+        <div class="bg-amber-50/70 p-3 rounded-2xl border border-amber-200/80 text-[11px] space-y-2 text-amber-950 font-medium">
+            <div class="flex items-center justify-between gap-2 border-b border-amber-100 pb-2">
+                <span class="font-black text-amber-700"><i class="fa-solid fa-wand-magic-sparkles"></i> ${standardName}特异放宽标准速查</span>
+                <span class="font-mono font-black text-amber-700 bg-white border border-amber-100 px-2 py-0.5 rounded-lg">效率 ${report.effCurrent.toFixed(3)}</span>
+            </div>
+            <div class="flex items-center justify-between bg-white/80 border border-amber-100 rounded-xl px-3 py-2">
+                <span class="text-slate-500 font-bold">系统参考档</span>
+                <span class="font-black text-amber-700">${getSpecialDowngradeDisplayLabel(mappedResult)}</span>
+            </div>
+            <div class="flex items-center justify-between bg-white/60 border border-amber-100 rounded-xl px-3 py-2">
+                <span class="text-slate-500 font-bold">未来期参考档</span>
+                <span class="font-black text-amber-700">${getSpecialDowngradeDisplayLabel(mappedFutureResult)}</span>
+            </div>
+        </div>`;
+        window.currentSystemRecommendValue = mappedResult;
+        if (!window.userManuallyOverrodeResult) {
+            const resSelect = document.getElementById('checkin-result');
+            if (resSelect) {
+                resSelect.value = mappedResult;
+                toggleCheckInFoodTrack();
+            }
+        }
+        return;
+    }
 
     if (isLatiosCustomScoringName(standardName)) {
         const latiosReport = runLatiosPanelAudit(window.checkinSubskills, natureKey);
