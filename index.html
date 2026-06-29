@@ -172,7 +172,7 @@
                         <li><strong>特殊技能型暂定评分</strong>：部分特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后暂按树果宝概率映射参与运气测评；拉帝欧斯/拉帝亚斯和伊布家族使用各自专用口径。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
                         <li><strong>和解口径说明</strong>：默认主评分不要求完整记录所有和解；已录入的少量和解会按“自用和解”处理，理解为该品种至少曾出现过可留用的和解个体，而不是完整和解总数。</li>
-                        <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，系统会把全局/三系内的有效捕捉、出货总数、总闪光数和闪光出货数合并，估算闪光恰好命中出货的额外稀有度。请尽量先补全各宝总闪光数量，否则加成可能偏高。</li>
+                        <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，系统会把全局/三系内的有效捕捉、出货总数、总闪光数和闪光出货数合并，估算闪光恰好命中出货的额外稀有度。请尽量先补全各宝总闪光数量；也可以启用“手填总闪光”覆盖全盘总闪光数，适合懒得逐宝统计的玩家。</li>
                     </ul>
                 </div>
 
@@ -568,9 +568,14 @@
                     <button onclick="toggleShowOnlyGraduated()" id="filter-only-graduated" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="切换是否只显示已经有记录出货或自用和解的宝可梦">
                         <i class="fa-solid fa-eye-slash"></i> 只看已出货: 关
                     </button>
-                    <button onclick="toggleShinyLuckBonus()" id="toggle-shiny-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="基于全局/三系总闪光数与闪光出货数估算额外稀有度；请先尽量补全各宝总闪光数量，否则可能偏高。">
+                    <button onclick="toggleShinyLuckBonus()" id="toggle-shiny-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="基于全局/三系总闪光数与闪光出货数估算额外稀有度；可逐宝补全，也可启用手填总闪光覆盖全盘口径。">
                         <i class="fa-solid fa-sparkles"></i> 闪光加成: 关
                     </button>
+                    <label class="flex items-center gap-1.5 bg-yellow-50 border border-yellow-200 rounded-xl px-2 py-1.5 text-[10px] font-black text-yellow-700 shadow-sm" title="可选：懒得逐宝补总闪光时，手动填写全盘总闪光数。启用后覆盖顶部总闪光与全盘大仓闪光加成；三系拆分仍按逐宝自动统计。">
+                        <input type="checkbox" id="manual-shiny-total-enabled" onchange="toggleManualTotalShinyOverride(this.checked)" class="w-3.5 h-3.5 accent-yellow-500">
+                        手填总闪光
+                        <input type="number" min="0" id="manual-shiny-total-input" oninput="setManualTotalShinyValue(this.value)" placeholder="总数" class="w-16 bg-white border border-yellow-200 rounded-lg px-2 py-1 text-[11px] font-mono font-black text-yellow-700 focus:outline-none focus:border-yellow-400 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200" disabled>
+                    </label>
                     <button onclick="toggleLuckCalculation()" id="toggle-luck-calculation" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-600 text-white hover:bg-emerald-500 border border-emerald-500 shadow-sm flex items-center gap-1" title="大量补录时可先关闭评分计算，录完后再开启统一重算。">
                         <i class="fa-solid fa-gauge-high"></i> 评分计算: 开
                     </button>
@@ -709,6 +714,7 @@ let showOnlyGraduated = false;
 let boxSortMode = 'entry_desc';
 let boxShinySearchMode = 'all';
 let includeShinyLuckBonus = false;
+let manualTotalShinyOverride = { enabled: false, total: 0 };
 let luckExcludePanelOpen = {};
 // 🚀 性能模式：允许玩家在大量补录时临时暂停概率评分，避免每次录入都触发重计算。
 let luckCalculationEnabled = true;
@@ -3832,7 +3838,8 @@ function getEvolutionCatchWeight(name) {
             let totalBigGrad = playerBox.reduce((sum, item) => sum + item.bigGradCount, 0);
             let totalGoldGrad = playerBox.reduce((sum, item) => sum + item.goldGradCount, 0);
             let totalShinyUseful = playerBox.reduce((sum, item) => sum + (Number(item.shinyUsefulCount) || 0), 0);
-            let totalShinyAll = playerBox.reduce((sum, item) => sum + (Number(item.shinyCount) || 0), 0);
+            let autoTotalShinyAll = playerBox.reduce((sum, item) => sum + (Number(item.shinyCount) || 0), 0);
+            let totalShinyAll = getDisplayedTotalShinyCount(autoTotalShinyAll, totalShinyUseful);
 
             document.getElementById('total-species').innerText = totalSpecies + ' 种';
             document.getElementById('total-catches').innerText = totalCatches + ' 只';
@@ -3845,7 +3852,12 @@ function getEvolutionCatchWeight(name) {
             const shinyUsefulEl = document.getElementById('total-shiny-useful');
             if (shinyUsefulEl) shinyUsefulEl.innerText = totalShinyUseful;
             const shinyAllEl = document.getElementById('total-shiny-all');
-            if (shinyAllEl) shinyAllEl.innerText = totalShinyAll;
+            if (shinyAllEl) {
+                shinyAllEl.innerText = totalShinyAll;
+                shinyAllEl.title = manualTotalShinyOverride?.enabled
+                    ? `当前使用手填全盘总闪光：${totalShinyAll}；逐宝自动汇总为 ${autoTotalShinyAll}`
+                    : `当前使用逐宝自动汇总总闪光：${autoTotalShinyAll}`;
+            }
             // 闪光统计只展示总闪数量与闪光出货数；不再用“总闪光/总捕捉”显示闪率，避免把捕捉样本误当成遭遇样本。
 
             renderTotalCatchCalibrationUI();
@@ -3913,6 +3925,7 @@ function getEvolutionCatchWeight(name) {
                     shinyBtn.innerHTML = `<i class="fa-solid fa-sparkles"></i> 闪光加成: 关`;
                 }
             }
+            updateManualTotalShinyOverrideControls();
             updateLuckCalculationButton();
             
             Object.keys(typeKeys).forEach(tk => {
@@ -4520,6 +4533,7 @@ async function signInUser() {
     updateAuthUI();
     loadBoxSortModeFromLocal();
     loadTotalCatchCalibrationFromLocal();
+    loadManualTotalShinyOverrideFromLocal();
     loadLuckCalculationSettingFromLocal();
     await loadBoxFromCloud();
     await loadHistoryFromCloud();
@@ -4676,6 +4690,7 @@ async function signOutUser() {
     updateAuthUI();
     loadBoxSortModeFromLocal();
     loadTotalCatchCalibrationFromLocal();
+    loadManualTotalShinyOverrideFromLocal();
     loadLuckCalculationSettingFromLocal();
 
     loadBoxFromLocal();
@@ -4722,12 +4737,95 @@ function saveShinyLuckBonusToLocal() {
     localStorage.setItem(getShinyLuckStorageKey(), includeShinyLuckBonus ? 'true' : 'false');
 }
 
+function getManualTotalShinyStorageKey() {
+    return currentCloudUser ? 'sleep_manual_total_shiny_' + currentCloudUser.id : 'sleep_manual_total_shiny_guest';
+}
+
+function loadManualTotalShinyOverrideFromLocal() {
+    try {
+        const raw = localStorage.getItem(getManualTotalShinyStorageKey());
+        const parsed = raw ? JSON.parse(raw) : null;
+        manualTotalShinyOverride = {
+            enabled: !!parsed?.enabled,
+            total: Math.max(0, Math.floor(Number(parsed?.total) || 0))
+        };
+    } catch (e) {
+        manualTotalShinyOverride = { enabled: false, total: 0 };
+    }
+}
+
+function saveManualTotalShinyOverrideToLocal() {
+    localStorage.setItem(getManualTotalShinyStorageKey(), JSON.stringify({
+        enabled: !!manualTotalShinyOverride.enabled,
+        total: Math.max(0, Math.floor(Number(manualTotalShinyOverride.total) || 0))
+    }));
+}
+
+function getAutoTotalShinyCount() {
+    return (playerBox || []).reduce((sum, item) => sum + (Number(item.shinyCount) || 0), 0);
+}
+
+function getTotalShinyUsefulCountForAllBox() {
+    return (playerBox || []).reduce((sum, item) => sum + (Number(item.shinyUsefulCount) || 0), 0);
+}
+
+function getManualTotalShinyValueForScoring(autoTotal = null, observedHits = null, population = null) {
+    const autoValue = Math.max(0, Math.floor(Number(autoTotal ?? getAutoTotalShinyCount()) || 0));
+    if (!manualTotalShinyOverride?.enabled) return autoValue;
+    const hits = Math.max(0, Math.floor(Number(observedHits ?? getTotalShinyUsefulCountForAllBox()) || 0));
+    let value = Math.max(0, Math.floor(Number(manualTotalShinyOverride.total) || 0));
+    // 手填总闪光不能小于已记录闪光出货数；也不能超过当前纳入评分的捕捉总体。
+    value = Math.max(value, hits);
+    if (population !== null && population !== undefined) {
+        const n = Math.max(0, Math.floor(Number(population) || 0));
+        if (n > 0) value = Math.min(value, n);
+    }
+    return value;
+}
+
+function getDisplayedTotalShinyCount(autoTotal = null, observedHits = null) {
+    return getManualTotalShinyValueForScoring(autoTotal, observedHits, null);
+}
+
+function updateManualTotalShinyOverrideControls() {
+    const enabledEl = document.getElementById('manual-shiny-total-enabled');
+    const inputEl = document.getElementById('manual-shiny-total-input');
+    const enabled = !!manualTotalShinyOverride?.enabled;
+    if (enabledEl && enabledEl.checked !== enabled) enabledEl.checked = enabled;
+    if (inputEl) {
+        inputEl.disabled = !enabled;
+        const value = Math.max(0, Math.floor(Number(manualTotalShinyOverride?.total) || 0));
+        if (document.activeElement !== inputEl && inputEl.value !== String(value || '')) inputEl.value = value ? String(value) : '';
+        inputEl.title = enabled
+            ? '当前启用手填全盘总闪光数：会覆盖顶部总闪光与全盘大仓闪光加成；三系评分仍按逐宝统计。'
+            : '未启用时，系统自动汇总各宝闪光总数。';
+    }
+}
+
+function toggleManualTotalShinyOverride(enabled) {
+    manualTotalShinyOverride.enabled = !!enabled;
+    if (manualTotalShinyOverride.enabled && (!manualTotalShinyOverride.total || manualTotalShinyOverride.total < 0)) {
+        manualTotalShinyOverride.total = getAutoTotalShinyCount();
+    }
+    saveManualTotalShinyOverrideToLocal();
+    clearLuckInfoScoreCache();
+    updateBoxUI(false);
+    showToast(manualTotalShinyOverride.enabled ? '已启用手填总闪光：全盘大仓将使用该总数' : '已改回逐宝自动汇总总闪光');
+}
+
+function setManualTotalShinyValue(value) {
+    manualTotalShinyOverride.total = Math.max(0, Math.floor(Number(value) || 0));
+    saveManualTotalShinyOverrideToLocal();
+    clearLuckInfoScoreCache();
+    updateBoxUI(false);
+}
+
 function toggleShinyLuckBonus() {
     includeShinyLuckBonus = !includeShinyLuckBonus;
     saveShinyLuckBonusToLocal();
     clearLuckInfoScoreCache();
     updateBoxUI(false);
-    showToast(includeShinyLuckBonus ? '已开启闪光加成：请确认各宝总闪光数已尽量补全' : '已关闭闪光加成');
+    showToast(includeShinyLuckBonus ? '已开启闪光加成：可逐宝补全总闪光，也可启用手填总闪光' : '已关闭闪光加成');
 }
 
 
@@ -5615,7 +5713,8 @@ let __luckAggregateCache = new Map();
 
 function getLuckSpeciesCacheKey(p) {
     if (!p) return 'null';
-    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount, p.shinyCount, p.shinyUsefulCount, getBoxLuckExcludedCount(p, 'tied'), getBoxLuckExcludedCount(p, 'grad'), getBoxLuckExcludedCount(p, 'bigGrad'), getBoxLuckExcludedCount(p, 'goldGrad'), getGraduationDexLuckExcludedShinyUsefulByName(p.name), includeShinyLuckBonus ? 'shinyOn' : 'shinyOff'];
+    const manualShinyKey = (manualTotalShinyOverride?.enabled ? `manualShiny:${Number(manualTotalShinyOverride.total) || 0}` : 'manualShiny:auto');
+    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount, p.shinyCount, p.shinyUsefulCount, getBoxLuckExcludedCount(p, 'tied'), getBoxLuckExcludedCount(p, 'grad'), getBoxLuckExcludedCount(p, 'bigGrad'), getBoxLuckExcludedCount(p, 'goldGrad'), getGraduationDexLuckExcludedShinyUsefulByName(p.name), includeShinyLuckBonus ? 'shinyOn' : 'shinyOff', manualShinyKey];
     if (isFoodPokemonName(p.name)) {
         ensureFoodTrackCounts(p);
         FOOD_TRACK_KEYS.forEach(track => {
@@ -5858,6 +5957,14 @@ function getAggregateShinyUsefulEvent(targetType) {
         if (K > 0) speciesWithObservedHit += 1;
     });
 
+    // 全盘大仓允许玩家手填总闪光数，解决“不想逐宝统计普通闪光”的场景。
+    // 三系评分没有可靠拆分口径，仍使用逐宝自动统计，避免把全局总数硬分给树果/食材/技能。
+    const autoTotalShiny = totalShiny;
+    const isManualTotalUsed = targetType === 'all' && !!manualTotalShinyOverride?.enabled;
+    if (isManualTotalUsed) {
+        totalShiny = getManualTotalShinyValueForScoring(autoTotalShiny, totalObservedHits, totalPopulation);
+    }
+
     // 没有实际闪光出货时不加分也不扣分；但一旦有闪光出货，普通闪光会通过 totalShiny 参与稀释。
     if (totalObservedHits <= 0 || totalShiny <= 0 || totalUseful <= 0 || totalPopulation <= 0) return null;
 
@@ -5870,6 +5977,8 @@ function getAggregateShinyUsefulEvent(targetType) {
         label: `闪光出货总命中≥${need}/${totalShiny}`,
         count: need,
         shinyTotal: totalShiny,
+        autoShinyTotal: autoTotalShiny,
+        manualTotalUsed: isManualTotalUsed,
         usefulTotal: totalUseful,
         population: totalPopulation,
         speciesWithShiny,
@@ -6493,6 +6602,7 @@ function convertRateToObjectiveScore(rate) {
             loadBoxSortModeFromLocal();
             loadTotalCatchCalibrationFromLocal();
             loadShinyLuckBonusFromLocal();
+            loadManualTotalShinyOverrideFromLocal();
             loadLuckCalculationSettingFromLocal();
 
             if (currentCloudUser) {
