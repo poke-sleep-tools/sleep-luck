@@ -171,7 +171,7 @@
                         <li><strong>编辑历史记录会影响大仓</strong>：历史抽卡库是真实流水，修改或删除历史记录可能改变大仓统计；出货库里的“编辑当前”只改展示档案，不会影响大仓。</li>
                         <li><strong>特殊技能型暂定评分</strong>：部分特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后暂按树果宝概率映射参与运气测评；拉帝欧斯/拉帝亚斯和伊布家族使用各自专用口径。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
-                        <li><strong>和解口径说明</strong>：默认主评分不要求完整记录所有和解；已录入的少量和解会按“自用和解”处理，理解为该品种至少曾出现过可留用的和解个体，而不是完整和解总数。</li>
+                        <li><strong>和解口径说明</strong>：默认主评分不计入和解分数，因为很多玩家不会完整记录所有和解，这个口径更适合横向比较。若玩家确认自己完整/稳定记录和解，可在大仓显示区开启“和解计分”。闪光加成另行计算，闪光和解始终视为闪光出货命中。</li>
                         <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，系统会把全局/三系内的有效捕捉、出货总数、总闪光数和闪光出货数合并，估算闪光恰好命中出货的额外稀有度。请尽量先补全各宝总闪光数量；也可以启用“手填总闪光”覆盖全盘总闪光数，适合懒得逐宝统计的玩家。</li>
                     </ul>
                 </div>
@@ -571,6 +571,9 @@
                     <button onclick="toggleShinyLuckBonus()" id="toggle-shiny-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="基于全局/三系总闪光数与闪光出货数估算额外稀有度；可逐宝补全，也可启用手填总闪光覆盖全盘口径。">
                         <i class="fa-solid fa-sparkles"></i> 闪光加成: 关
                     </button>
+                    <button onclick="toggleTiedLuckScore()" id="toggle-tied-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="推荐保持关闭：多数玩家不会完整记录和解，不计入和解分数更适合横向比较。开启后，已录入和解会按当前模型参与主评分；闪光和解无论此开关开启或关闭都会计入闪光加成。">
+                        <i class="fa-solid fa-handshake-angle"></i> 和解计分: 关（更准）
+                    </button>
                     <label class="flex items-center gap-1.5 bg-yellow-50 border border-yellow-200 rounded-xl px-2 py-1.5 text-[10px] font-black text-yellow-700 shadow-sm" title="可选：懒得逐宝补总闪光时，手动填写全盘总闪光数。启用后覆盖顶部总闪光与全盘大仓闪光加成；三系拆分仍按逐宝自动统计。">
                         <input type="checkbox" id="manual-shiny-total-enabled" onchange="toggleManualTotalShinyOverride(this.checked)" class="w-3.5 h-3.5 accent-yellow-500">
                         手填总闪光
@@ -714,6 +717,8 @@ let showOnlyGraduated = false;
 let boxSortMode = 'entry_desc';
 let boxShinySearchMode = 'all';
 let includeShinyLuckBonus = false;
+// 和解计分默认关闭：多数玩家不会完整记录和解，关闭更适合作横向气运比较。
+let includeTiedLuckScore = false;
 let manualTotalShinyOverride = { enabled: false, total: 0 };
 let luckExcludePanelOpen = {};
 // 🚀 性能模式：允许玩家在大量补录时临时暂停概率评分，避免每次录入都触发重计算。
@@ -3925,6 +3930,7 @@ function getEvolutionCatchWeight(name) {
                     shinyBtn.innerHTML = `<i class="fa-solid fa-sparkles"></i> 闪光加成: 关`;
                 }
             }
+            updateTiedLuckScoreButton();
             updateManualTotalShinyOverrideControls();
             updateLuckCalculationButton();
             
@@ -4533,6 +4539,8 @@ async function signInUser() {
     updateAuthUI();
     loadBoxSortModeFromLocal();
     loadTotalCatchCalibrationFromLocal();
+    loadShinyLuckBonusFromLocal();
+    loadTiedLuckScoreFromLocal();
     loadManualTotalShinyOverrideFromLocal();
     loadLuckCalculationSettingFromLocal();
     await loadBoxFromCloud();
@@ -4690,6 +4698,8 @@ async function signOutUser() {
     updateAuthUI();
     loadBoxSortModeFromLocal();
     loadTotalCatchCalibrationFromLocal();
+    loadShinyLuckBonusFromLocal();
+    loadTiedLuckScoreFromLocal();
     loadManualTotalShinyOverrideFromLocal();
     loadLuckCalculationSettingFromLocal();
 
@@ -4725,6 +4735,40 @@ function updateAuthUI() {
 }
 
         
+function getTiedLuckScoreStorageKey() {
+    return currentCloudUser ? 'sleep_tied_luck_score_' + currentCloudUser.id : 'sleep_tied_luck_score_guest';
+}
+
+function loadTiedLuckScoreFromLocal() {
+    includeTiedLuckScore = localStorage.getItem(getTiedLuckScoreStorageKey()) === 'true';
+}
+
+function saveTiedLuckScoreToLocal() {
+    localStorage.setItem(getTiedLuckScoreStorageKey(), includeTiedLuckScore ? 'true' : 'false');
+}
+
+function updateTiedLuckScoreButton() {
+    const btn = document.getElementById('toggle-tied-luck');
+    if (!btn) return;
+    if (isTiedLuckScoreIncluded()) {
+        btn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-500 text-slate-950 shadow-sm flex items-center gap-1 border border-amber-400";
+        btn.innerHTML = `<i class="fa-solid fa-handshake-angle"></i> 和解计分: 开`;
+        btn.title = '已开启：已录入和解会参与主评分。仅建议完整/稳定记录和解的玩家开启；闪光和解无论此开关都会计入闪光加成。';
+    } else {
+        btn.className = "px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1";
+        btn.innerHTML = `<i class="fa-solid fa-handshake-angle"></i> 和解计分: 关（更准）`;
+        btn.title = '推荐保持关闭：多数玩家不会完整记录和解，不计入和解分数更适合横向比较。闪光和解仍会计入闪光加成。';
+    }
+}
+
+function toggleTiedLuckScore() {
+    includeTiedLuckScore = !isTiedLuckScoreIncluded();
+    saveTiedLuckScoreToLocal();
+    clearLuckInfoScoreCache();
+    updateBoxUI(false);
+    showToast(includeTiedLuckScore ? '已开启和解计分：仅建议完整记录和解的玩家使用' : '已关闭和解计分：该口径更适合横向比较');
+}
+
 function getShinyLuckStorageKey() {
     return currentCloudUser ? 'sleep_shiny_luck_bonus_' + currentCloudUser.id : 'sleep_shiny_luck_bonus_guest';
 }
@@ -5622,6 +5666,19 @@ function isTiedLineScoredDirectly(name) {
         || isEspeonScoringName(standard);
 }
 
+function isTiedLuckScoreIncluded() {
+    return includeTiedLuckScore === true;
+}
+
+function isTiedOutcomeIncludedInLuckDistribution(name) {
+    const standard = normalizeStandardName(name);
+    // 特殊降档宝和太阳伊布的部分“毕业/大毕业”会映射到 tied 概率线；
+    // 即使关闭“和解计分”，这些显示为毕业级的结果也必须保留 tied 概率轴。
+    if (isSpecialStandardDowngradeName(standard) || isEspeonScoringName(standard)) return true;
+    // 其他直接和解线，仅在玩家明确开启和解计分时纳入主评分。
+    return isTiedLineScoredDirectly(standard) && isTiedLuckScoreIncluded();
+}
+
 function getLuckScoringTypeForPokemon(name) {
     const dict = pokemonDictionary[name];
     if (!dict) return null;
@@ -5714,7 +5771,8 @@ let __luckAggregateCache = new Map();
 function getLuckSpeciesCacheKey(p) {
     if (!p) return 'null';
     const manualShinyKey = (manualTotalShinyOverride?.enabled ? `manualShiny:${Number(manualTotalShinyOverride.total) || 0}` : 'manualShiny:auto');
-    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount, p.shinyCount, p.shinyUsefulCount, getBoxLuckExcludedCount(p, 'tied'), getBoxLuckExcludedCount(p, 'grad'), getBoxLuckExcludedCount(p, 'bigGrad'), getBoxLuckExcludedCount(p, 'goldGrad'), getGraduationDexLuckExcludedShinyUsefulByName(p.name), includeShinyLuckBonus ? 'shinyOn' : 'shinyOff', manualShinyKey];
+    const tiedScoreKey = includeTiedLuckScore ? 'tiedScoreOn' : 'tiedScoreOff';
+    const base = [p.name, p.count, p.lockMode, p.tiedCount, p.gradCount, p.bigGradCount, p.goldGradCount, p.shinyCount, p.shinyUsefulCount, getBoxLuckExcludedCount(p, 'tied'), getBoxLuckExcludedCount(p, 'grad'), getBoxLuckExcludedCount(p, 'bigGrad'), getBoxLuckExcludedCount(p, 'goldGrad'), getGraduationDexLuckExcludedShinyUsefulByName(p.name), includeShinyLuckBonus ? 'shinyOn' : 'shinyOff', manualShinyKey, tiedScoreKey];
     if (isFoodPokemonName(p.name)) {
         ensureFoodTrackCounts(p);
         FOOD_TRACK_KEYS.forEach(track => {
@@ -5880,7 +5938,7 @@ function getScoredShinyCount(p) {
 function getScoredUsefulTotalForShinyBonus(p) {
     if (!p) return 0;
     // 闪光加成基于“原 Box 结果已经存在”的额外信息：在 n 只中已有 T 只和解及以上、U 只是闪光，K 只同时命中。
-    // 因此 T 使用大仓中已计入评分的和解及以上数量，并扣除手动/毕业库不计评分数量。
+    // 注意：这里不受“和解计分”开关影响。闪光和解始终属于闪光出货命中，用于闪光额外稀有度计算。
     const tied = Math.max(0, (Number(p.tiedCount) || 0) - getBoxLuckExcludedCount(p, 'tied'));
     const grad = Math.max(0, (Number(p.gradCount) || 0) - getBoxLuckExcludedCount(p, 'grad'));
     const bigGrad = Math.max(0, (Number(p.bigGradCount) || 0) - getBoxLuckExcludedCount(p, 'bigGrad'));
@@ -6052,6 +6110,8 @@ function getSelfUseTiedAtLeastProbability(p, pType, track, k) {
 }
 
 function getSelfUseTiedEvents(p, pType, isTiedIncluded) {
+    // 默认关闭和解计分：多数玩家不会完整记录和解，关闭后主评分不吃普通和解数量。
+    if (!isTiedLuckScoreIncluded()) return [];
     // 特殊降档宝：和解线已经作为该物种认可的降档毕业线进入模型，不再额外算“自用和解”。
     if (isTiedIncluded || !p || !p.count || isSpecialStandardDowngradeName(p.name)) return [];
 
@@ -6213,8 +6273,8 @@ function buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded
         dist = convolveLuckDistribution(dist, catchDist);
     }
 
-    // 默认毕业口径下，已录入和解视为“自用和解”证据：
-    // 不要求完整记录所有和解，只按“至少出现过 k 只和解线个体”的概率给一份温和加成。
+    // 仅在玩家开启“和解计分”时，已录入和解才作为“自用和解”证据参与主评分。
+    // 关闭时不计入和解分数，更适合不同记录习惯玩家之间的横向比较。
     const selfUseTiedEvents = getSelfUseTiedEvents(p, pType, isTiedIncluded);
     dist = convolveSelfUseTiedEvents(dist, selfUseTiedEvents);
 
@@ -6267,12 +6327,13 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
         });
     }
 
-    const addCount = (result, count, track = null) => {
+    const addCount = (result, count, track = null, excludeResult = null) => {
         const rawN = Math.max(0, Number(count) || 0);
         if (rawN <= 0) return;
         const pool = (track && excludeRemainingByTrack[track]) ? excludeRemainingByTrack[track] : excludeRemaining;
-        const ex = Math.min(rawN, pool[result] || 0);
-        pool[result] = Math.max(0, (pool[result] || 0) - ex);
+        const exKey = excludeResult || result;
+        const ex = Math.min(rawN, pool[exKey] || 0);
+        pool[exKey] = Math.max(0, (pool[exKey] || 0) - ex);
         const n = Math.max(0, rawN - ex);
         if (n <= 0) return;
         if (result === 'tied' && !isTiedIncluded) return;
@@ -6300,7 +6361,7 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
 
     // 伊布本体：普通技能型四线 + 特殊参考线并集。
     if (isEeveeBaseScoringName(p.name)) {
-        addCount('tied', p.tiedCount || 0);
+        if (isTiedLuckScoreIncluded()) addCount('tied', p.tiedCount || 0);
         addCount('grad', p.gradCount || 0);
         addCount('bigGrad', p.bigGradCount || 0);
         addCount('goldGrad', p.goldGradCount || 0);
@@ -6310,7 +6371,9 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
 
     // 太阳伊布：页面保留四档记录；内部评分使用参考线的和解/金帮两级证据。
     if (isEspeonScoringName(p.name)) {
-        addCount('tied', (Number(p.tiedCount) || 0) + (Number(p.gradCount) || 0) + (Number(p.bigGradCount) || 0));
+        if (isTiedLuckScoreIncluded()) addCount('tied', p.tiedCount || 0, null, 'tied');
+        addCount('tied', p.gradCount || 0, null, 'grad');
+        addCount('tied', p.bigGradCount || 0, null, 'bigGrad');
         addCount('goldGrad', p.goldGradCount || 0);
         // 闪光加成改为全局/三系合并事件，避免单宝 K>0 加分而普通闪光 K=0 不参与稀释。
         return totalKey;
@@ -6318,7 +6381,7 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
 
     // 拉帝欧斯/拉帝亚斯专用三线：和解 / 毕业 / 大毕业，不设置金帮毕业线。
     if (isLatiCustomScoringName(p.name)) {
-        addCount('tied', p.tiedCount || 0);
+        if (isTiedLuckScoreIncluded()) addCount('tied', p.tiedCount || 0);
         addCount('grad', p.gradCount || 0);
         addCount('bigGrad', p.bigGradCount || 0);
         // 闪光加成改为全局/三系合并事件，避免单宝 K>0 加分而普通闪光 K=0 不参与稀释。
@@ -6327,7 +6390,7 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
 
     // 暂定特殊技能宝：玩家手动录入三档，概率按树果宝毕业/大毕业/金帮线映射；不使用大毕业档。
     if (isSpecialSkillScoredByBerryModel(p.name)) {
-        addCount('tied', p.tiedCount || 0);
+        if (isTiedLuckScoreIncluded()) addCount('tied', p.tiedCount || 0);
         addCount('grad', p.gradCount || 0);
         addCount('goldGrad', p.goldGradCount || 0);
         // 闪光加成改为全局/三系合并事件，避免单宝 K>0 加分而普通闪光 K=0 不参与稀释。
@@ -6336,8 +6399,8 @@ function getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded) {
 
     // 特异放宽标准：普通和解级记为毕业，普通毕业级记为大毕业；金帮毕业仍按金帮线计算。
     if (isSpecialStandardDowngradeName(p.name)) {
-        addCount('tied', p.gradCount || 0);
-        addCount('grad', p.bigGradCount || 0);
+        addCount('tied', p.gradCount || 0, null, 'grad');
+        addCount('grad', p.bigGradCount || 0, null, 'bigGrad');
         addCount('goldGrad', p.goldGradCount || 0);
         // 闪光加成改为全局/三系合并事件，避免单宝 K>0 加分而普通闪光 K=0 不参与稀释。
         return totalKey;
@@ -6400,7 +6463,7 @@ function getPokemonLuckMetrics(p) {
     const pType = getLuckScoringTypeForPokemon(p.name);
     if (!dict || !pType) return null;
 
-    const isTiedIncluded = isTiedLineScoredDirectly(p.name);
+    const isTiedIncluded = isTiedOutcomeIncludedInLuckDistribution(p.name);
     const scoreKeyMap = getLuckScoreKeyMap(p, pType, isTiedIncluded);
     const dist = buildSpeciesInfoScoreDistribution(p, pType, scoreKeyMap, isTiedIncluded);
     const actualKey = getActualInfoScoreKey(p, pType, scoreKeyMap, isTiedIncluded);
@@ -6602,6 +6665,7 @@ function convertRateToObjectiveScore(rate) {
             loadBoxSortModeFromLocal();
             loadTotalCatchCalibrationFromLocal();
             loadShinyLuckBonusFromLocal();
+            loadTiedLuckScoreFromLocal();
             loadManualTotalShinyOverrideFromLocal();
             loadLuckCalculationSettingFromLocal();
 
