@@ -171,7 +171,8 @@
                         <li><strong>编辑历史记录会影响大仓</strong>：历史抽卡库是真实流水，修改或删除历史记录可能改变大仓统计；出货库里的“编辑当前”只改展示档案，不会影响大仓。</li>
                         <li><strong>特殊技能型暂定评分</strong>：部分特殊技能宝仍不提供系统推荐毕业判定；玩家自行录入和解 / 毕业 / 金帮后暂按树果宝概率映射参与运气测评；拉帝欧斯/拉帝亚斯和伊布家族使用各自专用口径。</li>
                         <li><strong>毕业线仅作参考</strong>：系统会基于当前模型给出推荐档位，但不同玩家的投入策略、队伍需求和主观标准可能不同，最终判断仍以玩家选择为准。</li>
-                        <li><strong>和解口径说明</strong>：默认主评分不计入和解分数，因为很多玩家不会完整记录所有和解，这个口径更适合横向比较。若玩家确认自己完整/稳定记录和解，可在大仓显示区开启“和解计分”。闪光加成另行计算，闪光和解始终视为闪光出货命中。</li>
+                        <li><strong>新评分口径说明</strong>：主评分默认只把普通线毕业及以上和金帮毕业纳入非零分事件池；开启“和解计分”后才把普通和解也纳入。档位分数使用达线概率，并强制保持金帮毕业 ＞ 大毕业 ＞ 毕业 ＞ 和解，避免普通毕业因夹缝概率过小而反向高分。</li>
+                        <li><strong>和解口径说明</strong>：默认主评分不计入和解分数，因为很多玩家不会完整记录所有和解，这个口径更适合横向比较。若玩家确认自己完整/稳定记录和解，可在大仓显示区开启“和解计分”；开启后会按完整和解统计口径计算，理论分布也会纳入和解事件，所以只零星录入少量和解通常不会被奖励，反而可能拉低分数。闪光加成另行计算，闪光和解始终视为闪光出货命中。</li>
                         <li><strong>闪光口径说明</strong>：闪光不改变宝可梦实用档位；若开启“闪光加成”，系统会把全局/三系内的有效捕捉、出货总数、总闪光数和闪光出货数合并，估算闪光恰好命中出货的额外稀有度。请尽量先补全各宝总闪光数量；也可以启用“手填总闪光”覆盖全盘总闪光数，适合懒得逐宝统计的玩家。</li>
                     </ul>
                 </div>
@@ -571,7 +572,7 @@
                     <button onclick="toggleShinyLuckBonus()" id="toggle-shiny-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="基于全局/三系总闪光数与闪光出货数估算额外稀有度；可逐宝补全，也可启用手填总闪光覆盖全盘口径。">
                         <i class="fa-solid fa-sparkles"></i> 闪光加成: 关
                     </button>
-                    <button onclick="toggleTiedLuckScore()" id="toggle-tied-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="推荐保持关闭：多数玩家不会完整记录和解，不计入和解分数更适合横向比较。开启后，已录入和解会按当前模型参与主评分；闪光和解无论此开关开启或关闭都会计入闪光加成。">
+                    <button onclick="toggleTiedLuckScore()" id="toggle-tied-luck" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-50 text-slate-500 hover:bg-slate-100 border border-slate-200 shadow-sm flex items-center gap-1" title="推荐保持关闭：多数玩家不会完整记录和解，不计入和解分数更适合横向比较。开启后会切换为完整和解统计口径：理论分布也会认为应出现和解，若只零星录入和解，分数可能下降；闪光和解无论此开关开启或关闭都会计入闪光加成。">
                         <i class="fa-solid fa-handshake-angle"></i> 和解计分: 关（更准）
                     </button>
                     <label class="flex items-center gap-1.5 bg-yellow-50 border border-yellow-200 rounded-xl px-2 py-1.5 text-[10px] font-black text-yellow-700 shadow-sm" title="可选：懒得逐宝补总闪光时，手动填写全盘总闪光数。启用后覆盖顶部总闪光与全盘大仓闪光加成；三系拆分仍按逐宝自动统计。">
@@ -2029,19 +2030,19 @@ function getCalibrationStageModeLabel(mode) {
 }
 
 function getCalibrationSingleCatchDistribution(pType) {
-    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType]?.none || {});
-    const dist = { 0: 0 };
-    let nonZero = 0;
-    ['grad', 'bigGrad', 'goldGrad'].forEach(result => {
-        const prob = Math.max(0, Number(base[result]) || 0);
-        if (prob <= 0) return;
-        const key = infoScoreKeyFromProbability(prob);
-        dist[key] = (dist[key] || 0) + prob;
-        nonZero += prob;
-    });
-    // 未录入最高最高只是普通和解，但不视为自用和解，因此 tied 与未出货都合并为 0 分。
-    dist[0] = (dist[0] || 0) + Math.max(0, 1 - nonZero);
-    return normalizeLuckDistribution(dist);
+    // 总捕捉校准的“温和 base 模式”也走新版达线计分，避免继续使用旧的夹缝概率分数。
+    const pLike = {
+        name: `__calibration_${pType}`,
+        count: 1,
+        lockMode: 'none',
+        tiedCount: 0,
+        gradCount: 0,
+        bigGradCount: 0,
+        goldGradCount: 0,
+        shinyUsefulCount: 0
+    };
+    const scoreKeyMap = getLuckScoreKeyMap(pLike, pType, false);
+    return getSingleCatchScoreDistribution(pLike, pType, 'none', scoreKeyMap, false);
 }
 
 function powerLuckDistribution(singleDist, count) {
@@ -5675,8 +5676,13 @@ function isTiedOutcomeIncludedInLuckDistribution(name) {
     // 特殊降档宝和太阳伊布的部分“毕业/大毕业”会映射到 tied 概率线；
     // 即使关闭“和解计分”，这些显示为毕业级的结果也必须保留 tied 概率轴。
     if (isSpecialStandardDowngradeName(standard) || isEspeonScoringName(standard)) return true;
-    // 其他直接和解线，仅在玩家明确开启和解计分时纳入主评分。
-    return isTiedLineScoredDirectly(standard) && isTiedLuckScoreIncluded();
+
+    // v2.6 关键修正：
+    // “和解计分”开关的含义不是给已录入和解额外奖励，而是切换到“完整和解统计口径”。
+    // 开启后，普通宝的理论分布也必须把 tied 档纳入非零分事件池；
+    // 如果玩家只零星记录了 1 个和解，理论上却应该出现很多和解，分数应下降或至少不应被奖励。
+    // 旧版只给已录入和解做 self-use at-least 事件，导致少量和解反而加分，这是错误口径。
+    return isTiedLuckScoreIncluded();
 }
 
 function getLuckScoringTypeForPokemon(name) {
@@ -5696,14 +5702,16 @@ function getLuckScoringTypeForPokemon(name) {
 
 // ==========================================
 // 📊 概率信息量气运评分 v2.2
-// 核心思想：默认不完整评价和解；普通毕业线、金帮线与“自用和解”统一进入同一个概率分布。
-// 单次出货贡献 = -log10(该结果在当前宝可梦/轨道/锁金条件下的平均理论概率)；自用和解按“至少出现过 k 只和解线个体”计分。
+// 核心思想：默认不计入和解，更适合横向比较；开启和解计分时按“完整和解统计口径”重算理论分布。
+// 单次出货贡献 v2.6 = -log10(该档位达线概率)，并强制保证 金帮 > 大毕业 > 毕业 > 和解；理论事件池按开关明确切换：和解关=毕业及以上+金帮，和解开=和解及以上+金帮。
 // 单宠、三类型、全大仓都通过理论总分布计算百分位，避免手动权重。
 // ==========================================
 const LUCK_INFO_SCORE_SCALE = 1000;      // 0.001 信息量精度
 const LUCK_MIN_PROB = 1e-12;
 const LUCK_DIST_MAX_STATES = 9000;
 const LUCK_DIST_MIN_PROB = 1e-14;
+// v2.4：档位分数使用达线概率，并用最小间隔保证 金帮 > 大毕业 > 毕业 > 和解。
+const LUCK_SCORE_MIN_GAP_KEY = 30;
 const SHINY_RATE_FOR_LUCK_BONUS = 0.007;
 
 const LUCK_PROB_MATRIX = {
@@ -5742,12 +5750,13 @@ const LUCK_PROB_MATRIX = {
         one:  { gold: 0, bigGrad: 0.0311, grad: 0.0412, tied: 0.0833 },
         two:  { gold: 0, bigGrad: 0.0619, grad: 0.0788, tied: 0.1197 }
     },
-    // 伊布本体：普通技能型四线 + 蜥蜴王参考表 Rank≤64 和解、Rank≤36 金帮的并集口径。
-    // 概率为当前模型下的近似累计概率，用于大仓运气分布评分。
+    // 伊布本体：普通技能型四线 + 新伊布特殊侧的最终并集口径。
+    // 特殊侧：Rank≤64 作为和解；金帮线改为「前三格有效副技能含 果S + 金帮，且性格不减帮速」。
+    // 注意：这里是“最终档位累计线”，gold 已包含在 grad / bigGrad 里，不能再按普通宝的 grad+gold 口径重复相加。
     eevee: {
-        none: { gold: 0.0374, bigGrad: 0.0456, grad: 0.0581, tied: 0.1029 },
-        one:  { gold: 0.0564, bigGrad: 0.0589, grad: 0.0632, tied: 0.1011 },
-        two:  { gold: 0.0850, bigGrad: 0.0850, grad: 0.0850, tied: 0.1088 }
+        none: { gold: 0.0329, bigGrad: 0.0439, grad: 0.0555, tied: 0.1028 },
+        one:  { gold: 0.0499, bigGrad: 0.0537, grad: 0.0578, tied: 0.1011 },
+        two:  { gold: 0.0752, bigGrad: 0.0752, grad: 0.0752, tied: 0.1088 }
     },
     // 太阳伊布：使用蜥蜴王参考表 Rank≤64 / Rank≤36 两条线；页面保留四档手动录入。
     espeon: {
@@ -5797,19 +5806,69 @@ function getLuckLockTypeForCatchIndex(p, i) {
     return (i <= 8) ? 'none' : (i <= 38 ? 'one' : (i === 39 ? 'two' : (p.lockMode || getRecommendedLockModeForName(p.name) || 'two')));
 }
 
-function getExclusiveResultProbabilities(pr) {
-    // LUCK_PROB_MATRIX 中 tied / grad / bigGrad 是累计线；gold 是独立金帮线。
-    // 这里转成最终互斥结果概率，便于“结果信息量”统一计算。
+function getExclusiveResultProbabilities(pr, pType = null) {
+    // v2.4：这里仅负责“单次捕捉落入哪个录入档位”的互斥事件分布。
+    // 普通线：和解 / 毕业 / 大毕业；金帮线：近似与普通线互斥，不再把 gold 从 bigGrad 里硬扣。
+    // 注意：档位“值多少分”不再使用这些夹缝概率，而由 getLineScoreProbabilities() 的达线概率决定。
     const pGold = Math.max(0, Number(pr.gold) || 0);
-    const pBig = Math.max(0, (Number(pr.bigGrad) || 0) - pGold);
-    const pGrad = Math.max(0, (Number(pr.grad) || 0) - (Number(pr.bigGrad) || 0));
-    const pTied = Math.max(0, (Number(pr.tied) || 0) - (Number(pr.grad) || 0));
+    const pBigLine = Math.max(0, Number(pr.bigGrad) || 0);
+    const pGradLine = Math.max(0, Number(pr.grad) || 0);
+    const pTiedLine = Math.max(0, Number(pr.tied) || 0);
+
+    if (pType === 'eevee') {
+        // 伊布概率矩阵是“最终档位累计线”：金帮已经包含在大毕业/毕业累计线中。
+        // 因此事件分布必须按最终档位拆分，不能使用普通宝的 grad + gold 互斥赛道口径。
+        return {
+            tied: Math.max(0, pTiedLine - pGradLine),
+            grad: Math.max(0, pGradLine - pBigLine),
+            bigGrad: Math.max(0, pBigLine - pGold),
+            goldGrad: pGold
+        };
+    }
+
+    if (pType === 'special_skill') {
+        // 暂定特殊技能宝只有 和解 / 毕业 / 金帮 三档，不使用大毕业档。
+        return {
+            tied: Math.max(0, pTiedLine - pGradLine),
+            grad: pGradLine,
+            bigGrad: 0,
+            goldGrad: pGold
+        };
+    }
+
+    if (pType === 'espeon') {
+        // 太阳伊布内部只使用参考线的“和解侧”和“金帮侧”；页面上的毕业/大毕业会映射到 tied 线。
+        return {
+            tied: Math.max(0, pTiedLine - pGold),
+            grad: 0,
+            bigGrad: 0,
+            goldGrad: pGold
+        };
+    }
+
     return {
-        tied: pTied,
-        grad: pGrad,
-        bigGrad: pBig,
+        tied: Math.max(0, pTiedLine - pGradLine),
+        grad: Math.max(0, pGradLine - pBigLine),
+        bigGrad: pBigLine,
         goldGrad: pGold
     };
+}
+
+function getMainScoreEventProbabilities(pr, pType = null, isTiedIncluded = false) {
+    // v2.5：主评分理论事件池必须和业务口径一致。
+    // 和解计分关闭：普通宝为“普通线毕业及以上 + 金帮毕业”（≈grad+gold）；
+    // 但伊布这类“最终并集累计线”会在 getExclusiveResultProbabilities 中拆成最终档位，避免重复计算 gold。
+    // 和解计分开启：普通和解也进入非零分事件池；闪光加成另走和解及以上口径，不受这里影响。
+    const base = getExclusiveResultProbabilities(pr, pType);
+    if (!isTiedIncluded) {
+        return {
+            tied: 0,
+            grad: base.grad || 0,
+            bigGrad: base.bigGrad || 0,
+            goldGrad: base.goldGrad || 0
+        };
+    }
+    return base;
 }
 
 function getLuckFoodRowsForScoring(p) {
@@ -5838,7 +5897,7 @@ function getAverageResultProbabilities(p, pType, isTiedIncluded) {
     const effectiveCount = getEffectiveLuckCatchCount(p);
     for (let i = 1; i <= effectiveCount; i++) {
         const lockType = getLuckLockTypeForCatchIndex(p, i);
-        const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]);
+        const base = getMainScoreEventProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType, isTiedIncluded);
         rows.forEach(row => {
             LUCK_RESULT_ORDER.forEach(result => {
                 if (result === 'tied' && !isTiedIncluded) return;
@@ -5854,18 +5913,99 @@ function getAverageResultProbabilities(p, pType, isTiedIncluded) {
     return avg;
 }
 
+function getLineScoreProbabilities(pr, pType = null) {
+    // v2.4：档位分数使用“达到该线”的累计概率，而不是“刚好落在夹缝档位”的概率。
+    // 这样能保证普通毕业不会因为 grad-bigGrad 很窄而反向高于大毕业。
+    const pGold = Math.max(0, Number(pr.gold) || 0);
+    const pBigLine = Math.max(0, Number(pr.bigGrad) || 0);
+    const pGradLine = Math.max(0, Number(pr.grad) || 0);
+    const pTiedLine = Math.max(0, Number(pr.tied) || 0);
+
+    if (pType === 'special_skill') {
+        return { tied: pTiedLine, grad: pGradLine, bigGrad: 0, goldGrad: pGold };
+    }
+
+    if (pType === 'espeon') {
+        return { tied: pTiedLine, grad: 0, bigGrad: 0, goldGrad: pGold };
+    }
+
+    return {
+        tied: pTiedLine,
+        grad: pGradLine,
+        bigGrad: pBigLine,
+        goldGrad: pGold
+    };
+}
+
+function getAverageScoreLineProbabilities(p, pType, isTiedIncluded) {
+    const avg = {};
+    const rows = pType === 'food' ? getLuckFoodRowsForScoring(p) : [{ track: null, probWeight: 1 }];
+    rows.forEach(row => {
+        LUCK_RESULT_ORDER.forEach(result => {
+            if (result === 'tied' && !isTiedIncluded) return;
+            const key = row.track ? `${result}_${row.track}` : result;
+            avg[key] = 0;
+        });
+    });
+
+    const effectiveCount = getEffectiveLuckCatchCount(p);
+    for (let i = 1; i <= effectiveCount; i++) {
+        const lockType = getLuckLockTypeForCatchIndex(p, i);
+        const line = getLineScoreProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType);
+        rows.forEach(row => {
+            LUCK_RESULT_ORDER.forEach(result => {
+                if (result === 'tied' && !isTiedIncluded) return;
+                const key = row.track ? `${result}_${row.track}` : result;
+                avg[key] += line[result] * row.probWeight;
+            });
+        });
+    }
+
+    Object.keys(avg).forEach(key => {
+        avg[key] = avg[key] / Math.max(1, effectiveCount);
+    });
+    return avg;
+}
+
 function infoScoreKeyFromProbability(prob) {
     const p = Math.max(LUCK_MIN_PROB, Number(prob) || 0);
     return Math.max(0, Math.round((-Math.log10(p)) * LUCK_INFO_SCORE_SCALE));
 }
 
-function getLuckScoreKeyMap(p, pType, isTiedIncluded) {
-    const avg = getAverageResultProbabilities(p, pType, isTiedIncluded);
-    const scoreKeyMap = {};
-    Object.keys(avg).forEach(key => {
-        scoreKeyMap[key] = infoScoreKeyFromProbability(avg[key]);
+function enforceMonotonicLuckScoreKeys(scoreKeyMap, avgProbabilities) {
+    const groups = new Set();
+    Object.keys(scoreKeyMap || {}).forEach(key => {
+        LUCK_RESULT_ORDER.forEach(result => {
+            if (key === result) groups.add('');
+            else if (key.startsWith(result + '_')) groups.add(key.slice(result.length + 1));
+        });
+    });
+
+    groups.forEach(group => {
+        let prevScore = null;
+        LUCK_RESULT_ORDER.forEach(result => {
+            const key = group ? `${result}_${group}` : result;
+            if (!(key in scoreKeyMap)) return;
+            if ((Number(avgProbabilities[key]) || 0) <= 0) {
+                scoreKeyMap[key] = 0;
+                return;
+            }
+            if (prevScore !== null && scoreKeyMap[key] <= prevScore) {
+                scoreKeyMap[key] = prevScore + LUCK_SCORE_MIN_GAP_KEY;
+            }
+            prevScore = scoreKeyMap[key];
+        });
     });
     return scoreKeyMap;
+}
+
+function getLuckScoreKeyMap(p, pType, isTiedIncluded) {
+    const avg = getAverageScoreLineProbabilities(p, pType, isTiedIncluded);
+    const scoreKeyMap = {};
+    Object.keys(avg).forEach(key => {
+        scoreKeyMap[key] = (Number(avg[key]) || 0) > 0 ? infoScoreKeyFromProbability(avg[key]) : 0;
+    });
+    return enforceMonotonicLuckScoreKeys(scoreKeyMap, avg);
 }
 
 function getLuckResultKey(result, track = null) {
@@ -6067,7 +6207,7 @@ function convolveBinaryEvidenceEvents(dist, events) {
 // 这能避免“没完整记录和解就被扣分”，同时认可玩家珍惜的自用和解。
 // ==========================================
 function getTiedBandProbabilityForScoring(pType, lockType, track = null) {
-    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]).tied || 0;
+    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType).tied || 0;
     if (pType === 'food' && track) {
         return Math.min(0.999999, Math.max(0, base * (FOOD_TRACK_META[track]?.probWeight || 1)));
     }
@@ -6237,7 +6377,7 @@ function convolveLuckDistribution(a, b) {
 
 function getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTiedIncluded) {
     const dist = { 0: 0 };
-    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType]);
+    const base = getMainScoreEventProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType, isTiedIncluded);
     const rows = pType === 'food' ? getLuckFoodRowsForScoring(p) : [{ track: null, probWeight: 1 }];
     let nonZeroProb = 0;
 
@@ -6246,7 +6386,7 @@ function getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTied
             const prob = base[result] * row.probWeight;
             if (prob <= 0) return;
 
-            // 玩家选择“毕业及以上”时，和解作为普通未计分事件，但仍保留其概率。
+            // v2.5 后 base 已按和解开关处理；这里保留保护，防止旧调用路径把和解误计分。
             if (result === 'tied' && !isTiedIncluded) {
                 dist[0] += prob;
                 nonZeroProb += prob;
@@ -9172,11 +9312,46 @@ function getSceptileReferenceRankInfo(subskillsObj = {}, natureKey = 'blank') {
     return { rank: row.rank, line, label, comboLabel: row.label, skills: actualSkills, natureTag };
 }
 
+
+function isEeveeSpecialGoldNatureAllowed(natureKey = 'blank') {
+    const parts = getNaturePartsFromKey(natureKey);
+    return parts.down !== 'speed';
+}
+
+function getEeveeSpecialReferenceInfo(subskillsObj = {}, natureKey = 'blank') {
+    // 伊布特殊侧新口径：
+    // - 和解：仍沿用蜥蜴王参考表 Rank≤64 的精确有效词条匹配。
+    // - 金帮：不再使用 Rank≤36；改为「前三格有效副技能含 果S + 金帮，且性格不减帮速」。
+    const rankInfo = getSceptileReferenceRankInfo(subskillsObj, natureKey);
+    const actualSkills = getSceptileReferenceResolvedSkills(subskillsObj);
+    const goldHit = actualSkills.includes('bfs') && actualSkills.includes('hb') && isEeveeSpecialGoldNatureAllowed(natureKey);
+    if (goldHit) {
+        const natureNote = getNaturePartsFromKey(natureKey).down === 'speed' ? '速度下降' : '不减帮速';
+        return {
+            rank: rankInfo.rank,
+            line: 'goldGrad',
+            label: '👑通过伊布特殊金帮线',
+            comboLabel: `果S + 金帮 + 性格${natureNote}`,
+            skills: actualSkills,
+            natureTag: getSceptileReferenceNatureTag(natureKey),
+            rankLine: rankInfo.line
+        };
+    }
+    if (rankInfo.line !== 'none') {
+        return {
+            ...rankInfo,
+            line: 'tied',
+            label: '🔸通过伊布特殊和解线'
+        };
+    }
+    return rankInfo;
+}
+
 function runEeveePanelAudit(subskillsObj = {}, natureKey = 'blank') {
     const skillReport = runPanelAuditMath('skill', EEVEE_BASE_NAME, subskillsObj, natureKey, 'ABB');
     const skillLine = skillReport.recommendValue || 'none';
-    const sceptileReport = getSceptileReferenceRankInfo(subskillsObj, natureKey);
-    const finalLine = maxThreeLineValue(skillLine, sceptileReport.line);
+    const specialReport = getEeveeSpecialReferenceInfo(subskillsObj, natureKey);
+    const finalLine = maxThreeLineValue(skillLine, specialReport.line);
     const lineLabel = {
         none: '未通过伊布线',
         tied: '🔸通过和解线',
@@ -9186,8 +9361,20 @@ function runEeveePanelAudit(subskillsObj = {}, natureKey = 'blank') {
     }[finalLine] || '未通过伊布线';
     const hitSources = [];
     if (skillLine !== 'none') hitSources.push(`普通技能侧：${skillReport.recommendLabel || getPlainSkillLineLabel(skillLine)}（效率 ${skillReport.effCurrent.toFixed(3)}）`);
-    if (sceptileReport.line !== 'none') hitSources.push(`特殊参考侧：${sceptileReport.label.replace(/[🔸👑]/g, '').trim()}（Rank ${sceptileReport.rank}）`);
-    return { line: finalLine, label: lineLabel, skillLine, skillEfficiency: skillReport.effCurrent, sceptileLine: sceptileReport.line, sceptileRank: sceptileReport.rank, sceptileComboLabel: sceptileReport.comboLabel, hitSources: hitSources.length ? hitSources : ['未命中普通技能侧或特殊参考侧达线'] };
+    if (specialReport.line !== 'none') {
+        const rankText = specialReport.rank ? `（Rank ${specialReport.rank}）` : '';
+        hitSources.push(`伊布特殊侧：${specialReport.label.replace(/[🔸👑]/g, '').trim()}${rankText}`);
+    }
+    return {
+        line: finalLine,
+        label: lineLabel,
+        skillLine,
+        skillEfficiency: skillReport.effCurrent,
+        sceptileLine: specialReport.line,
+        sceptileRank: specialReport.rank,
+        sceptileComboLabel: specialReport.comboLabel,
+        hitSources: hitSources.length ? hitSources : ['未命中普通技能侧或伊布特殊侧达线']
+    };
 }
 
 function runEspeonPanelAudit(subskillsObj = {}, natureKey = 'blank') {
