@@ -724,6 +724,8 @@ let includeShinyLuckBonus = false;
 // 和解计分默认关闭：多数玩家不会完整记录和解，关闭更适合作横向气运比较。
 let includeTiedLuckScore = false;
 let manualTotalShinyOverride = { enabled: false, total: 0 };
+let currentEditSleepResearchPhotos = [];
+let currentEditSleepResearchPhotoDragIndex = null;
 let luckExcludePanelOpen = {};
 // 🚀 性能模式：允许玩家在大量补录时临时暂停概率评分，避免每次录入都触发重计算。
 let luckCalculationEnabled = true;
@@ -854,6 +856,7 @@ function loadHistoryFromLocal() {
     try {
         const raw = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
         historyLogs = mergeHistoryLogs([], raw);
+        ensureSleepResearchForExistingCaptures({ persist: true, syncCloud: false });
     } catch (e) {
         console.error('历史抽卡库读取失败，已重置：', e);
         historyLogs = [];
@@ -868,6 +871,336 @@ function isHistoryDeleteMarker(log) {
     return !!(log && (log.__deleted === true || log.type === 'delete_marker') && log.deletedId !== undefined && log.deletedId !== null);
 }
 
+function isSleepResearchLog(log) {
+    return !!(log && log.type === 'sleep_research');
+}
+
+function getSleepResearchId(date, session) {
+    return `research_${date || 'unknown'}_${session || '一觉'}`;
+}
+
+function getVisibleSleepResearchLogs(logs = []) {
+    return (Array.isArray(logs) ? logs : [])
+        .filter(log => log && isSleepResearchLog(log))
+        .sort((a, b) => {
+            const dateCompare = String(b.date || '').localeCompare(String(a.date || ''));
+            if (dateCompare !== 0) return dateCompare;
+            return String(a.session || '').localeCompare(String(b.session || ''));
+        });
+}
+
+function findSleepResearch(date, session) {
+    const id = getSleepResearchId(date, session || '一觉');
+    return getVisibleSleepResearchLogs(historyLogs).find(r => String(r.id) === String(id)) || null;
+}
+
+
+// 睡眠研究大合照兼容层：新版支持多张，旧版 photoDataUrl 会自动视为第 1 张。
+function getSleepResearchPhotos(research) {
+    const photos = [];
+    if (!research) return photos;
+    if (Array.isArray(research.photoDataUrls)) {
+        research.photoDataUrls.forEach(url => {
+            if (typeof url === 'string' && url.trim() && !photos.includes(url)) photos.push(url);
+        });
+    }
+    if (typeof research.photoDataUrl === 'string' && research.photoDataUrl.trim() && !photos.includes(research.photoDataUrl)) {
+        photos.push(research.photoDataUrl);
+    }
+    return photos;
+}
+
+function readImageFilesAsDataUrls(fileList, onDone, onError) {
+    const files = Array.from(fileList || []).filter(file => file && (!file.type || file.type.startsWith('image/')));
+    if (!files.length) {
+        onDone([]);
+        return;
+    }
+    const results = new Array(files.length);
+    let finished = 0;
+    files.forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            results[index] = String(reader.result || '');
+            finished += 1;
+            if (finished === files.length) onDone(results.filter(Boolean));
+        };
+        reader.onerror = () => {
+            if (typeof onError === 'function') onError();
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+const sleepResearchPhotoViewerStore = {};
+const sleepResearchPhotoManageStore = {};
+
+function renderSleepResearchPhotoGallery(photos, compact = false) {
+    const list = Array.isArray(photos) ? photos.filter(Boolean) : [];
+    if (!list.length) {
+        return `<div class="w-full py-6 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-center text-[11px] text-slate-400 font-bold">暂无大合照，可点击“编辑研究信息”上传</div>`;
+    }
+    const galleryId = `sr_photo_gallery_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    sleepResearchPhotoViewerStore[galleryId] = list;
+    const gridClass = list.length === 1 ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 sm:grid-cols-3 gap-2';
+    const maxClass = compact ? 'max-h-32' : 'max-h-52';
+    return `<div class="${gridClass}">${list.map((url, index) => `<button type="button" onclick="openSleepResearchPhotoViewer('${galleryId}', ${index})" class="block bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden hover:ring-2 hover:ring-indigo-200 transition text-left" title="点击查看第 ${index + 1} 张大合照"><img src="${escapeHtmlAttr(url)}" class="w-full ${maxClass} object-contain bg-slate-50" alt="睡眠研究大合照 ${index + 1}"></button>`).join('')}</div>`;
+}
+
+
+function renderSleepResearchPhotoManageGallery(date, session, photos) {
+    const list = Array.isArray(photos) ? photos.filter(Boolean) : [];
+    if (!list.length) {
+        return `<div class="w-full py-6 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-center text-[11px] text-slate-400 font-bold">暂无大合照，可点击“编辑研究信息”上传</div>`;
+    }
+    const galleryId = `sr_photo_manage_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    sleepResearchPhotoManageStore[galleryId] = { date, session, photos: list.slice(), dragEl: null, orderDirty: false };
+    sleepResearchPhotoViewerStore[galleryId] = list.slice();
+    const gridClass = list.length === 1 ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 sm:grid-cols-3 gap-2';
+    return `<div class="flex flex-col gap-2">
+        <div class="rounded-2xl bg-indigo-50/60 border border-indigo-100 px-3 py-2 text-[10px] font-bold text-indigo-800 leading-relaxed flex items-start gap-1.5">
+            <i class="fa-solid fa-grip-vertical mt-0.5 text-indigo-500"></i>
+            <span>照片可直接在这里按住拖动排序；点击右上角“删”可删除单张照片。拖动松开后会立即保存顺序。</span>
+        </div>
+        <div id="${galleryId}" class="${gridClass}">
+            ${list.map((url, index) => `
+            <div class="sleep-research-photo-manage-card group relative bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden hover:ring-2 hover:ring-indigo-200 transition cursor-grab active:cursor-grabbing select-none" data-photo-index="${index}" draggable="true" ondragstart="handleDetailResearchPhotoDragStart(event, '${galleryId}')" ondragover="handleDetailResearchPhotoDragOver(event, '${galleryId}')" ondrop="handleDetailResearchPhotoDrop(event, '${galleryId}')" ondragend="handleDetailResearchPhotoDragEnd(event, '${galleryId}')">
+                <img src="${escapeHtmlAttr(url)}" onclick="openSleepResearchPhotoViewer('${galleryId}', ${index})" class="w-full max-h-52 object-contain bg-slate-50 pointer-events-auto" alt="睡眠研究大合照 ${index + 1}" title="点击查看大图；按住拖动可排序">
+                <div class="absolute top-1.5 left-1.5 bg-slate-900/70 text-white text-[10px] font-black rounded-lg px-2 py-0.5 photo-order-badge">${index + 1}</div>
+                <div class="absolute bottom-1.5 left-1.5 bg-white/90 text-slate-500 text-[10px] font-black rounded-lg px-2 py-0.5 shadow-sm flex items-center gap-1 opacity-0 group-hover:opacity-100 transition pointer-events-none">
+                    <i class="fa-solid fa-grip-vertical"></i> 拖动排序
+                </div>
+                <button type="button" onclick="deleteSleepResearchPhotoFromDetail('${galleryId}', ${index}, event)" class="absolute top-1.5 right-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-[10px] font-black rounded-lg px-2 py-1 shadow-sm opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition" title="删除这张照片">删</button>
+            </div>`).join('')}
+        </div>
+    </div>`;
+}
+
+function refreshDetailPhotoOrderBadges(galleryId) {
+    const grid = document.getElementById(galleryId);
+    if (!grid) return;
+    Array.from(grid.querySelectorAll('.sleep-research-photo-manage-card')).forEach((card, i) => {
+        const badge = card.querySelector('.photo-order-badge');
+        if (badge) badge.textContent = String(i + 1);
+    });
+}
+
+function handleDetailResearchPhotoDragStart(event, galleryId) {
+    const store = sleepResearchPhotoManageStore[galleryId];
+    if (!store) return;
+    store.dragEl = event.currentTarget;
+    store.orderDirty = false;
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', event.currentTarget.dataset.photoIndex || '');
+    }
+    event.currentTarget.classList.add('opacity-60', 'ring-2', 'ring-indigo-300', 'scale-[0.98]');
+}
+
+function handleDetailResearchPhotoDragOver(event, galleryId) {
+    event.preventDefault();
+    const store = sleepResearchPhotoManageStore[galleryId];
+    const dragged = store && store.dragEl;
+    const target = event.currentTarget;
+    if (!dragged || !target || dragged === target) return;
+    const grid = document.getElementById(galleryId);
+    if (!grid || dragged.parentNode !== grid || target.parentNode !== grid) return;
+
+    const cards = Array.from(grid.querySelectorAll('.sleep-research-photo-manage-card'));
+    const from = cards.indexOf(dragged);
+    const to = cards.indexOf(target);
+    if (from < 0 || to < 0 || from === to) return;
+    if (from < to) {
+        grid.insertBefore(dragged, target.nextSibling);
+    } else {
+        grid.insertBefore(dragged, target);
+    }
+    store.orderDirty = true;
+    refreshDetailPhotoOrderBadges(galleryId);
+}
+
+function saveDetailResearchPhotoOrder(galleryId, shouldRefresh = true) {
+    const store = sleepResearchPhotoManageStore[galleryId];
+    const grid = document.getElementById(galleryId);
+    if (!store || !grid) return;
+    const nextPhotos = Array.from(grid.querySelectorAll('.sleep-research-photo-manage-card')).map(card => store.photos[Number(card.dataset.photoIndex)]).filter(Boolean);
+    if (!nextPhotos.length) return;
+    upsertSleepResearch({ date: store.date, session: store.session, photoDataUrls: nextPhotos });
+    saveHistoryToLocal();
+    if (currentCloudUser) saveHistoryToCloudNow();
+    store.photos = nextPhotos.slice();
+    store.orderDirty = false;
+    if (shouldRefresh) {
+        const modal = document.getElementById('sleep-research-detail-modal');
+        if (modal) modal.remove();
+        openSleepResearchDetail(store.date, store.session);
+    }
+}
+
+function handleDetailResearchPhotoDrop(event, galleryId) {
+    event.preventDefault();
+    const store = sleepResearchPhotoManageStore[galleryId];
+    if (store && store.orderDirty) saveDetailResearchPhotoOrder(galleryId, true);
+}
+
+function handleDetailResearchPhotoDragEnd(event, galleryId) {
+    event.currentTarget.classList.remove('opacity-60', 'ring-2', 'ring-indigo-300', 'scale-[0.98]');
+    const store = sleepResearchPhotoManageStore[galleryId];
+    if (store) store.dragEl = null;
+}
+
+function deleteSleepResearchPhotoFromDetail(galleryId, index, event) {
+    if (event) event.stopPropagation();
+    const store = sleepResearchPhotoManageStore[galleryId];
+    if (!store) return;
+    const safeIndex = Number(index);
+    if (!Number.isInteger(safeIndex) || safeIndex < 0 || safeIndex >= store.photos.length) return;
+    if (!confirm(`确定要删除第 ${safeIndex + 1} 张大合照吗？`)) return;
+    const nextPhotos = store.photos.filter((_, i) => i !== safeIndex);
+    upsertSleepResearch({ date: store.date, session: store.session, photoDataUrls: nextPhotos });
+    saveHistoryToLocal();
+    if (currentCloudUser) saveHistoryToCloudNow();
+    const modal = document.getElementById('sleep-research-detail-modal');
+    if (modal) modal.remove();
+    openSleepResearchDetail(store.date, store.session);
+    showToast('已删除这张大合照');
+}
+
+function openSleepResearchPhotoViewer(galleryId, index = 0) {
+    const list = sleepResearchPhotoViewerStore[galleryId] || [];
+    const safeIndex = Math.max(0, Math.min(list.length - 1, Number(index) || 0));
+    const url = list[safeIndex];
+    if (!url) return;
+
+    const old = document.getElementById('sleep-research-photo-viewer-modal');
+    if (old) old.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'sleep-research-photo-viewer-modal';
+    modal.className = 'fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[90] flex items-center justify-center p-4 animate-fadeIn';
+    modal.innerHTML = `
+        <div class="relative max-w-5xl w-full max-h-[92vh] flex flex-col gap-3" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between gap-3 text-white">
+                <div class="text-xs font-black bg-white/10 border border-white/10 rounded-2xl px-3 py-2">
+                    大合照 ${safeIndex + 1} / ${list.length}
+                </div>
+                <button type="button" onclick="document.getElementById('sleep-research-photo-viewer-modal')?.remove()" class="w-9 h-9 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center text-white">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="bg-white/5 border border-white/10 rounded-3xl p-2 flex items-center justify-center max-h-[82vh] overflow-auto">
+                <img src="${escapeHtmlAttr(url)}" class="max-w-full max-h-[78vh] object-contain rounded-2xl shadow-2xl bg-white" alt="睡眠研究大合照 ${safeIndex + 1}">
+            </div>
+            ${list.length > 1 ? `<div class="flex items-center justify-center gap-2">
+                <button type="button" onclick="openSleepResearchPhotoViewer('${galleryId}', ${Math.max(0, safeIndex - 1)})" class="px-4 py-2 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/10 text-white text-xs font-black ${safeIndex <= 0 ? 'opacity-40 pointer-events-none' : ''}">上一张</button>
+                <button type="button" onclick="openSleepResearchPhotoViewer('${galleryId}', ${Math.min(list.length - 1, safeIndex + 1)})" class="px-4 py-2 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/10 text-white text-xs font-black ${safeIndex >= list.length - 1 ? 'opacity-40 pointer-events-none' : ''}">下一张</button>
+            </div>` : ''}
+        </div>`;
+    modal.onclick = () => modal.remove();
+    document.body.appendChild(modal);
+}
+
+function upsertSleepResearch(payload = {}) {
+    const date = payload.date || getTodayLocalDateString();
+    const session = payload.session || '一觉';
+    const id = getSleepResearchId(date, session);
+    const existingIndex = historyLogs.findIndex(log => log && isSleepResearchLog(log) && String(log.id) === String(id));
+    const next = Object.assign({
+        id,
+        type: 'sleep_research',
+        date,
+        session,
+        sleepScore: '',
+        drowsyPower: '',
+        photoDataUrl: '',
+        photoDataUrls: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    }, existingIndex >= 0 ? historyLogs[existingIndex] : {}, payload, { id, type: 'sleep_research', date, session, updatedAt: new Date().toISOString() });
+    next.photoDataUrls = getSleepResearchPhotos(next);
+    next.photoDataUrl = next.photoDataUrls[0] || '';
+    if (existingIndex >= 0) historyLogs[existingIndex] = next;
+    else historyLogs.unshift(next);
+    historyLogs = mergeHistoryLogs([], historyLogs);
+    saveHistoryToLocal();
+    return next;
+}
+
+function getLogsForSleepResearch(date, session) {
+    return getVisibleHistoryLogs(historyLogs).filter(log => String(log.date || '') === String(date || '') && String(log.session || '一觉') === String(session || '一觉'));
+}
+
+function attachHistoryLogToResearchIfExists(log) {
+    if (!log) return null;
+    const expectedId = getSleepResearchId(log.date, log.session || '一觉');
+    const research = findSleepResearch(log.date, log.session || '一觉');
+    if (research) {
+        log.sleepResearchId = research.id;
+        return research.id;
+    }
+    if (log.sleepResearchId && String(log.sleepResearchId) !== String(expectedId)) {
+        log.sleepResearchId = null;
+    }
+    return null;
+}
+
+// 兼容旧版历史流水：历史记录升级为“睡眠研究 → 捕捉记录”结构后，
+// 旧用户原本只有扁平捕捉流水。这里会按“日期 + 一觉/二觉”自动补建空壳睡眠研究，
+// 并把对应捕捉记录挂上 sleepResearchId，避免历史抽卡库升级后旧记录像是丢失。
+function ensureSleepResearchForExistingCaptures(options = {}) {
+    const persist = !!options.persist;
+    const syncCloud = !!options.syncCloud;
+    if (!Array.isArray(historyLogs)) historyLogs = [];
+
+    const existingResearchIds = new Set(
+        getVisibleSleepResearchLogs(historyLogs).map(r => String(r.id))
+    );
+    const now = new Date().toISOString();
+    let changed = false;
+
+    getVisibleHistoryLogs(historyLogs).forEach(log => {
+        if (!log || !log.date) return;
+        const session = log.session || '一觉';
+        const researchId = getSleepResearchId(log.date, session);
+
+        if (!log.session) {
+            log.session = session;
+            changed = true;
+        }
+        if (String(log.sleepResearchId || '') !== String(researchId)) {
+            log.sleepResearchId = researchId;
+            changed = true;
+        }
+
+        if (!existingResearchIds.has(String(researchId))) {
+            historyLogs.unshift({
+                id: researchId,
+                type: 'sleep_research',
+                date: log.date,
+                session,
+                sleepScore: '',
+                drowsyPower: '',
+                photoDataUrl: '',
+                photoDataUrls: [],
+                autoGenerated: true,
+                createdAt: log.createdAt || log.timestamp || now,
+                updatedAt: now
+            });
+            existingResearchIds.add(String(researchId));
+            changed = true;
+        }
+    });
+
+    if (changed) {
+        historyLogs = mergeHistoryLogs([], historyLogs);
+        if (persist) {
+            localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+            if (syncCloud) scheduleSaveHistoryToCloud();
+        }
+    }
+    return changed;
+}
+
 function getVisibleHistoryLogs(logs = []) {
     const deletedIds = new Set(
         (Array.isArray(logs) ? logs : [])
@@ -876,7 +1209,7 @@ function getVisibleHistoryLogs(logs = []) {
     );
 
     return (Array.isArray(logs) ? logs : [])
-        .filter(log => log && !isHistoryDeleteMarker(log))
+        .filter(log => log && !isHistoryDeleteMarker(log) && !isSleepResearchLog(log))
         .filter(log => !deletedIds.has(String(log.id)));
 }
 
@@ -950,10 +1283,11 @@ async function loadHistoryFromCloud() {
 
     if (data && Array.isArray(data.history_logs)) {
         historyLogs = mergeHistoryLogs(data.history_logs, localSnapshot);
+        const backfilledResearch = ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
         localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
 
-        // 如果本机有云端没有的旧历史，顺手补回云端，避免换设备丢失
-        if (historyLogs.length !== data.history_logs.length) {
+        // 如果本机有云端没有的旧历史，或旧流水被补建了睡眠研究空壳，顺手补回云端，避免换设备丢失
+        if (backfilledResearch || historyLogs.length !== data.history_logs.length) {
             await saveHistoryToCloudNow();
         }
 
@@ -7361,6 +7695,35 @@ function setCheckInDateValue(dateStr) {
 
 
 function openDailyCheckInModal() {
+    const old = document.getElementById('daily-checkin-choice-modal');
+    if (old) old.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'daily-checkin-choice-modal';
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('daily-checkin-choice-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        <div class="text-center pr-5">
+            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-calendar-check text-indigo-500"></i> 每日捕捉打卡</h3>
+            <p class="text-[10px] text-slate-400 font-bold mt-1">请选择本次是补一只宝，还是录入一次完整睡眠研究。</p>
+        </div>
+        <div class="grid grid-cols-1 gap-3">
+            <button onclick="document.getElementById('daily-checkin-choice-modal').remove(); openSingleDailyCheckInModal();" class="text-left bg-slate-900 hover:bg-slate-800 text-white rounded-2xl p-4 shadow-md transition flex items-start gap-3">
+                <i class="fa-solid fa-paw text-amber-400 mt-0.5"></i>
+                <span><span class="block text-sm font-black">单只宝录入</span><span class="block text-[10px] text-slate-300 font-bold mt-1 leading-relaxed">和原来的每日打卡一样，只记录一只宝可梦。若日期+一觉/二觉已有睡眠研究，会自动归入那次研究。</span></span>
+            </button>
+            <button onclick="document.getElementById('daily-checkin-choice-modal').remove(); openSleepResearchModal();" class="text-left bg-indigo-50 hover:bg-indigo-100 text-indigo-950 border border-indigo-100 rounded-2xl p-4 shadow-sm transition flex items-start gap-3">
+                <i class="fa-solid fa-moon text-indigo-500 mt-0.5"></i>
+                <span><span class="block text-sm font-black">完整觉录入</span><span class="block text-[10px] text-indigo-800/70 font-bold mt-1 leading-relaxed">先建立一次睡眠研究，再按本次抓到的数量依次录入宝可梦；所有宝会共享同一日期和睡眠批次。</span></span>
+            </button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+}
+
+
+function openSingleDailyCheckInModal(options = {}) {
     const now = new Date();
     const currentSysDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
@@ -7369,6 +7732,9 @@ function openDailyCheckInModal() {
         stickyCheckInSession = "一觉";
         lastOpenSystemDate = currentSysDate;
     }
+
+    if (options && options.date) stickyCheckInDate = options.date;
+    if (options && options.session) stickyCheckInSession = options.session;
 
     // 初始化重置决策锁与全变量状态
     window.userManuallyOverrodeResult = false;
@@ -7697,22 +8063,26 @@ function submitDailyCheckIn() {
 
     let trackMode = getCheckInTrackMode(standardName, foodCombo);
     let checkInId = Date.now();
+    const currentModal = document.getElementById('daily-checkin-modal');
+    const modalResearchId = currentModal?.dataset?.sleepResearchId || '';
+    let sleepResearchId = modalResearchId || (findSleepResearch(stickyCheckInDate, stickyCheckInSession)?.id || '');
 
     // 🚀 全备份：深拷贝当前网格面板状态
     let subskillsSnapshot = JSON.parse(JSON.stringify(window.checkinSubskills));
 
     todayCheckIns.unshift({ 
-        id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, 
+        id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId: sleepResearchId || null,
         name: standardName, result: result, lockMode: lockMode, track: trackMode,
         subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny
     });
     saveTodayCheckInsToLocal();
 
     historyLogs.unshift({ 
-        id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, 
+        id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId: sleepResearchId || null,
         name: standardName, result: result, lockMode: lockMode, track: trackMode,
         subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny
     });
+    ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
     saveHistoryToLocal();
 
     // 手机端打卡后用户可能很快切走页面，所以这里不要只依赖 500ms 防抖；
@@ -7745,9 +8115,19 @@ function submitDailyCheckIn() {
         saveBoxToCloudNow();
     }
 
+    const batchLeft = Number(currentModal?.dataset?.batchLeft || 0);
+    const batchTotal = Number(currentModal?.dataset?.batchTotal || 0);
+    const batchIndex = Number(currentModal?.dataset?.batchIndex || 1);
+
     document.getElementById('daily-checkin-modal').remove();
     updateBoxUI(true); 
     renderTodayReportUI();
+
+    if (batchLeft > 1 && sleepResearchId) {
+        showToast(`已记录第 ${batchIndex} 只，继续录入第 ${batchIndex + 1} 只`);
+        setTimeout(() => openSingleDailyCheckInModal({ date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId, batchLeft: batchLeft - 1, batchTotal, batchIndex: batchIndex + 1 }), 250);
+        return;
+    }
 
     if (isLuckCalculationEnabled()) {
         showDailyReportModal(standardName, result, beforeRate, afterRate);
@@ -7826,7 +8206,320 @@ function showDailyReportModal(name, result, before, after) {
 }
 
 
-// 🚀 核心重构：支持时空双轨（记录日期 + 睡眠轨道）高级分组排版渲染器
+function openSleepResearchModal() {
+    const old = document.getElementById('sleep-research-modal');
+    if (old) old.remove();
+    const today = stickyCheckInDate || getTodayLocalDateString();
+    const modal = document.createElement('div');
+    modal.id = 'sleep-research-modal';
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn overflow-y-auto';
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-lg w-full shadow-2xl flex flex-col gap-4 relative my-4" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('sleep-research-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        <div class="text-center pr-6">
+            <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-moon text-indigo-500"></i> 完整睡眠研究录入</h3>
+            <p class="text-[10px] text-slate-400 font-bold mt-1">先建立本次睡眠研究，再按数量依次录入捕捉到的宝可梦。</p>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">研究日期</label>
+                <input type="date" id="research-date" value="${today}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">睡眠批次</label>
+                <select id="research-session" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400">
+                    <option value="一觉" ${stickyCheckInSession === '一觉' ? 'selected' : ''}>一觉</option>
+                    <option value="二觉" ${stickyCheckInSession === '二觉' ? 'selected' : ''}>二觉</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">睡眠分数（选填）</label>
+                <input type="number" min="1" max="100" id="research-score" placeholder="1-100" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">睡意之力（选填）</label>
+                <input type="text" id="research-power" placeholder="例如 123,456,789" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">本次抓了几只</label>
+                <input type="number" min="1" max="20" value="1" id="research-catch-count" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">大合照截图（选填，可多选）</label>
+                <input type="file" accept="image/*" multiple id="research-photos" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+        </div>
+        <div class="bg-indigo-50 border border-indigo-100 rounded-2xl p-3 text-[10px] text-indigo-900 font-bold leading-relaxed">
+            注意：完整觉录入只用于新建一次睡眠研究。如果同一日期 + 一觉/二觉已经存在睡眠研究，系统不会覆盖旧研究；请进入历史抽卡库修改该次研究，或在详情中继续添加宝可梦。
+        </div>
+        <button onclick="submitSleepResearchMeta()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs py-2.5 rounded-xl shadow-md flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-arrow-right"></i> 创建研究并开始录入宝可梦
+        </button>
+    </div>`;
+    document.body.appendChild(modal);
+}
+
+function submitSleepResearchMeta() {
+    const date = document.getElementById('research-date')?.value || getTodayLocalDateString();
+    const session = document.getElementById('research-session')?.value || '一觉';
+    const sleepScore = document.getElementById('research-score')?.value || '';
+    const drowsyPower = document.getElementById('research-power')?.value || '';
+    const count = Math.max(1, Math.min(20, Number(document.getElementById('research-catch-count')?.value || 1)));
+    const photoInput = document.getElementById('research-photos');
+    const files = photoInput?.files || [];
+
+    const existingResearch = findSleepResearch(date, session);
+    if (existingResearch) {
+        alert(`${date} · ${session} 已经存在睡眠研究。完整觉录入不会覆盖已有研究；请到该次睡眠研究详情里修改信息或继续添加宝可梦。`);
+        const modal = document.getElementById('sleep-research-modal');
+        if (modal) modal.remove();
+        openSleepResearchDetail(date, session);
+        return;
+    }
+
+    const finish = (photoDataUrls = []) => {
+        const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, photoDataUrls });
+        stickyCheckInDate = date;
+        stickyCheckInSession = session;
+        const modal = document.getElementById('sleep-research-modal');
+        if (modal) modal.remove();
+        openSingleDailyCheckInModal({ date, session, sleepResearchId: research.id, batchLeft: count, batchTotal: count, batchIndex: 1 });
+    };
+
+    readImageFilesAsDataUrls(files, finish, () => alert('截图读取失败，请不带截图继续或重新选择图片。'));
+}
+
+function addPokemonToSleepResearch(date, session) {
+    const research = findSleepResearch(date, session) || upsertSleepResearch({ date, session });
+    stickyCheckInDate = date || getTodayLocalDateString();
+    stickyCheckInSession = session || '一觉';
+    const detailModal = document.getElementById('sleep-research-detail-modal');
+    if (detailModal) detailModal.remove();
+    const editModal = document.getElementById('sleep-research-edit-modal');
+    if (editModal) editModal.remove();
+    openSingleDailyCheckInModal({ date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId: research.id });
+}
+
+function escapeHtmlAttr(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/\"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function openSleepResearchDetail(date, session) {
+    const research = findSleepResearch(date, session) || { date, session };
+    const logs = getLogsForSleepResearch(date, session);
+    const resultNames = { none: "没货", tied: "🔸和解", grad: "🟩毕业", bigGrad: "🔮大毕业", goldGrad: "👑金帮" };
+    const rows = logs.length ? logs.map(log => {
+        const shape = getCheckInDisplayShapeTag(log);
+        const safeIdAttr = escapeHtmlAttr(log.id);
+        return `<div class="bg-white border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-2">
+            <div class="min-w-0">
+                <div class="text-xs font-black text-slate-800 truncate">${log.name} ${log.isShiny ? '<span class=\"text-yellow-600\">✨</span>' : ''}</div>
+                <div class="text-[10px] text-slate-500 font-bold mt-0.5">${resultNames[log.result] || '没货'}${shape} · ${log.lockMode || 'two'}</div>
+            </div>
+            <div class="flex gap-1.5">
+                <button data-log-id="${safeIdAttr}" onclick="openEditHistoryLogModal(this.dataset.logId)" class="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 text-[10px] font-black">编辑</button>
+                <button data-log-id="${safeIdAttr}" onclick="deleteHistoryLog(this.dataset.logId, event)" class="px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100 text-[10px] font-black">删</button>
+            </div>
+        </div>`;
+    }).join('') : `<div class="text-center py-8 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-xs text-slate-400 font-bold">这次睡眠研究下面还没有捕捉记录。</div>`;
+
+    const old = document.getElementById('sleep-research-detail-modal');
+    if (old) old.remove();
+
+    const modal = document.createElement('div');
+    const dateAttr = escapeHtmlAttr(date);
+    const sessionAttr = escapeHtmlAttr(session);
+    const researchPhotos = getSleepResearchPhotos(research);
+    const photoGallery = renderSleepResearchPhotoManageGallery(date, session, researchPhotos);
+    modal.id = 'sleep-research-detail-modal';
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fadeIn';
+    modal.innerHTML = `<div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-lg w-full max-h-[86vh] shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('sleep-research-detail-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        <div class="pr-6">
+            <div class="flex items-start justify-between gap-3 pr-5">
+                <div>
+                    <h3 class="text-base font-black text-slate-800 flex items-center gap-1.5"><i class="fa-solid fa-moon text-indigo-500"></i> ${date} · ${session}</h3>
+                    <div class="text-[10px] text-slate-500 font-bold mt-1 flex flex-wrap gap-2">
+                        <span>睡眠分数：${research.sleepScore || '未填'}</span>
+                        <span>睡意之力：${research.drowsyPower || '未填'}</span>
+                        <span>捕捉：${logs.length} 只</span>
+                    </div>
+                </div>
+                <div class="shrink-0 flex flex-col sm:flex-row gap-1.5">
+                    <button data-date="${dateAttr}" data-session="${sessionAttr}" onclick="addPokemonToSleepResearch(this.dataset.date, this.dataset.session)" class="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-100 text-[10px] font-black flex items-center gap-1">
+                        <i class="fa-solid fa-plus"></i> 继续添加宝可梦
+                    </button>
+                    <button data-date="${dateAttr}" data-session="${sessionAttr}" onclick="openEditSleepResearchModal(this.dataset.date, this.dataset.session)" class="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 text-[10px] font-black flex items-center gap-1">
+                        <i class="fa-solid fa-pen"></i> 编辑研究信息
+                    </button>
+                </div>
+            </div>
+        </div>
+        ${photoGallery}
+        <div class="overflow-y-auto pr-1 flex flex-col gap-2">${rows}</div>
+    </div>`;
+    document.body.appendChild(modal);
+}
+
+
+function renderEditSleepResearchPhotoManager() {
+    const wrap = document.getElementById('edit-research-existing-photos');
+    if (!wrap) return;
+    const photos = Array.isArray(currentEditSleepResearchPhotos) ? currentEditSleepResearchPhotos.filter(Boolean) : [];
+    if (!photos.length) {
+        wrap.innerHTML = `<div class="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-[10px] font-bold text-slate-400">当前没有已保存的大合照</div>`;
+        return;
+    }
+    wrap.innerHTML = `
+    <div class="mt-2 flex flex-col gap-2">
+        <div class="rounded-2xl bg-indigo-50/60 border border-indigo-100 px-3 py-2 text-[10px] font-bold text-indigo-800 leading-relaxed flex items-start gap-1.5">
+            <i class="fa-solid fa-hand-pointer mt-0.5 text-indigo-500"></i>
+            <span>按住照片卡片拖动到目标位置，松开即可调整顺序；拖动过程中会实时预览新的排列。保存后顺序才会写入睡眠研究。</span>
+        </div>
+        <div id="edit-research-photo-sortable" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            ${photos.map((url, index) => `
+            <div class="edit-research-photo-card bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden transition shadow-sm cursor-grab active:cursor-grabbing select-none" data-photo-index="${index}" draggable="true" ondragstart="handleEditResearchPhotoDragStart(event, ${index})" ondragover="handleEditResearchPhotoDragOver(event, ${index})" ondrop="handleEditResearchPhotoDrop(event)" ondragend="handleEditResearchPhotoDragEnd(event)">
+                <div class="relative bg-slate-100">
+                    <img src="${escapeHtmlAttr(url)}" class="w-full max-h-32 object-contain bg-slate-50 pointer-events-none" alt="当前大合照 ${index + 1}">
+                    <div class="absolute top-1.5 left-1.5 bg-slate-900/70 text-white text-[10px] font-black rounded-lg px-2 py-0.5">${index + 1}</div>
+                    <div class="absolute top-1.5 right-1.5 bg-white/90 text-slate-500 text-[10px] font-black rounded-lg px-2 py-0.5 shadow-sm flex items-center gap-1">
+                        <i class="fa-solid fa-grip-vertical"></i> 拖动排序
+                    </div>
+                </div>
+                <div class="p-2 bg-white border-t border-slate-100 flex flex-col gap-1.5">
+                    <label class="flex items-center gap-1.5 px-2 py-1.5 text-[10px] font-black text-red-600 bg-red-50 border border-red-100 rounded-lg">
+                        <input type="checkbox" class="edit-research-remove-photo w-3.5 h-3.5 accent-red-500" value="${index}" onclick="event.stopPropagation()"> 删除这张
+                    </label>
+                </div>
+            </div>`).join('')}
+        </div>
+    </div>`;
+}
+
+function handleEditResearchPhotoDragStart(event, index) {
+    currentEditSleepResearchPhotoDragIndex = index;
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(index));
+    }
+    const card = event.currentTarget;
+    if (card) {
+        card.classList.add('opacity-60', 'ring-2', 'ring-indigo-300', 'scale-[0.98]');
+    }
+}
+
+function handleEditResearchPhotoDragOver(event, targetIndex) {
+    event.preventDefault();
+    if (!Array.isArray(currentEditSleepResearchPhotos)) return;
+    const from = Number(currentEditSleepResearchPhotoDragIndex);
+    const to = Number(targetIndex);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
+    if (from < 0 || to < 0 || from >= currentEditSleepResearchPhotos.length || to >= currentEditSleepResearchPhotos.length) return;
+
+    const [moved] = currentEditSleepResearchPhotos.splice(from, 1);
+    currentEditSleepResearchPhotos.splice(to, 0, moved);
+    currentEditSleepResearchPhotoDragIndex = to;
+    renderEditSleepResearchPhotoManager();
+
+    const nextCard = document.querySelector(`#edit-research-photo-sortable .edit-research-photo-card[data-photo-index="${to}"]`);
+    if (nextCard) nextCard.classList.add('opacity-60', 'ring-2', 'ring-indigo-300', 'scale-[0.98]');
+}
+
+function handleEditResearchPhotoDrop(event) {
+    event.preventDefault();
+    currentEditSleepResearchPhotoDragIndex = null;
+    document.querySelectorAll('.edit-research-photo-card').forEach(card => card.classList.remove('opacity-60', 'ring-2', 'ring-indigo-300', 'scale-[0.98]'));
+}
+
+function handleEditResearchPhotoDragEnd(event) {
+    currentEditSleepResearchPhotoDragIndex = null;
+    document.querySelectorAll('.edit-research-photo-card').forEach(card => card.classList.remove('opacity-60', 'ring-2', 'ring-indigo-300', 'scale-[0.98]'));
+}
+
+function openEditSleepResearchModal(date, session) {
+    const research = findSleepResearch(date, session) || upsertSleepResearch({ date, session });
+    const old = document.getElementById('sleep-research-edit-modal');
+    if (old) old.remove();
+
+    const modal = document.createElement('div');
+    const dateAttr = escapeHtmlAttr(date);
+    const sessionAttr = escapeHtmlAttr(session);
+    currentEditSleepResearchPhotos = getSleepResearchPhotos(research);
+    modal.id = 'sleep-research-edit-modal';
+    modal.className = 'fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center z-[75] p-4 animate-fadeIn';
+    modal.innerHTML = `<div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-md w-full max-h-[86vh] shadow-2xl flex flex-col gap-4 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('sleep-research-edit-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        <div class="pr-6">
+            <h3 class="text-base font-black text-slate-800 flex items-center gap-1.5"><i class="fa-solid fa-moon text-indigo-500"></i> 编辑睡眠研究</h3>
+            <p class="text-[11px] text-slate-500 mt-1 font-bold">${date} · ${session}</p>
+        </div>
+        <div class="grid grid-cols-1 gap-3 text-xs">
+            <div>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">睡眠分数（选填）</label>
+                <input type="number" min="1" max="100" id="edit-research-score" value="${research.sleepScore || ''}" placeholder="1-100" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">睡意之力（选填）</label>
+                <input type="text" id="edit-research-power" value="${research.drowsyPower || ''}" placeholder="例如 123,456,789" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+            </div>
+            <div>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">追加大合照截图（选填，可多选）</label>
+                <input type="file" accept="image/*" multiple id="edit-research-photos" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-bold focus:outline-none focus:border-indigo-400">
+                <p class="text-[10px] text-slate-400 font-bold mt-1">选择新图片会追加到当前大合照列表，不会覆盖旧图；下方可删除已保存图片，也可以直接按住照片卡片拖动调整顺序。</p>
+                <div id="edit-research-existing-photos"></div>
+            </div>
+        </div>
+        <div class="flex gap-2 justify-end pt-2">
+            <button onclick="document.getElementById('sleep-research-edit-modal').remove()" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black">取消</button>
+            <button data-date="${dateAttr}" data-session="${sessionAttr}" onclick="submitEditSleepResearch(this.dataset.date, this.dataset.session)" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm"><i class="fa-solid fa-floppy-disk mr-1"></i>保存研究信息</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+    renderEditSleepResearchPhotoManager();
+}
+
+function submitEditSleepResearch(date, session) {
+    const scoreEl = document.getElementById('edit-research-score');
+    const powerEl = document.getElementById('edit-research-power');
+    const photoEl = document.getElementById('edit-research-photos');
+    let sleepScore = scoreEl ? String(scoreEl.value || '').trim() : '';
+    const drowsyPower = powerEl ? String(powerEl.value || '').trim() : '';
+
+    if (sleepScore !== '') {
+        const n = Number(sleepScore);
+        if (!Number.isFinite(n) || n < 1 || n > 100) {
+            alert('睡眠分数请填写 1-100，或留空。');
+            return;
+        }
+        sleepScore = String(Math.round(n));
+    }
+
+    const removeIndices = new Set(Array.from(document.querySelectorAll('.edit-research-remove-photo:checked')).map(el => Number(el.value)));
+    const basePhotos = Array.isArray(currentEditSleepResearchPhotos) ? currentEditSleepResearchPhotos.filter(Boolean) : [];
+    const keptPhotos = basePhotos.filter((_, index) => !removeIndices.has(index));
+    const files = photoEl && photoEl.files ? photoEl.files : [];
+
+    const finish = (newPhotos = []) => {
+        const photoDataUrls = keptPhotos.concat(newPhotos || []);
+        upsertSleepResearch({ date, session, sleepScore, drowsyPower, photoDataUrls });
+        ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
+        saveHistoryToLocal();
+        if (currentCloudUser) saveHistoryToCloudNow();
+        const editModal = document.getElementById('sleep-research-edit-modal');
+        if (editModal) editModal.remove();
+        const detailModal = document.getElementById('sleep-research-detail-modal');
+        if (detailModal) detailModal.remove();
+        openSleepResearchDetail(date, session);
+        showToast('睡眠研究信息已更新');
+    };
+
+    readImageFilesAsDataUrls(files, finish, () => alert('截图读取失败，请不带截图继续或重新选择图片。'));
+}
+
 function renderTodayReportUI() {
     const panel = document.getElementById('today-report-panel');
     const chipsContainer = document.getElementById('today-report-chips');
@@ -8048,6 +8741,7 @@ function submitEditDailyCheckIn(checkInId) {
     if (histItem) {
         histItem.name = standardName; histItem.lockMode = lockMode; histItem.result = result; histItem.track = trackMode;
         histItem.date = stickyCheckInDate; histItem.session = stickyCheckInSession; histItem.foodCombo = foodCombo; histItem.isShiny = isShiny;
+        attachHistoryLogToResearchIfExists(histItem);
         saveHistoryToLocal();
     }
     
@@ -8391,7 +9085,7 @@ function ensureGraduationNicknameInput(initialValue = '') {
 
 function openGraduationBackfillModal(prefill = null) {
     // 复用每日打卡新版面板，但保存时只进入毕业库，不改大仓
-    openDailyCheckInModal();
+    openSingleDailyCheckInModal();
 
     const modal = document.getElementById('daily-checkin-modal');
     if (!modal) return;
@@ -8663,7 +9357,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
 
     const state = mode === 'capture' ? getGraduationCapture(item) : getGraduationCurrent(item);
 
-    openDailyCheckInModal();
+    openSingleDailyCheckInModal();
 
     const modal = document.getElementById('daily-checkin-modal');
     if (!modal) return;
@@ -8865,6 +9559,26 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
 }
 
 // 🚀 局部新增：历史抽卡时光库全景视窗渲染引擎
+function setHistoryViewMode(mode) {
+    const research = document.getElementById('history-research-view');
+    const captures = document.getElementById('history-captures-view');
+    const researchBtn = document.getElementById('history-tab-research');
+    const capturesBtn = document.getElementById('history-tab-captures');
+    if (!research || !captures) return;
+    const showResearch = mode !== 'captures';
+    research.classList.toggle('hidden', !showResearch);
+    captures.classList.toggle('hidden', showResearch);
+    if (researchBtn) researchBtn.className = showResearch ? 'bg-slate-900 text-white rounded-xl px-3 py-2 text-xs font-black' : 'bg-slate-100 text-slate-600 rounded-xl px-3 py-2 text-xs font-black';
+    if (capturesBtn) capturesBtn.className = !showResearch ? 'bg-slate-900 text-white rounded-xl px-3 py-2 text-xs font-black' : 'bg-slate-100 text-slate-600 rounded-xl px-3 py-2 text-xs font-black';
+}
+
+function filterHistoryResearchByDate() {
+    const v = document.getElementById('history-date-search')?.value || '';
+    document.querySelectorAll('[data-research-date]').forEach(el => {
+        el.classList.toggle('hidden', !!v && el.getAttribute('data-research-date') !== v);
+    });
+}
+
 async function openHistoryModal(skipCloudRefresh = false) {
     // 登录状态优先拉云端最新历史；但删除/编辑后本地已是最新时，可跳过云端刷新，避免旧云端数据被合并回画面。
     if (skipCloudRefresh) {
@@ -8882,6 +9596,7 @@ async function openHistoryModal(skipCloudRefresh = false) {
     // 按日期将扁平流水账进行联合高维分组。
     // historyLogs 可能包含跨设备删除用的隐藏墓碑，UI 只展示可见记录。
     const visibleHistoryLogs = getVisibleHistoryLogs(historyLogs);
+    const visibleResearchLogs = getVisibleSleepResearchLogs(historyLogs);
     let grouped = {};
     visibleHistoryLogs.forEach(log => {
         if (!grouped[log.date]) grouped[log.date] = [];
@@ -8909,13 +9624,13 @@ async function openHistoryModal(skipCloudRefresh = false) {
                 // 小芯片优先透出当时记录的实际面板食材形态，例如 ABC；旧记录没有 foodCombo 时才回退显示大仓轨道。
                 let sessionLabel = it.session ? `[${it.session}] ` : "";
             // 🚀 核心升级：让历史长卷中的每一个静态标签也彻底拥有点击唤醒历史精修的因果管道！
-            let safeId = JSON.stringify(it.id);
+            let safeIdAttr = escapeHtmlAttr(it.id);
             return `
-            <span class="inline-flex items-center rounded-xl border shadow-2xs overflow-hidden ${cls}" title="时间锚点 ID: ${it.id}">
-                <button onclick="openEditHistoryLogModal(${safeId})" class="px-2.5 py-1 text-[11px] font-bold cursor-pointer transition hover:scale-105 active:scale-95 duration-150">
+            <span class="inline-flex items-center rounded-xl border shadow-2xs overflow-hidden ${cls}" title="时间锚点 ID: ${escapeHtmlAttr(it.id)}">
+                <button data-log-id="${safeIdAttr}" onclick="openEditHistoryLogModal(this.dataset.logId)" class="px-2.5 py-1 text-[11px] font-bold cursor-pointer transition hover:scale-105 active:scale-95 duration-150">
                     ${sessionLabel}${it.name} · ${resultNames[it.result]}${shapeText}
                 </button>
-                <button onclick="deleteHistoryLog(${safeId}, event)" class="px-1.5 py-1 text-[10px] font-black border-l border-current/10 opacity-60 hover:opacity-100 hover:bg-red-500 hover:text-white transition" title="删除这条历史记录并扣回大仓">
+                <button data-log-id="${safeIdAttr}" onclick="deleteHistoryLog(this.dataset.logId, event)" class="px-1.5 py-1 text-[10px] font-black border-l border-current/10 opacity-60 hover:opacity-100 hover:bg-red-500 hover:text-white transition" title="删除这条历史记录并扣回大仓">
                     <i class="fa-solid fa-trash-can"></i>
                 </button>
             </span>`;            }).join('');            
@@ -8931,16 +9646,48 @@ async function openHistoryModal(skipCloudRefresh = false) {
         }
     }
     
+    const researchGrouped = new Map();
+    visibleResearchLogs.forEach(r => researchGrouped.set(String(r.id), r));
+    visibleHistoryLogs.forEach(log => {
+        const rid = log.sleepResearchId || getSleepResearchId(log.date, log.session || '一觉');
+        if (!researchGrouped.has(String(rid)) && log.date) {
+            researchGrouped.set(String(rid), { id: rid, type: 'sleep_research_virtual', date: log.date, session: log.session || '一觉' });
+        }
+    });
+    const researchItems = Array.from(researchGrouped.values()).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(a.session || '').localeCompare(String(b.session || '')));
+    let researchHTML = '';
+    if (researchItems.length === 0) {
+        researchHTML = `<div class="text-center py-12 text-slate-400 text-xs font-medium"><i class="fa-solid fa-moon block text-2xl mb-2 text-slate-300"></i>还没有睡眠研究记录。</div>`;
+    } else {
+        researchHTML = researchItems.map(r => {
+            const logs = getLogsForSleepResearch(r.date, r.session || '一觉');
+            return `<button data-research-date="${r.date || ''}" onclick="openSleepResearchDetail('${r.date || ''}', '${r.session || '一觉'}')" class="w-full text-left bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-2xl p-3 transition flex items-center justify-between gap-3">
+                <span><span class="block text-xs font-black text-slate-800"><i class="fa-solid fa-moon text-indigo-500"></i> ${r.date || '未知日期'} · ${r.session || '一觉'}</span>
+                <span class="block text-[10px] text-slate-500 font-bold mt-1">睡眠分数 ${r.sleepScore || '未填'} · 睡意之力 ${r.drowsyPower || '未填'} · 捕捉 ${logs.length} 只 ${getSleepResearchPhotos(r).length ? `· 大合照 ${getSleepResearchPhotos(r).length} 张` : ''}</span></span>
+                <i class="fa-solid fa-chevron-right text-slate-300"></i>
+            </button>`;
+        }).join('');
+    }
+
     modal.innerHTML = `
-    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 relative max-h-[85vh]" onclick="event.stopPropagation()">
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-2xl w-full shadow-2xl flex flex-col gap-4 relative max-h-[85vh]" onclick="event.stopPropagation()">
         <button onclick="document.getElementById('history-logs-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
         
         <div class="text-center border-b border-slate-50 pb-2">
             <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-book-open text-indigo-500"></i> 历史抽卡时光长卷</h3>
-            <p class="text-[10px] text-slate-400 font-medium mt-0.5">这里如实封存了你过去每一天喂饼干收菜时的欧非交织史</p>
+            <p class="text-[10px] text-slate-400 font-medium mt-0.5">可按睡眠研究查看，也可切回原始捕捉流水。</p>
         </div>
 
-        <div class="flex-1 overflow-y-auto pr-1 space-y-4 max-h-[55vh]">
+        <div class="grid grid-cols-2 gap-2">
+            <button id="history-tab-research" onclick="setHistoryViewMode('research')" class="bg-slate-900 text-white rounded-xl px-3 py-2 text-xs font-black">睡眠研究视图</button>
+            <button id="history-tab-captures" onclick="setHistoryViewMode('captures')" class="bg-slate-100 text-slate-600 rounded-xl px-3 py-2 text-xs font-black">捕捉流水视图</button>
+        </div>
+        <input id="history-date-search" type="date" oninput="filterHistoryResearchByDate()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400" title="按日期定位睡眠研究">
+
+        <div id="history-research-view" class="flex-1 overflow-y-auto pr-1 space-y-2 max-h-[55vh]">
+            ${researchHTML}
+        </div>
+        <div id="history-captures-view" class="hidden flex-1 overflow-y-auto pr-1 space-y-4 max-h-[55vh]">
             ${historyHTML}
         </div>
 
@@ -8959,6 +9706,10 @@ async function openHistoryModal(skipCloudRefresh = false) {
 // 1. 唤醒任意历史卡片的专属精修弹窗
 // 1. 唤醒任意历史卡片：复用新版“智能面板审计 · 气运盲盒”弹窗
 function openEditHistoryLogModal(logId) {
+    // 从睡眠研究详情里点“编辑”时，先关闭详情弹窗，避免两个弹窗叠在一起。
+    const detailModal = document.getElementById('sleep-research-detail-modal');
+    if (detailModal) detailModal.remove();
+
     let item = getVisibleHistoryLogs(historyLogs).find(log => String(log.id) === String(logId));
     if (!item) {
         item = todayCheckIns.find(log => String(log.id) === String(logId));
@@ -8966,7 +9717,7 @@ function openEditHistoryLogModal(logId) {
     if (!item) return;
 
     // 直接复用新版每日打卡面板，避免历史编辑还停留在旧 UI
-    openDailyCheckInModal();
+    openSingleDailyCheckInModal();
 
     const modal = document.getElementById('daily-checkin-modal');
     if (!modal) return;
@@ -9113,10 +9864,12 @@ function submitEditHistoryLog(logId) {
     oldItem.track = trackMode;
     oldItem.date = dateInput.value;
     oldItem.session = sessionSelect.value;
+    oldItem.sleepResearchId = getSleepResearchId(oldItem.date, oldItem.session || '一觉');
     oldItem.subskills = subskillsSnapshot;
     oldItem.nature = natureKey;
     oldItem.foodCombo = foodCombo;
     oldItem.isShiny = isShiny;
+    ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
     saveHistoryToLocal();
 
     // 历史记录如果被改成毕业 / 大毕业 / 金帮，就同步进毕业库。
