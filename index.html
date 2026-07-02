@@ -466,6 +466,9 @@
         <!-- 三系大仓速览：按树果 / 食材 / 技能汇总捕捉与毕业情况 -->
         <div id="type-summary-panel" class="hidden bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm"></div>
 
+        <!-- 评分调试面板：用于核对实际出货与理论期望，不改变任何评分结果 -->
+        <div id="luck-debug-panel" class="hidden bg-white rounded-3xl border border-slate-200/70 shadow-sm overflow-hidden transition-all duration-300"></div>
+
         <div id="today-report-panel" class="bg-white p-5 rounded-3xl border border-indigo-100 shadow-sm hidden flex-col gap-4">
             <div class="flex justify-between items-center border-b border-slate-100 pb-2">
                 <h3 class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
@@ -2384,6 +2387,7 @@ function normalizePlayerBox() {
             '南瓜怪人': { standard: '南瓜怪人呢', type: 'food', defaultLock: 'none' }, 
 
             '皮卡丘(佳节)': { standard: '皮卡丘(佳节)', type: 'skill', defaultLock: 'none' }, '皮卡丘（佳節）': { standard: '皮卡丘(佳节)', type: 'skill', defaultLock: 'none' },
+            '伊布(万圣节)': { standard: '伊布(万圣节)', type: 'skill', defaultLock: 'none' }, '伊布（万圣节）': { standard: '伊布(万圣节)', type: 'skill', defaultLock: 'none' }, '伊布(萬聖節)': { standard: '伊布(万圣节)', type: 'skill', defaultLock: 'none' }, '伊布（萬聖節）': { standard: '伊布(万圣节)', type: 'skill', defaultLock: 'none' },
             '穿山鼠': { standard: '穿山鼠', type: 'skill', defaultLock: 'none' }, '穿山王': { standard: '穿山王', type: 'skill', defaultLock: 'none' },
             '宝宝丁': { standard: '宝宝丁', type: 'skill', defaultLock: 'none' },'胖丁': { standard: '胖丁', type: 'skill', defaultLock: 'none' }, '胖可丁': { standard: '胖可丁', type: 'skill', defaultLock: 'none' },
             '喵喵': { standard: '喵喵', type: 'skill', defaultLock: 'none' }, '猫老大': { standard: '猫老大', type: 'skill', defaultLock: 'none' }, '貓老大': { standard: '猫老大', type: 'skill', defaultLock: 'none' },
@@ -2407,6 +2411,7 @@ function normalizePlayerBox() {
             '赫拉克罗斯': { standard: '赫拉克罗斯', type: 'skill', defaultLock: 'none' }, '赫拉克羅斯': { standard: '赫拉克罗斯', type: 'skill', defaultLock: 'none' },
             '石居蟹': { standard: '石居蟹', type: 'skill', defaultLock: 'none' }, '岩殿居蟹': { standard: '岩殿居蟹', type: 'skill', defaultLock: 'none' },
             '托戈德玛尔': { standard: '托戈德玛尔', type: 'skill', defaultLock: 'none' }, '托戈德瑪爾': { standard: '托戈德玛尔', type: 'skill', defaultLock: 'none' },
+            '黑暗鸦': { standard: '黑暗鸦', type: 'skill', defaultLock: 'none' }, '黑暗鴉': { standard: '黑暗鸦', type: 'skill', defaultLock: 'none' },
             '毒电婴': { standard: '毒电婴', type: 'skill', defaultLock: 'none' }, '毒電嬰': { standard: '毒电婴', type: 'skill', defaultLock: 'none' },
             '布拨': { standard: '布拨', type: 'skill', defaultLock: 'none' }, '布撥': { standard: '布拨', type: 'skill', defaultLock: 'none' },
             '布土拨': { standard: '布土拨', type: 'skill', defaultLock: 'none' }, '布土撥': { standard: '布土拨', type: 'skill', defaultLock: 'none' },
@@ -3820,6 +3825,339 @@ function getEvolutionCatchWeight(name) {
                 </div>`;
         }
 
+
+        function createLuckDebugBucket() {
+            return {
+                species: 0,
+                catches: 0,
+                effectiveCatches: 0,
+                actual: { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
+                expected: { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 },
+                scoreActual: 0,
+                scoreExpected: 0,
+                scoreVariance: 0,
+                rate: null,
+                z: null
+            };
+        }
+
+        function addLuckDebugCounts(target, source) {
+            if (!target || !source) return target;
+            LUCK_RESULT_ORDER.forEach(result => {
+                target.actual[result] += Number(source.actual?.[result]) || 0;
+                target.expected[result] += Number(source.expected?.[result]) || 0;
+            });
+            target.species += Number(source.species) || 0;
+            target.catches += Number(source.catches) || 0;
+            target.effectiveCatches += Number(source.effectiveCatches) || 0;
+            return target;
+        }
+
+        function getLuckDebugMainGoods(counts) {
+            if (!counts) return 0;
+            return (Number(counts.grad) || 0)
+                + (Number(counts.bigGrad) || 0)
+                + (Number(counts.goldGrad) || 0)
+                + (isTiedLuckScoreIncluded() ? (Number(counts.tied) || 0) : 0);
+        }
+
+        function getExpectedMainResultCountsForPokemon(p) {
+            const out = { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 };
+            if (!p || !p.count || getEffectiveLuckCatchCount(p) <= 0) return out;
+            const pType = getLuckScoringTypeForPokemon(p.name);
+            if (!pType || !LUCK_PROB_MATRIX[pType]) return out;
+            const isTiedIncluded = isTiedOutcomeIncludedInLuckDistribution(p.name);
+            const rows = pType === 'food' ? getLuckFoodRowsForScoring(p) : [{ track: null, probWeight: 1 }];
+            const effectiveCount = getEffectiveLuckCatchCount(p);
+            for (let i = 1; i <= effectiveCount; i++) {
+                const lockType = getLuckLockTypeForCatchIndex(p, i);
+                const pr = LUCK_PROB_MATRIX[pType]?.[lockType];
+                if (!pr) continue;
+                const base = getMainScoreEventProbabilitiesForLock(pType, lockType, isTiedIncluded);
+                rows.forEach(row => {
+                    const w = Number(row.probWeight) || 0;
+                    LUCK_RESULT_ORDER.forEach(result => {
+                        if (result === 'tied' && !isTiedIncluded) return;
+                        out[result] += (Number(base[result]) || 0) * w;
+                    });
+                });
+            }
+            return out;
+        }
+
+        function getActualMainResultCountsForPokemon(p) {
+            const out = { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 };
+            if (!p || !p.count || getEffectiveLuckCatchCount(p) <= 0) return out;
+            const pType = getLuckScoringTypeForPokemon(p.name);
+            if (!pType) return out;
+            const isTiedIncluded = isTiedOutcomeIncludedInLuckDistribution(p.name);
+
+            const excludeRemaining = {
+                tied: getBoxLuckExcludedCount(p, 'tied'),
+                grad: getBoxLuckExcludedCount(p, 'grad'),
+                bigGrad: getBoxLuckExcludedCount(p, 'bigGrad'),
+                goldGrad: getBoxLuckExcludedCount(p, 'goldGrad')
+            };
+            const excludeRemainingByTrack = {};
+            if (pType === 'food') {
+                ensureFoodTrackCounts(p);
+                FOOD_TRACK_KEYS.forEach(track => {
+                    excludeRemainingByTrack[track] = {
+                        tied: getBoxLuckExcludedCountByTrack(p, 'tied', track),
+                        grad: getBoxLuckExcludedCountByTrack(p, 'grad', track),
+                        bigGrad: getBoxLuckExcludedCountByTrack(p, 'bigGrad', track),
+                        goldGrad: getBoxLuckExcludedCountByTrack(p, 'goldGrad', track)
+                    };
+                });
+            }
+
+            const add = (result, count, track = null, excludeResult = null) => {
+                const rawN = Math.max(0, Number(count) || 0);
+                if (rawN <= 0) return;
+                const pool = (track && excludeRemainingByTrack[track]) ? excludeRemainingByTrack[track] : excludeRemaining;
+                const exKey = excludeResult || result;
+                const ex = Math.min(rawN, Number(pool[exKey]) || 0);
+                pool[exKey] = Math.max(0, (Number(pool[exKey]) || 0) - ex);
+                const n = Math.max(0, rawN - ex);
+                if (n <= 0) return;
+                if (result === 'tied' && !isTiedIncluded) return;
+                out[result] += n;
+            };
+
+            if (pType === 'food') {
+                ensureFoodTrackCounts(p);
+                FOOD_TRACK_KEYS.forEach(track => {
+                    add('tied', p[`tiedCount_${track}`], track);
+                    add('grad', p[`gradCount_${track}`], track);
+                    add('bigGrad', p[`bigGradCount_${track}`], track);
+                    add('goldGrad', p[`goldGradCount_${track}`], track);
+                });
+                return out;
+            }
+
+            if (isEeveeBaseScoringName(p.name)) {
+                add('tied', p.tiedCount || 0);
+                add('grad', p.gradCount || 0);
+                add('bigGrad', p.bigGradCount || 0);
+                add('goldGrad', p.goldGradCount || 0);
+                return out;
+            }
+
+            if (isEspeonScoringName(p.name)) {
+                add('tied', p.tiedCount || 0, null, 'tied');
+                add('tied', p.gradCount || 0, null, 'grad');
+                add('tied', p.bigGradCount || 0, null, 'bigGrad');
+                add('goldGrad', p.goldGradCount || 0);
+                return out;
+            }
+
+            if (isLatiCustomScoringName(p.name)) {
+                add('tied', p.tiedCount || 0);
+                add('grad', p.gradCount || 0);
+                add('bigGrad', p.bigGradCount || 0);
+                return out;
+            }
+
+            if (isSpecialSkillScoredByBerryModel(p.name)) {
+                add('tied', p.tiedCount || 0);
+                add('grad', p.gradCount || 0);
+                add('goldGrad', p.goldGradCount || 0);
+                return out;
+            }
+
+            if (isSpecialStandardDowngradeName(p.name)) {
+                add('tied', p.gradCount || 0, null, 'grad');
+                add('grad', p.bigGradCount || 0, null, 'bigGrad');
+                add('goldGrad', p.goldGradCount || 0);
+                return out;
+            }
+
+            add('tied', p.tiedCount || 0);
+            add('grad', p.gradCount || 0);
+            add('bigGrad', p.bigGradCount || 0);
+            add('goldGrad', p.goldGradCount || 0);
+            return out;
+        }
+
+        function getLuckDebugSpeciesSummary(p) {
+            const out = createLuckDebugBucket();
+            if (!p) return out;
+            out.species = 1;
+            out.catches = Number(p.count) || 0;
+            out.effectiveCatches = getEffectiveLuckCatchCount(p);
+            out.expected = getExpectedMainResultCountsForPokemon(p);
+            out.actual = getActualMainResultCountsForPokemon(p);
+            const metrics = getPokemonLuckMetrics(p);
+            if (metrics) {
+                out.scoreActual = metrics.actual || 0;
+                out.scoreExpected = metrics.expected || 0;
+                out.scoreVariance = metrics.variance || 0;
+                out.rate = metrics.rate;
+                out.z = metrics.z;
+            }
+            return out;
+        }
+
+        function getLuckDebugTargetSummary(targetType) {
+            const out = createLuckDebugBucket();
+            playerBox.forEach(p => {
+                if (!p || !p.count || getEffectiveLuckCatchCount(p) <= 0) return;
+                const dict = pokemonDictionary[p.name];
+                if (!getLuckTargetTypeMatch(dict, targetType, p.name)) return;
+                addLuckDebugCounts(out, getLuckDebugSpeciesSummary(p));
+            });
+            const metrics = getAggregateLuckMetrics(targetType);
+            if (metrics) {
+                out.scoreActual = metrics.actual || 0;
+                out.scoreExpected = metrics.expected || 0;
+                out.scoreVariance = metrics.variance || 0;
+                out.rate = metrics.rate;
+                out.z = metrics.z;
+            }
+            return out;
+        }
+
+        function formatLuckDebugNum(value, digits = 2) {
+            const n = Number(value) || 0;
+            return n.toFixed(digits);
+        }
+
+        function formatLuckDebugDelta(actual, expected) {
+            const delta = (Number(actual) || 0) - (Number(expected) || 0);
+            const cls = delta >= 0 ? 'text-emerald-600' : 'text-rose-600';
+            const sign = delta >= 0 ? '+' : '';
+            return `<span class="${cls} font-black font-mono">${sign}${formatLuckDebugNum(delta, 2)}</span>`;
+        }
+
+        function getLuckDebugBadgeByZ(z) {
+            if (z === null || z === undefined || !Number.isFinite(Number(z))) return 'bg-slate-100 text-slate-500 border-slate-200';
+            const v = Number(z);
+            if (v >= 1.5) return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+            if (v >= 0.3) return 'bg-lime-100 text-lime-700 border-lime-200';
+            if (v > -0.3) return 'bg-slate-100 text-slate-600 border-slate-200';
+            if (v > -1.5) return 'bg-amber-100 text-amber-700 border-amber-200';
+            return 'bg-rose-100 text-rose-700 border-rose-200';
+        }
+
+        function renderLuckDebugPanel() {
+            const panel = document.getElementById('luck-debug-panel');
+            if (!panel) return;
+            if (!playerBox || playerBox.length === 0 || !isLuckCalculationEnabled()) {
+                panel.classList.add('hidden');
+                panel.innerHTML = '';
+                return;
+            }
+
+            const targets = [
+                { key: 'all', label: '全局', cls: 'border-slate-200 bg-slate-50/70 text-slate-800' },
+                { key: 'berry', label: '树果', cls: 'border-amber-200 bg-amber-50/70 text-amber-800' },
+                { key: 'food', label: '食材', cls: 'border-emerald-200 bg-emerald-50/70 text-emerald-800' },
+                { key: 'skill', label: '技能', cls: 'border-purple-200 bg-purple-50/70 text-purple-800' }
+            ];
+
+            const statCell = (label, actual, expected, colorCls = 'text-slate-700') => `
+                <div class="bg-white/80 border border-white rounded-xl px-2 py-1.5">
+                    <div class="text-[9px] text-slate-400 font-black">${label}</div>
+                    <div class="text-[11px] ${colorCls} font-black font-mono">实 ${formatLuckDebugNum(actual, 1)} / 期 ${formatLuckDebugNum(expected, 2)}</div>
+                    <div class="text-[9px] font-bold">差 ${formatLuckDebugDelta(actual, expected)}</div>
+                </div>`;
+
+            const summaryCards = targets.map(t => {
+                const s = getLuckDebugTargetSummary(t.key);
+                const actualMain = getLuckDebugMainGoods(s.actual);
+                const expectedMain = getLuckDebugMainGoods(s.expected);
+                const zText = (s.z === null || s.z === undefined || !Number.isFinite(Number(s.z))) ? '-' : Number(s.z).toFixed(2);
+                const rateText = s.rate === null || s.rate === undefined ? '-' : `${s.rate}%`;
+                return `
+                    <div class="rounded-2xl border ${t.cls} p-3 flex flex-col gap-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <div>
+                                <div class="text-xs font-black">${t.label}调试</div>
+                                <div class="text-[9px] text-slate-400 font-bold">${s.species} 种 · 有效捕捉 ${s.effectiveCatches}</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-[9px] text-slate-400 font-bold">击败率</div>
+                                <div class="text-lg leading-none font-black font-mono">${rateText}</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-1.5">
+                            ${isTiedLuckScoreIncluded() ? statCell('和解档', s.actual.tied, s.expected.tied, 'text-amber-600') : ''}
+                            ${statCell('毕业档', s.actual.grad, s.expected.grad, 'text-slate-700')}
+                            ${statCell('大毕业', s.actual.bigGrad, s.expected.bigGrad, 'text-purple-600')}
+                            ${statCell('金帮', s.actual.goldGrad, s.expected.goldGrad, 'text-red-600')}
+                            ${statCell(isTiedLuckScoreIncluded() ? '计分主货含和解' : '计分主货', actualMain, expectedMain, 'text-indigo-600')}
+                            <div class="bg-white/80 border border-white rounded-xl px-2 py-1.5">
+                                <div class="text-[9px] text-slate-400 font-black">信息量分</div>
+                                <div class="text-[11px] text-indigo-700 font-black font-mono">实 ${formatLuckDebugNum(s.scoreActual, 2)} / 均 ${formatLuckDebugNum(s.scoreExpected, 2)}</div>
+                                <div class="text-[9px] font-bold">Z <span class="inline-flex px-1.5 py-0.5 rounded-lg border ${getLuckDebugBadgeByZ(s.z)} font-black font-mono">${zText}</span></div>
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('');
+
+            const speciesRows = playerBox
+                .filter(p => p && p.count && getEffectiveLuckCatchCount(p) > 0)
+                .map(p => {
+                    const dict = pokemonDictionary[p.name];
+                    if (!getLuckTargetTypeMatch(dict, 'all', p.name)) return null;
+                    const s = getLuckDebugSpeciesSummary(p);
+                    const actualMain = getLuckDebugMainGoods(s.actual);
+                    const expectedMain = getLuckDebugMainGoods(s.expected);
+                    const deltaScore = (Number(s.scoreActual) || 0) - (Number(s.scoreExpected) || 0);
+                    return { p, s, actualMain, expectedMain, deltaScore };
+                })
+                .filter(Boolean)
+                .sort((a, b) => Math.abs(b.deltaScore) - Math.abs(a.deltaScore))
+                .slice(0, 8);
+
+            const speciesHtml = speciesRows.length ? speciesRows.map(row => {
+                const zText = (row.s.z === null || row.s.z === undefined || !Number.isFinite(Number(row.s.z))) ? '-' : Number(row.s.z).toFixed(2);
+                const delta = row.deltaScore;
+                const deltaCls = delta >= 0 ? 'text-emerald-600' : 'text-rose-600';
+                const sign = delta >= 0 ? '+' : '';
+                return `
+                    <div class="grid grid-cols-12 gap-2 items-center bg-slate-50/70 border border-slate-100 rounded-xl px-3 py-2 text-[10px]">
+                        <div class="col-span-4 sm:col-span-3 font-black text-slate-700 truncate" title="${row.p.name}">${row.p.name}</div>
+                        <div class="col-span-2 sm:col-span-1 font-mono font-black text-slate-500">${row.s.effectiveCatches}抓</div>
+                        <div class="col-span-3 sm:col-span-2 text-slate-500 font-bold">主货 ${formatLuckDebugNum(row.actualMain, 1)} / ${formatLuckDebugNum(row.expectedMain, 2)}</div>
+                        <div class="col-span-3 sm:col-span-2 text-slate-500 font-bold">击败 ${row.s.rate ?? '-'}%</div>
+                        <div class="hidden sm:block sm:col-span-2 text-slate-500 font-bold">Z ${zText}</div>
+                        <div class="hidden sm:block sm:col-span-2 font-mono font-black ${deltaCls}">${sign}${formatLuckDebugNum(delta, 2)} 分</div>
+                    </div>`;
+            }).join('') : `<div class="text-[10px] text-slate-400 font-bold">暂无可调试的宝可梦。</div>`;
+
+            const calibrationInfo = getTotalCatchCalibrationInfo();
+            const calibrationWarn = calibrationInfo.enabled
+                ? `<div class="mt-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl p-2 text-[10px] font-bold leading-relaxed">注意：上方“出货期望”只统计已录入宝可梦，不展开总捕捉数校准的未录入背景；当前正式分数仍会按你已启用的校准参与计算。</div>`
+                : '';
+
+            panel.classList.remove('hidden');
+            panel.innerHTML = `
+                <button onclick="document.getElementById('luck-debug-content').classList.toggle('hidden')" class="w-full px-5 py-4 bg-slate-50 flex items-center justify-between hover:bg-slate-100/70 transition text-left">
+                    <span class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                        <i class="fa-solid fa-stethoscope text-rose-500"></i> 🧪 评分调试面板：实际出货 vs 理论期望
+                    </span>
+                    <span class="text-[10px] font-bold text-slate-400 bg-white border border-slate-200 rounded-xl px-2.5 py-1 shadow-sm">点击展开/收起</span>
+                </button>
+                <div id="luck-debug-content" class="hidden p-5 border-t border-slate-100 bg-white flex flex-col gap-4">
+                    <div class="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3 text-[11px] text-indigo-950 leading-relaxed">
+                        这个面板不改变评分，只用来排查“模型理论期望是否过高”。“期”是当前算法认为在这些捕捉数、锁金阶段、宝可梦口径下平均应出现的数量；“实”是已录入且未被排除计分的数量。
+                        ${isTiedLuckScoreIncluded() ? '当前已开启和解计分，所以主货期望包含和解档。' : '当前未开启和解计分，所以主货期望只包含毕业档、大毕业、金帮。'}
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                        ${summaryCards}
+                    </div>
+                    <div class="rounded-2xl border border-slate-200 bg-white p-3">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <h4 class="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-1"><i class="fa-solid fa-magnifying-glass-chart text-indigo-500"></i> 单宝偏差 Top 8</h4>
+                            <span class="text-[9px] text-slate-400 font-bold">按实际信息量分 - 理论均值的绝对值排序</span>
+                        </div>
+                        <div class="flex flex-col gap-1.5">${speciesHtml}</div>
+                    </div>
+                    ${calibrationWarn}
+                </div>`;
+        }
+
         function triggerSearchFilter() {
             updateBoxUI();
         }
@@ -3868,6 +4206,7 @@ function getEvolutionCatchWeight(name) {
 
             renderTotalCatchCalibrationUI();
             renderTypeSummaryPanel();
+            renderLuckDebugPanel();
 
             let searchKeyword = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
             if (pokemonDictionary[searchKeyword]) searchKeyword = pokemonDictionary[searchKeyword].standard.toLowerCase();
@@ -5701,9 +6040,9 @@ function getLuckScoringTypeForPokemon(name) {
 
 
 // ==========================================
-// 📊 概率信息量气运评分 v2.2
+// 📊 概率信息量气运评分 v2.9
 // 核心思想：默认不计入和解，更适合横向比较；开启和解计分时按“完整和解统计口径”重算理论分布。
-// 单次出货贡献 v2.6 = -log10(该档位达线概率)，并强制保证 金帮 > 大毕业 > 毕业 > 和解；理论事件池按开关明确切换：和解关=毕业及以上+金帮，和解开=和解及以上+金帮。
+// 单次出货贡献 v2.8 = -log10(该档位达线概率)，并强制保证 金帮 > 大毕业 > 毕业 > 和解；理论事件池不再把 grad 与 gold 简单相加，改按累计线优先级拆分，避免金帮与普通毕业/大毕业重叠被重复计入。
 // 单宠、三类型、全大仓都通过理论总分布计算百分位，避免手动权重。
 // ==========================================
 const LUCK_INFO_SCORE_SCALE = 1000;      // 0.001 信息量精度
@@ -5766,6 +6105,61 @@ const LUCK_PROB_MATRIX = {
     }
 };
 
+
+// v2.9：显式保存“最终互斥事件概率”。
+// LUCK_PROB_MATRIX 仍是达线/累计概率，用于计算每个档位的信息量权重；
+// LUCK_EVENT_PROB_MATRIX 是理论卷积真正吃进去的最终录入档位概率。
+// 这样以后维护时不会再把 grad/gold 等累计线误当成可直接相加的互斥事件。
+const LUCK_EVENT_PROB_MATRIX = {
+    berry: {
+        none: { none: 0.974900, tied: 0.018600, grad: 0.000900, bigGrad: 0.003100, goldGrad: 0.002500 },
+        one: { none: 0.924800, tied: 0.052400, grad: 0.002100, bigGrad: 0.008300, goldGrad: 0.012400 },
+        two: { none: 0.880300, tied: 0.059900, grad: 0.000600, bigGrad: 0.006600, goldGrad: 0.052600 }
+    },
+    food: {
+        none: { none: 0.978600, tied: 0.008700, grad: 0.004500, bigGrad: 0.007000, goldGrad: 0.001200 },
+        one: { none: 0.988700, tied: 0.003000, grad: 0.003000, bigGrad: 0.002100, goldGrad: 0.003200 },
+        two: { none: 0.996100, tied: 0.000000, grad: 0.001600, bigGrad: 0.000000, goldGrad: 0.002300 }
+    },
+    skill: {
+        none: { none: 0.887700, tied: 0.040000, grad: 0.033800, bigGrad: 0.030000, goldGrad: 0.008500 },
+        one: { none: 0.932100, tied: 0.026700, grad: 0.010100, bigGrad: 0.008600, goldGrad: 0.022500 },
+        two: { none: 0.971500, tied: 0.014500, grad: 0.000000, bigGrad: 0.000000, goldGrad: 0.014000 }
+    },
+    special_skill: {
+        none: { none: 0.993500, tied: 0.000900, grad: 0.003100, bigGrad: 0.000000, goldGrad: 0.002500 },
+        one: { none: 0.977200, tied: 0.002100, grad: 0.008300, bigGrad: 0.000000, goldGrad: 0.012400 },
+        two: { none: 0.940200, tied: 0.000600, grad: 0.006600, bigGrad: 0.000000, goldGrad: 0.052600 }
+    },
+    latios: {
+        none: { none: 0.937000, tied: 0.046000, grad: 0.012300, bigGrad: 0.004700, goldGrad: 0.000000 },
+        one: { none: 0.916700, tied: 0.043800, grad: 0.020500, bigGrad: 0.019000, goldGrad: 0.000000 },
+        two: { none: 0.880300, tied: 0.040900, grad: 0.016900, bigGrad: 0.061900, goldGrad: 0.000000 }
+    },
+    latias: {
+        none: { none: 0.887700, tied: 0.040000, grad: 0.033800, bigGrad: 0.038500, goldGrad: 0.000000 },
+        one: { none: 0.916700, tied: 0.042100, grad: 0.010100, bigGrad: 0.031100, goldGrad: 0.000000 },
+        two: { none: 0.880300, tied: 0.040900, grad: 0.016900, bigGrad: 0.061900, goldGrad: 0.000000 }
+    },
+    eevee: {
+        none: { none: 0.897200, tied: 0.047300, grad: 0.011600, bigGrad: 0.011000, goldGrad: 0.032900 },
+        one: { none: 0.898900, tied: 0.043300, grad: 0.004100, bigGrad: 0.003800, goldGrad: 0.049900 },
+        two: { none: 0.891200, tied: 0.033600, grad: 0.000000, bigGrad: 0.000000, goldGrad: 0.075200 }
+    },
+    espeon: {
+        none: { none: 0.946900, tied: 0.028400, grad: 0.000000, bigGrad: 0.000000, goldGrad: 0.024700 },
+        one: { none: 0.926600, tied: 0.030300, grad: 0.000000, bigGrad: 0.000000, goldGrad: 0.043100 },
+        two: { none: 0.902900, tied: 0.020400, grad: 0.000000, bigGrad: 0.000000, goldGrad: 0.076700 }
+    }
+};
+
+const LUCK_PROBABILITY_PROFILE_NOTES = {
+    plainSource: '普通树果/食材/技能 line 概率恢复 Leo/Kolin 原矩阵；food 为 AAA 单轨基础，ABB/双轨继续由 FOOD_TRACK_META.probWeight 放大。',
+    eventMeaning: 'event 概率按当前最终档位优先级拆分：金帮优先，其次大毕业、毕业、和解；用于理论分布、期望与调试面板。',
+    scoreMeaning: 'score 使用 line/达线概率，并用最小间隔保护 金帮 > 大毕业 > 毕业 > 和解，避免夹缝概率导致普通毕业反向高分。',
+    eeveeNewStandard: '伊布特殊侧：Rank≤64 作为和解；金帮改为前三格有效副技能含 果S + 金帮，且性格不减帮速。eevee line 矩阵为此口径下的最终累计线。'
+};
+
 const LUCK_RESULT_ORDER = ['tied', 'grad', 'bigGrad', 'goldGrad'];
 const LUCK_RESULT_LABELS = {
     tied: '和解',
@@ -5807,30 +6201,22 @@ function getLuckLockTypeForCatchIndex(p, i) {
 }
 
 function getExclusiveResultProbabilities(pr, pType = null) {
-    // v2.4：这里仅负责“单次捕捉落入哪个录入档位”的互斥事件分布。
-    // 普通线：和解 / 毕业 / 大毕业；金帮线：近似与普通线互斥，不再把 gold 从 bigGrad 里硬扣。
-    // 注意：档位“值多少分”不再使用这些夹缝概率，而由 getLineScoreProbabilities() 的达线概率决定。
+    // v2.8：这里仅负责“单次捕捉最终落入哪个录入档位”的互斥事件分布。
+    // 当前概率矩阵的 gold / bigGrad / grad / tied 是达线累计概率；金帮条件和普通效率线存在重叠。
+    // 因此理论事件池不能再用 grad + gold 直接相加，否则会把“既达普通线又达金帮线”的面板重复计入，导致整体理论期望偏高、玩家分数普遍偏低。
+    // 在没有完整联合分布矩阵前，采用累计线优先级拆分：金帮优先，其次大毕业、毕业、和解。
+    // 档位“值多少分”仍由 getLineScoreProbabilities() 的达线概率决定，不使用这些夹缝事件概率。
     const pGold = Math.max(0, Number(pr.gold) || 0);
     const pBigLine = Math.max(0, Number(pr.bigGrad) || 0);
     const pGradLine = Math.max(0, Number(pr.grad) || 0);
     const pTiedLine = Math.max(0, Number(pr.tied) || 0);
 
-    if (pType === 'eevee') {
-        // 伊布概率矩阵是“最终档位累计线”：金帮已经包含在大毕业/毕业累计线中。
-        // 因此事件分布必须按最终档位拆分，不能使用普通宝的 grad + gold 互斥赛道口径。
-        return {
-            tied: Math.max(0, pTiedLine - pGradLine),
-            grad: Math.max(0, pGradLine - pBigLine),
-            bigGrad: Math.max(0, pBigLine - pGold),
-            goldGrad: pGold
-        };
-    }
-
     if (pType === 'special_skill') {
         // 暂定特殊技能宝只有 和解 / 毕业 / 金帮 三档，不使用大毕业档。
+        // 这里的 grad/tied 也是累计线，因此按金帮优先拆分，避免 grad + gold 双算。
         return {
             tied: Math.max(0, pTiedLine - pGradLine),
-            grad: pGradLine,
+            grad: Math.max(0, pGradLine - pGold),
             bigGrad: 0,
             goldGrad: pGold
         };
@@ -5846,18 +6232,43 @@ function getExclusiveResultProbabilities(pr, pType = null) {
         };
     }
 
+    // 普通三系、伊布、拉帝等累计线 profile：按最终档位优先级拆分。
+    // 对无 gold 的 profile（如拉帝）自然退化为 tied-grad / grad-big / big。
     return {
         tied: Math.max(0, pTiedLine - pGradLine),
         grad: Math.max(0, pGradLine - pBigLine),
-        bigGrad: pBigLine,
+        bigGrad: Math.max(0, pBigLine - pGold),
         goldGrad: pGold
     };
 }
 
+
+function getLuckEventProbabilitiesForLock(pType, lockType) {
+    const profile = LUCK_EVENT_PROB_MATRIX?.[pType]?.[lockType];
+    if (profile) {
+        return {
+            tied: Number(profile.tied) || 0,
+            grad: Number(profile.grad) || 0,
+            bigGrad: Number(profile.bigGrad) || 0,
+            goldGrad: Number(profile.goldGrad) || 0
+        };
+    }
+    // 兼容未来新增 profile：如果没有显式 event，就退回 line 矩阵即时拆分。
+    const pr = LUCK_PROB_MATRIX?.[pType]?.[lockType];
+    return pr ? getExclusiveResultProbabilities(pr, pType) : { tied: 0, grad: 0, bigGrad: 0, goldGrad: 0 };
+}
+
+function getMainScoreEventProbabilitiesForLock(pType, lockType, isTiedIncluded = false) {
+    const base = getLuckEventProbabilitiesForLock(pType, lockType);
+    if (!isTiedIncluded) {
+        return { tied: 0, grad: base.grad || 0, bigGrad: base.bigGrad || 0, goldGrad: base.goldGrad || 0 };
+    }
+    return base;
+}
+
 function getMainScoreEventProbabilities(pr, pType = null, isTiedIncluded = false) {
-    // v2.5：主评分理论事件池必须和业务口径一致。
-    // 和解计分关闭：普通宝为“普通线毕业及以上 + 金帮毕业”（≈grad+gold）；
-    // 但伊布这类“最终并集累计线”会在 getExclusiveResultProbabilities 中拆成最终档位，避免重复计算 gold。
+    // v2.8：主评分理论事件池直接使用“最终互斥事件分布”。
+    // 和解计分关闭：只把最终和解档置零；毕业/大毕业/金帮不再用 grad+gold 拼接。
     // 和解计分开启：普通和解也进入非零分事件池；闪光加成另走和解及以上口径，不受这里影响。
     const base = getExclusiveResultProbabilities(pr, pType);
     if (!isTiedIncluded) {
@@ -5897,7 +6308,7 @@ function getAverageResultProbabilities(p, pType, isTiedIncluded) {
     const effectiveCount = getEffectiveLuckCatchCount(p);
     for (let i = 1; i <= effectiveCount; i++) {
         const lockType = getLuckLockTypeForCatchIndex(p, i);
-        const base = getMainScoreEventProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType, isTiedIncluded);
+        const base = getMainScoreEventProbabilitiesForLock(pType, lockType, isTiedIncluded);
         rows.forEach(row => {
             LUCK_RESULT_ORDER.forEach(result => {
                 if (result === 'tied' && !isTiedIncluded) return;
@@ -6207,7 +6618,7 @@ function convolveBinaryEvidenceEvents(dist, events) {
 // 这能避免“没完整记录和解就被扣分”，同时认可玩家珍惜的自用和解。
 // ==========================================
 function getTiedBandProbabilityForScoring(pType, lockType, track = null) {
-    const base = getExclusiveResultProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType).tied || 0;
+    const base = getLuckEventProbabilitiesForLock(pType, lockType).tied || 0;
     if (pType === 'food' && track) {
         return Math.min(0.999999, Math.max(0, base * (FOOD_TRACK_META[track]?.probWeight || 1)));
     }
@@ -6377,7 +6788,7 @@ function convolveLuckDistribution(a, b) {
 
 function getSingleCatchScoreDistribution(p, pType, lockType, scoreKeyMap, isTiedIncluded) {
     const dist = { 0: 0 };
-    const base = getMainScoreEventProbabilities(LUCK_PROB_MATRIX[pType][lockType], pType, isTiedIncluded);
+    const base = getMainScoreEventProbabilitiesForLock(pType, lockType, isTiedIncluded);
     const rows = pType === 'food' ? getLuckFoodRowsForScoring(p) : [{ track: null, probWeight: 1 }];
     let nonZeroProb = 0;
 
