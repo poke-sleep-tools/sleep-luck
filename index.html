@@ -8356,6 +8356,9 @@ function openSleepResearchDetail(date, session) {
                     <button data-date="${dateAttr}" data-session="${sessionAttr}" onclick="openEditSleepResearchModal(this.dataset.date, this.dataset.session)" class="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 text-[10px] font-black flex items-center gap-1">
                         <i class="fa-solid fa-pen"></i> 编辑研究信息
                     </button>
+                    <button data-date="${dateAttr}" data-session="${sessionAttr}" onclick="deleteSleepResearchWithCaptures(this.dataset.date, this.dataset.session, event)" class="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-[10px] font-black flex items-center gap-1">
+                        <i class="fa-solid fa-trash-can"></i> 删除研究
+                    </button>
                 </div>
             </div>
         </div>
@@ -8363,6 +8366,84 @@ function openSleepResearchDetail(date, session) {
         <div class="overflow-y-auto pr-1 flex flex-col gap-2">${rows}</div>
     </div>`;
     document.body.appendChild(modal);
+}
+
+
+async function deleteSleepResearchWithCaptures(date, session, event) {
+    if (event) event.stopPropagation();
+    const safeDate = date || '';
+    const safeSession = session || '一觉';
+    const researchId = getSleepResearchId(safeDate, safeSession);
+    const logs = getLogsForSleepResearch(safeDate, safeSession);
+    const research = findSleepResearch(safeDate, safeSession);
+
+    const firstConfirm = confirm(
+        `确定删除这次睡眠研究吗？\n\n${safeDate || '未知日期'} · ${safeSession}\n捕捉记录：${logs.length} 只\n\n删除后会同时删除该研究下的所有宝可梦捕捉记录，并从 Box 大仓扣回；大合照、睡眠分数、睡意之力也会删除。`
+    );
+    if (!firstConfirm) return;
+
+    const secondConfirm = confirm(
+        `二次确认：真的要删除【${safeDate || '未知日期'} · ${safeSession}】这次睡眠研究吗？\n\n这个操作无法自动恢复。`
+    );
+    if (!secondConfirm) return;
+
+    const idsToDelete = new Set();
+    if (research && research.id !== undefined && research.id !== null) idsToDelete.add(String(research.id));
+    idsToDelete.add(String(researchId));
+    logs.forEach(log => {
+        if (log && log.id !== undefined && log.id !== null) idsToDelete.add(String(log.id));
+    });
+
+    // 先扣回 Box 资产；只对捕捉记录扣，不对 sleep_research 元信息扣。
+    logs.forEach(log => rollbackCheckInAsset(log));
+
+    historyLogs = (Array.isArray(historyLogs) ? historyLogs : [])
+        .filter(h => {
+            if (!h || isHistoryDeleteMarker(h)) return true;
+            return !idsToDelete.has(String(h.id));
+        });
+
+    idsToDelete.forEach(id => {
+        if (!historyLogs.some(h => isHistoryDeleteMarker(h) && String(h.deletedId) === String(id))) {
+            historyLogs.push(makeHistoryDeleteMarker(id));
+        }
+    });
+
+    historyLogs = mergeHistoryLogs([], historyLogs);
+    saveHistoryToLocal();
+
+    let graduationChanged = false;
+    logs.forEach(log => {
+        if (log && removeGraduationDexBySourceId(log.id)) graduationChanged = true;
+    });
+    if (graduationChanged) saveGraduationDexToLocal();
+
+    const deletedCaptureIds = new Set(logs.map(log => String(log.id)));
+    const beforeTodayLen = todayCheckIns.length;
+    todayCheckIns = todayCheckIns.filter(t => !deletedCaptureIds.has(String(t.id)));
+    if (todayCheckIns.length !== beforeTodayLen) saveTodayCheckInsToLocal();
+
+    const detailModal = document.getElementById('sleep-research-detail-modal');
+    if (detailModal) detailModal.remove();
+    const editModal = document.getElementById('sleep-research-edit-modal');
+    if (editModal) editModal.remove();
+
+    updateBoxUI(true);
+    renderTodayReportUI();
+
+    if (currentCloudUser) {
+        await saveHistoryToCloudNow();
+        await saveBoxToCloudNow();
+        if (graduationChanged) await saveGraduationDexToCloudNow();
+    }
+
+    const histModal = document.getElementById('history-logs-modal');
+    if (histModal) {
+        histModal.remove();
+        openHistoryModal(true);
+    }
+
+    showToast('已删除这次睡眠研究，并扣回对应捕捉记录');
 }
 
 
@@ -9661,11 +9742,22 @@ async function openHistoryModal(skipCloudRefresh = false) {
     } else {
         researchHTML = researchItems.map(r => {
             const logs = getLogsForSleepResearch(r.date, r.session || '一觉');
-            return `<button data-research-date="${r.date || ''}" onclick="openSleepResearchDetail('${r.date || ''}', '${r.session || '一觉'}')" class="w-full text-left bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-2xl p-3 transition flex items-center justify-between gap-3">
-                <span><span class="block text-xs font-black text-slate-800"><i class="fa-solid fa-moon text-indigo-500"></i> ${r.date || '未知日期'} · ${r.session || '一觉'}</span>
-                <span class="block text-[10px] text-slate-500 font-bold mt-1">睡眠分数 ${r.sleepScore || '未填'} · 睡意之力 ${r.drowsyPower || '未填'} · 捕捉 ${logs.length} 只 ${getSleepResearchPhotos(r).length ? `· 大合照 ${getSleepResearchPhotos(r).length} 张` : ''}</span></span>
-                <i class="fa-solid fa-chevron-right text-slate-300"></i>
-            </button>`;
+            const rDate = escapeHtmlAttr(r.date || '');
+            const rSession = escapeHtmlAttr(r.session || '一觉');
+            return `<div data-research-date="${rDate}" class="w-full bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-2xl p-3 transition flex items-center justify-between gap-3">
+                <button type="button" data-date="${rDate}" data-session="${rSession}" onclick="openSleepResearchDetail(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left">
+                    <span class="block text-xs font-black text-slate-800"><i class="fa-solid fa-moon text-indigo-500"></i> ${r.date || '未知日期'} · ${r.session || '一觉'}</span>
+                    <span class="block text-[10px] text-slate-500 font-bold mt-1">睡眠分数 ${r.sleepScore || '未填'} · 睡意之力 ${r.drowsyPower || '未填'} · 捕捉 ${logs.length} 只 ${getSleepResearchPhotos(r).length ? `· 大合照 ${getSleepResearchPhotos(r).length} 张` : ''}</span>
+                </button>
+                <div class="shrink-0 flex items-center gap-2">
+                    <button type="button" data-date="${rDate}" data-session="${rSession}" onclick="deleteSleepResearchWithCaptures(this.dataset.date, this.dataset.session, event)" class="px-2 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-[10px] font-black" title="删除这次睡眠研究及其捕捉记录">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                    <button type="button" data-date="${rDate}" data-session="${rSession}" onclick="openSleepResearchDetail(this.dataset.date, this.dataset.session)" class="text-slate-300 hover:text-indigo-500 px-1">
+                        <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>`;
         }).join('');
     }
 
