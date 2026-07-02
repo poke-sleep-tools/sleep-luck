@@ -8759,7 +8759,7 @@ function openSleepResearchModal() {
             </div>
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">本次抓了几只</label>
-                <input type="number" min="1" max="20" value="1" id="research-catch-count" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+                <input type="number" min="0" max="20" value="1" id="research-catch-count" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
             </div>
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">大合照截图（选填，可多选）</label>
@@ -8782,7 +8782,9 @@ function submitSleepResearchMeta() {
     const sleepScore = String(document.getElementById('research-score')?.value || '').trim();
     const drowsyPower = String(document.getElementById('research-power')?.value || '').trim();
     const note = String(document.getElementById('research-note')?.value || '').trim();
-    const count = Math.max(1, Math.min(20, Number(document.getElementById('research-catch-count')?.value || 1)));
+    let count = Number(document.getElementById('research-catch-count')?.value || 0);
+    if (!Number.isFinite(count)) count = 0;
+    count = Math.max(0, Math.min(20, Math.floor(count)));
     const photoInput = document.getElementById('research-photos');
     const files = photoInput?.files || [];
 
@@ -8801,6 +8803,12 @@ function submitSleepResearchMeta() {
         stickyCheckInSession = session;
         const modal = document.getElementById('sleep-research-modal');
         if (modal) modal.remove();
+        if (count <= 0) {
+            saveHistoryToLocal();
+            showToast('睡眠研究已创建');
+            openSleepResearchDetail(date, session);
+            return;
+        }
         openSingleDailyCheckInModal({ date, session, sleepResearchId: research.id, batchLeft: count, batchTotal: count, batchIndex: 1 });
     };
 
@@ -8818,6 +8826,15 @@ function addPokemonToSleepResearch(date, session) {
     const editModal = document.getElementById('sleep-research-edit-modal');
     if (editModal) editModal.remove();
     openSingleDailyCheckInModal({ date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId: research.id });
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function escapeHtmlAttr(value) {
@@ -9725,7 +9742,7 @@ function renderGraduationDexList() {
                 <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-600">
                     <span class="text-slate-400 font-black">当前状态</span>
                     <span>性格：${curNatureName}</span>
-                    ${cur.note ? `<span class="text-slate-400">备注：${cur.note}</span>` : ''}
+                    ${cur.note ? `<span class="text-slate-400">备注：${escapeHtml(cur.note)}</span>` : ''}
                 </div>
                 <div class="flex flex-wrap gap-1.5">${skillChips}</div>
             </div>
