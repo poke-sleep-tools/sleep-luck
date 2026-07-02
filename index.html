@@ -863,7 +863,15 @@ function loadHistoryFromLocal() {
     }
 }
 function saveHistoryToLocal() {
-    localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+    try {
+        localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+    } catch (e) {
+        console.error('历史库本地保存失败：', e);
+        if (isStorageQuotaExceededError(e)) {
+            throw new Error('浏览器本地存储空间不足。手机原图太大时很容易触发；请减少大合照数量或重新上传压缩后的图片。');
+        }
+        throw e;
+    }
     scheduleSaveHistoryToCloud();
 }
 
@@ -926,11 +934,39 @@ function readSleepResearchMetaMap() {
     }
 }
 
+function isStorageQuotaExceededError(e) {
+    return !!(e && (
+        e.name === 'QuotaExceededError' ||
+        e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+        e.code === 22 ||
+        e.code === 1014 ||
+        /quota/i.test(String(e.message || ''))
+    ));
+}
+
+function slimSleepResearchMetaForStorage(item) {
+    if (!item) return null;
+    const slim = Object.assign({}, item);
+    // v28：大合照图片体积很大，不能在 historyLogs 和 meta 缓存里各存一份。
+    // meta 只负责兜底保存文字元信息；照片只保存在 sleep_research 主记录里。
+    delete slim.photoDataUrl;
+    delete slim.photoDataUrls;
+    return slim;
+}
+
 function writeSleepResearchMetaMap(map) {
     try {
-        localStorage.setItem(getSleepResearchMetaStorageKey(), JSON.stringify(map || {}));
+        const slimMap = {};
+        Object.entries(map || {}).forEach(([key, value]) => {
+            const slim = slimSleepResearchMetaForStorage(value);
+            if (slim) slimMap[key] = slim;
+        });
+        localStorage.setItem(getSleepResearchMetaStorageKey(), JSON.stringify(slimMap));
     } catch (e) {
         console.warn('睡眠研究元信息保存失败：', e);
+        if (isStorageQuotaExceededError(e)) {
+            throw new Error('浏览器本地存储空间不足。已取消保存；请减少大合照数量，或使用压缩后的图片。');
+        }
     }
 }
 
@@ -940,12 +976,10 @@ function persistSleepResearchMeta(research) {
     if (!normalized || !normalized.id) return null;
     const map = readSleepResearchMetaMap();
     const old = map[String(normalized.id)] || null;
-    const next = Object.assign({}, old || {}, normalized, {
+    const next = Object.assign({}, old || {}, slimSleepResearchMetaForStorage(normalized), {
         createdAt: normalized.createdAt || old?.createdAt || new Date().toISOString(),
         updatedAt: normalized.updatedAt || new Date().toISOString()
     });
-    next.photoDataUrls = getSleepResearchPhotos(next);
-    next.photoDataUrl = next.photoDataUrls[0] || '';
     map[String(next.id)] = next;
     writeSleepResearchMetaMap(map);
     return next;
@@ -1056,6 +1090,67 @@ function getSleepResearchPhotos(research) {
     return photos;
 }
 
+const SLEEP_RESEARCH_PHOTO_MAX_SIDE = 1280;
+const SLEEP_RESEARCH_PHOTO_TARGET_BYTES = 850 * 1024;
+const SLEEP_RESEARCH_PHOTO_INITIAL_QUALITY = 0.72;
+
+function estimateDataUrlBytes(dataUrl) {
+    const str = String(dataUrl || '');
+    const comma = str.indexOf(',');
+    const b64 = comma >= 0 ? str.slice(comma + 1) : str;
+    return Math.ceil(b64.length * 3 / 4);
+}
+
+function canvasToJpegDataUrl(canvas, quality) {
+    return canvas.toDataURL('image/jpeg', quality);
+}
+
+function compressImageFileToDataUrl(file, onDone, onError) {
+    const reader = new FileReader();
+    reader.onload = () => {
+        const originalDataUrl = String(reader.result || '');
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const sourceW = img.naturalWidth || img.width || 1;
+                const sourceH = img.naturalHeight || img.height || 1;
+                const attempts = [
+                    { side: SLEEP_RESEARCH_PHOTO_MAX_SIDE, quality: SLEEP_RESEARCH_PHOTO_INITIAL_QUALITY },
+                    { side: 1024, quality: 0.68 },
+                    { side: 800, quality: 0.64 }
+                ];
+                let best = originalDataUrl;
+                for (const cfg of attempts) {
+                    const scale = Math.min(1, cfg.side / Math.max(sourceW, sourceH));
+                    const targetW = Math.max(1, Math.round(sourceW * scale));
+                    const targetH = Math.max(1, Math.round(sourceH * scale));
+                    const canvas = document.createElement('canvas');
+                    canvas.width = targetW;
+                    canvas.height = targetH;
+                    const ctx = canvas.getContext('2d', { alpha: false });
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, targetW, targetH);
+                    ctx.drawImage(img, 0, 0, targetW, targetH);
+                    best = canvasToJpegDataUrl(canvas, cfg.quality);
+                    if (estimateDataUrlBytes(best) <= SLEEP_RESEARCH_PHOTO_TARGET_BYTES) break;
+                }
+                onDone(best);
+            } catch (e) {
+                console.warn('图片压缩失败，尝试保存原图：', e);
+                onDone(originalDataUrl);
+            }
+        };
+        img.onerror = () => {
+            if (typeof onError === 'function') onError();
+        };
+        img.src = originalDataUrl;
+    };
+    reader.onerror = () => {
+        if (typeof onError === 'function') onError();
+    };
+    reader.readAsDataURL(file);
+}
+
 function readImageFilesAsDataUrls(fileList, onDone, onError) {
     const files = Array.from(fileList || []).filter(file => file && (!file.type || file.type.startsWith('image/')));
     if (!files.length) {
@@ -1064,17 +1159,19 @@ function readImageFilesAsDataUrls(fileList, onDone, onError) {
     }
     const results = new Array(files.length);
     let finished = 0;
+    let failed = false;
+    const finishOne = (index, value) => {
+        if (failed) return;
+        results[index] = value;
+        finished += 1;
+        if (finished === files.length) onDone(results.filter(Boolean));
+    };
     files.forEach((file, index) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            results[index] = String(reader.result || '');
-            finished += 1;
-            if (finished === files.length) onDone(results.filter(Boolean));
-        };
-        reader.onerror = () => {
+        compressImageFileToDataUrl(file, value => finishOne(index, value), () => {
+            if (failed) return;
+            failed = true;
             if (typeof onError === 'function') onError();
-        };
-        reader.readAsDataURL(file);
+        });
     });
 }
 
@@ -8762,7 +8859,7 @@ function openSleepResearchModal() {
                 <input type="number" min="0" max="20" value="1" id="research-catch-count" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
             </div>
             <div>
-                <label class="block text-[10px] font-bold text-slate-500 mb-1">大合照截图（选填，可多选）</label>
+                <label class="block text-[10px] font-bold text-slate-500 mb-1">大合照截图（选填，可多选，自动压缩）</label>
                 <input type="file" accept="image/*" multiple id="research-photos" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-bold focus:outline-none focus:border-indigo-400">
             </div>
         </div>
@@ -8798,18 +8895,22 @@ function submitSleepResearchMeta() {
     }
 
     const finish = (photoDataUrls = []) => {
-        const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls });
-        stickyCheckInDate = date;
-        stickyCheckInSession = session;
-        const modal = document.getElementById('sleep-research-modal');
-        if (modal) modal.remove();
-        if (count <= 0) {
-            saveHistoryToLocal();
-            showToast('睡眠研究已创建');
-            openSleepResearchDetail(date, session);
-            return;
+        try {
+            const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls });
+            stickyCheckInDate = date;
+            stickyCheckInSession = session;
+            const modal = document.getElementById('sleep-research-modal');
+            if (modal) modal.remove();
+            if (count <= 0) {
+                showToast('睡眠研究已创建');
+                openSleepResearchDetail(date, session);
+                return;
+            }
+            openSingleDailyCheckInModal({ date, session, sleepResearchId: research.id, batchLeft: count, batchTotal: count, batchIndex: 1 });
+        } catch (err) {
+            console.error('创建睡眠研究失败：', err);
+            alert('创建睡眠研究失败：' + (err && err.message ? err.message : '未知错误'));
         }
-        openSingleDailyCheckInModal({ date, session, sleepResearchId: research.id, batchLeft: count, batchTotal: count, batchIndex: 1 });
     };
 
     readImageFilesAsDataUrls(files, finish, () => alert('截图读取失败，请不带截图继续或重新选择图片。'));
@@ -9091,7 +9192,7 @@ function openEditSleepResearchModal(date, session) {
                 <input type="text" id="edit-research-power" value="${research.drowsyPower || ''}" placeholder="例如 123,456,789" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
             </div>
             <div>
-                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">追加大合照截图（选填，可多选）</label>
+                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">追加大合照截图（选填，可多选，自动压缩）</label>
                 <input type="file" accept="image/*" multiple id="edit-research-photos" class="block w-full max-w-full min-w-0 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-bold focus:outline-none focus:border-indigo-400">
                 <p class="text-[10px] text-slate-400 font-bold mt-1">选择新图片会追加到当前大合照列表，不会覆盖旧图；下方可删除已保存图片，也可以直接按住照片卡片拖动调整顺序。</p>
                 <div id="edit-research-existing-photos"></div>
