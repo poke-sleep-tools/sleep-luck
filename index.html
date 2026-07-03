@@ -947,10 +947,10 @@ function isStorageQuotaExceededError(e) {
 function slimSleepResearchMetaForStorage(item) {
     if (!item) return null;
     const slim = Object.assign({}, item);
-    // v28：大合照图片体积很大，不能在 historyLogs 和 meta 缓存里各存一份。
-    // meta 只负责兜底保存文字元信息；照片只保存在 sleep_research 主记录里。
-    delete slim.photoDataUrl;
-    delete slim.photoDataUrls;
+    // v32：不要把 dataURL 原图写进 meta；但 Storage 引用/普通 URL 很小，允许保留。
+    // 这样登录用户上传到 Supabase Storage 后，跨设备也能读到图片引用。
+    slim.photoDataUrls = getCloudSafeSleepResearchPhotoEntries(slim.photoDataUrls || []);
+    slim.photoDataUrl = '';
     return slim;
 }
 
@@ -996,6 +996,223 @@ function removeSleepResearchMeta(date, session) {
     if (map[String(id)]) {
         delete map[String(id)];
         writeSleepResearchMetaMap(map);
+    }
+}
+
+
+// v29：大合照单独存储。不要把图片塞进 historyLogs / 云端同步 JSON，
+// 否则手机 localStorage / Supabase payload 都很容易超限；详情页读取时再按研究 id 合并。
+function getSleepResearchPhotoStorageKey() {
+    return currentCloudUser ? 'sleep_research_photos_' + currentCloudUser.id : 'sleep_research_photos_guest';
+}
+
+function readSleepResearchPhotoMap() {
+    try {
+        return JSON.parse(localStorage.getItem(getSleepResearchPhotoStorageKey())) || {};
+    } catch (e) {
+        console.warn('睡眠研究照片缓存读取失败，已忽略：', e);
+        return {};
+    }
+}
+
+function writeSleepResearchPhotoMap(map) {
+    try {
+        localStorage.setItem(getSleepResearchPhotoStorageKey(), JSON.stringify(map || {}));
+    } catch (e) {
+        console.warn('睡眠研究照片缓存保存失败：', e);
+        if (isStorageQuotaExceededError(e)) {
+            throw new Error('浏览器本地存储空间不足。图片已压缩但仍无法保存；请减少大合照数量，或删除旧的大合照后再试。');
+        }
+        throw e;
+    }
+}
+
+function setSleepResearchPhotos(date, session, photos) {
+    const id = getSleepResearchId(date, session || '一觉');
+    const clean = compactPhotoEntries(photos);
+    const map = readSleepResearchPhotoMap();
+    if (clean.length) {
+        map[String(id)] = clean;
+    } else {
+        delete map[String(id)];
+    }
+    writeSleepResearchPhotoMap(map);
+    return clean;
+}
+
+function getStoredSleepResearchPhotos(date, session) {
+    const id = getSleepResearchId(date, session || '一觉');
+    const map = readSleepResearchPhotoMap();
+    const list = map[String(id)];
+    return compactPhotoEntries(Array.isArray(list) ? list : []);
+}
+
+function removeSleepResearchPhotos(date, session) {
+    const id = getSleepResearchId(date, session || '一觉');
+    const map = readSleepResearchPhotoMap();
+    if (map[String(id)]) {
+        delete map[String(id)];
+        writeSleepResearchPhotoMap(map);
+    }
+}
+
+
+// v30：登录用户的大合照走 Supabase Storage；未登录用户保留本机压缩图作为临时方案。
+// 需要在 Supabase 里准备一个 public bucket：sleep-research-photos。
+const SLEEP_RESEARCH_PHOTO_BUCKET = 'sleep-research-photos';
+
+function normalizePhotoEntry(item) {
+    if (!item) return null;
+    if (typeof item === 'string') {
+        const url = item.trim();
+        return url ? { kind: url.startsWith('data:') ? 'local' : 'url', url } : null;
+    }
+    if (typeof item === 'object') {
+        const url = String(item.url || item.publicUrl || item.dataUrl || '').trim();
+        const path = String(item.path || item.storagePath || '').trim();
+        if (!url && !path) return null;
+        return {
+            kind: item.kind || (path ? 'storage' : (url.startsWith('data:') ? 'local' : 'url')),
+            url,
+            path,
+            bucket: item.bucket || (path ? SLEEP_RESEARCH_PHOTO_BUCKET : ''),
+            createdAt: item.createdAt || new Date().toISOString()
+        };
+    }
+    return null;
+}
+
+function getPhotoDisplayUrl(item) {
+    const normalized = normalizePhotoEntry(item);
+    return normalized ? normalized.url : '';
+}
+
+function compactPhotoEntries(entries) {
+    const result = [];
+    const seen = new Set();
+    (Array.isArray(entries) ? entries : []).forEach(item => {
+        const entry = normalizePhotoEntry(item);
+        if (!entry) return;
+        const key = entry.path ? `path:${entry.path}` : `url:${entry.url}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        // 旧字符串图兼容：local dataURL 保存为字符串，storage 保存为对象。
+        result.push(entry.path ? entry : entry.url);
+    });
+    return result;
+}
+
+function isLocalDataUrlPhotoEntry(item) {
+    const entry = normalizePhotoEntry(item);
+    return !!(entry && entry.url && entry.url.startsWith('data:'));
+}
+
+function isStorageBackedPhotoEntry(item) {
+    const entry = normalizePhotoEntry(item);
+    return !!(entry && entry.path);
+}
+
+function getCloudSafeSleepResearchPhotoEntries(entries) {
+    // 只把 Supabase Storage 引用/普通 URL 写入 historyLogs 和云端 JSON；
+    // 游客模式或旧版 dataURL 图片仍只放本机照片缓存，避免再次撑爆 JSON。
+    return compactPhotoEntries(entries).filter(item => {
+        const entry = normalizePhotoEntry(item);
+        if (!entry) return false;
+        if (entry.path) return true;
+        return !!(entry.url && !entry.url.startsWith('data:'));
+    });
+}
+
+function dataUrlToBlob(dataUrl) {
+    const [header, body] = String(dataUrl || '').split(',');
+    const mimeMatch = /^data:([^;]+);base64$/i.exec(header || '');
+    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const binary = atob(body || '');
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+}
+
+function sanitizeStoragePathPart(value) {
+    // Supabase Storage object keys are safest when every dynamic path segment is ASCII.
+    // Chinese labels such as “一觉 / 二觉” can trigger `Invalid key`, so slug them.
+    return String(value || '')
+        .normalize('NFKD')
+        .replace(/[\/]+/g, '-')
+        .replace(/[^a-zA-Z0-9._-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^[-.]+|[-.]+$/g, '')
+        .slice(0, 80) || 'item';
+}
+
+function getSleepResearchSessionStorageSlug(session) {
+    const normalized = normalizeSleepResearchSessionValue(session || '一觉');
+    if (normalized === '一觉') return 'session-1';
+    if (normalized === '二觉') return 'session-2';
+    return sanitizeStoragePathPart(normalized);
+}
+
+function canUseSupabasePhotoStorage() {
+    return !!(currentCloudUser && supabaseClient && supabaseClient.storage && supabaseClient.storage.from);
+}
+
+async function uploadSleepResearchPhotoDataUrl(date, session, dataUrl, index = 0) {
+    if (!canUseSupabasePhotoStorage()) {
+        console.warn('未检测到登录用户或 Supabase Storage 客户端，本次大合照仅保存到本机缓存。');
+        return dataUrl;
+    }
+    const blob = dataUrlToBlob(dataUrl);
+    const safeDate = normalizeSleepResearchDateValue(date || getTodayLocalDateString());
+    const safeSession = getSleepResearchSessionStorageSlug(session || '一觉');
+    const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+    const path = `${currentCloudUser.id}/${safeDate}/${safeSession}/${Date.now()}_${Math.random().toString(36).slice(2)}_${index}.${ext}`;
+    const { error } = await supabaseClient.storage
+        .from(SLEEP_RESEARCH_PHOTO_BUCKET)
+        .upload(path, blob, {
+            contentType: blob.type || 'image/jpeg',
+            cacheControl: '31536000',
+            upsert: false
+        });
+    if (error) {
+        throw new Error(`上传大合照失败：${error.message || error}. 如果提示 Invalid key，通常是旧版本生成了含中文的一觉/二觉路径；请使用修正版重新上传。也请确认 Supabase Storage 中已创建 public bucket「${SLEEP_RESEARCH_PHOTO_BUCKET}」，并允许登录用户上传。`);
+    }
+    const { data } = supabaseClient.storage.from(SLEEP_RESEARCH_PHOTO_BUCKET).getPublicUrl(path);
+    return {
+        kind: 'storage',
+        bucket: SLEEP_RESEARCH_PHOTO_BUCKET,
+        path,
+        url: data && data.publicUrl ? data.publicUrl : '',
+        createdAt: new Date().toISOString()
+    };
+}
+
+async function uploadSleepResearchPhotoDataUrls(date, session, dataUrls) {
+    const list = Array.isArray(dataUrls) ? dataUrls.filter(Boolean) : [];
+    const result = [];
+    for (let i = 0; i < list.length; i++) {
+        result.push(await uploadSleepResearchPhotoDataUrl(date, session, list[i], i));
+    }
+    return compactPhotoEntries(result);
+}
+
+async function removeSleepResearchPhotoEntryFromStorage(entry) {
+    const normalized = normalizePhotoEntry(entry);
+    if (!normalized || !normalized.path || !canUseSupabasePhotoStorage()) return;
+    try {
+        await supabaseClient.storage.from(normalized.bucket || SLEEP_RESEARCH_PHOTO_BUCKET).remove([normalized.path]);
+    } catch (e) {
+        console.warn('Storage 照片删除失败，已仅移除引用：', e);
+    }
+}
+
+async function removeSleepResearchPhotoEntriesFromStorage(entries) {
+    const list = compactPhotoEntries(entries);
+    const paths = list.map(normalizePhotoEntry).filter(item => item && item.path).map(item => item.path);
+    if (!paths.length || !canUseSupabasePhotoStorage()) return;
+    try {
+        await supabaseClient.storage.from(SLEEP_RESEARCH_PHOTO_BUCKET).remove(paths);
+    } catch (e) {
+        console.warn('Storage 照片批量删除失败，已仅移除引用：', e);
     }
 }
 
@@ -1079,15 +1296,18 @@ function findSleepResearch(date, session) {
 function getSleepResearchPhotos(research) {
     const photos = [];
     if (!research) return photos;
+    const date = normalizeSleepResearchDateValue(research.date || getTodayLocalDateString());
+    const session = normalizeSleepResearchSessionValue(research.session || '一觉');
+
+    // v30：优先读取独立照片引用；Storage 对象和旧版 dataURL 字符串都兼容。
+    getStoredSleepResearchPhotos(date, session).forEach(item => photos.push(item));
     if (Array.isArray(research.photoDataUrls)) {
-        research.photoDataUrls.forEach(url => {
-            if (typeof url === 'string' && url.trim() && !photos.includes(url)) photos.push(url);
-        });
+        research.photoDataUrls.forEach(item => photos.push(item));
     }
-    if (typeof research.photoDataUrl === 'string' && research.photoDataUrl.trim() && !photos.includes(research.photoDataUrl)) {
+    if (typeof research.photoDataUrl === 'string' && research.photoDataUrl.trim()) {
         photos.push(research.photoDataUrl);
     }
-    return photos;
+    return compactPhotoEntries(photos);
 }
 
 const SLEEP_RESEARCH_PHOTO_MAX_SIDE = 1280;
@@ -1231,7 +1451,7 @@ function renderSleepResearchPhotoGallery(photos, compact = false) {
     sleepResearchPhotoViewerStore[galleryId] = list;
     const gridClass = list.length === 1 ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 sm:grid-cols-3 gap-2';
     const maxClass = compact ? 'max-h-32' : 'max-h-52';
-    return `<div class="${gridClass}">${list.map((url, index) => `<button type="button" onclick="openSleepResearchPhotoViewer('${galleryId}', ${index})" class="block bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden hover:ring-2 hover:ring-indigo-200 transition text-left" title="点击查看第 ${index + 1} 张大合照"><img src="${escapeHtmlAttr(url)}" class="w-full ${maxClass} object-contain bg-slate-50" alt="睡眠研究大合照 ${index + 1}"></button>`).join('')}</div>`;
+    return `<div class="${gridClass}">${list.map((item, index) => { const url = getPhotoDisplayUrl(item); return `<button type="button" onclick="openSleepResearchPhotoViewer('${galleryId}', ${index})" class="block bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden hover:ring-2 hover:ring-indigo-200 transition text-left" title="点击查看第 ${index + 1} 张大合照"><img src="${escapeHtmlAttr(url)}" class="w-full ${maxClass} object-contain bg-slate-50" alt="睡眠研究大合照 ${index + 1}"></button>`; }).join('')}</div>`;
 }
 
 
@@ -1252,7 +1472,7 @@ function renderSleepResearchPhotoManageGallery(date, session, photos) {
         <div id="${galleryId}" class="${gridClass}">
             ${list.map((url, index) => `
             <div class="sleep-research-photo-manage-card group relative bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden hover:ring-2 hover:ring-indigo-200 transition cursor-grab active:cursor-grabbing select-none" data-photo-index="${index}" draggable="true" ondragstart="handleDetailResearchPhotoDragStart(event, '${galleryId}')" ondragover="handleDetailResearchPhotoDragOver(event, '${galleryId}')" ondrop="handleDetailResearchPhotoDrop(event, '${galleryId}')" ondragend="handleDetailResearchPhotoDragEnd(event, '${galleryId}')">
-                <img src="${escapeHtmlAttr(url)}" onclick="openSleepResearchPhotoViewer('${galleryId}', ${index})" class="w-full max-h-52 object-contain bg-slate-50 pointer-events-auto" alt="睡眠研究大合照 ${index + 1}" title="点击查看大图；按住拖动可排序">
+                <img src="${escapeHtmlAttr(getPhotoDisplayUrl(url))}" onclick="openSleepResearchPhotoViewer('${galleryId}', ${index})" class="w-full max-h-52 object-contain bg-slate-50 pointer-events-auto" alt="睡眠研究大合照 ${index + 1}" title="点击查看大图；按住拖动可排序">
                 <div class="absolute top-1.5 left-1.5 bg-slate-900/70 text-white text-[10px] font-black rounded-lg px-2 py-0.5 photo-order-badge">${index + 1}</div>
                 <div class="absolute bottom-1.5 left-1.5 bg-white/90 text-slate-500 text-[10px] font-black rounded-lg px-2 py-0.5 shadow-sm flex items-center gap-1 opacity-0 group-hover:opacity-100 transition pointer-events-none">
                     <i class="fa-solid fa-grip-vertical"></i> 拖动排序
@@ -1336,14 +1556,16 @@ function handleDetailResearchPhotoDragEnd(event, galleryId) {
     if (store) store.dragEl = null;
 }
 
-function deleteSleepResearchPhotoFromDetail(galleryId, index, event) {
+async function deleteSleepResearchPhotoFromDetail(galleryId, index, event) {
     if (event) event.stopPropagation();
     const store = sleepResearchPhotoManageStore[galleryId];
     if (!store) return;
     const safeIndex = Number(index);
     if (!Number.isInteger(safeIndex) || safeIndex < 0 || safeIndex >= store.photos.length) return;
     if (!confirm(`确定要删除第 ${safeIndex + 1} 张大合照吗？`)) return;
+    const removed = store.photos[safeIndex];
     const nextPhotos = store.photos.filter((_, i) => i !== safeIndex);
+    await removeSleepResearchPhotoEntryFromStorage(removed);
     upsertSleepResearch({ date: store.date, session: store.session, photoDataUrls: nextPhotos });
     saveHistoryToLocal();
     if (currentCloudUser) saveHistoryToCloudNow();
@@ -1356,7 +1578,7 @@ function deleteSleepResearchPhotoFromDetail(galleryId, index, event) {
 function openSleepResearchPhotoViewer(galleryId, index = 0) {
     const list = sleepResearchPhotoViewerStore[galleryId] || [];
     const safeIndex = Math.max(0, Math.min(list.length - 1, Number(index) || 0));
-    const url = list[safeIndex];
+    const url = getPhotoDisplayUrl(list[safeIndex]);
     if (!url) return;
 
     const old = document.getElementById('sleep-research-photo-viewer-modal');
@@ -1408,8 +1630,24 @@ function upsertSleepResearch(payload = {}) {
         createdAt: existing.createdAt || now,
         updatedAt: now
     }, existing, normalizedPayload, { id, type: 'sleep_research', date, session, updatedAt: now });
-    next.photoDataUrls = getSleepResearchPhotos(next);
-    next.photoDataUrl = next.photoDataUrls[0] || '';
+
+    const payloadHasPhotos = Object.prototype.hasOwnProperty.call(normalizedPayload, 'photoDataUrls') || Object.prototype.hasOwnProperty.call(normalizedPayload, 'photoDataUrl');
+    if (payloadHasPhotos) {
+        // v32 修正：这里必须使用“本次传入的目标照片列表”，不能再调用 getSleepResearchPhotos(next)。
+        // getSleepResearchPhotos 会先读取旧缓存，导致删除照片后又把旧照片合并回来，看起来“删不掉”。
+        const desiredPhotos = compactPhotoEntries([
+            ...(Array.isArray(normalizedPayload.photoDataUrls) ? normalizedPayload.photoDataUrls : []),
+            normalizedPayload.photoDataUrl
+        ].filter(Boolean));
+        setSleepResearchPhotos(date, session, desiredPhotos);
+        next.photoDataUrls = getCloudSafeSleepResearchPhotoEntries(desiredPhotos);
+        next.photoDataUrl = '';
+    } else {
+        next.photoDataUrls = getCloudSafeSleepResearchPhotoEntries(getSleepResearchPhotos(next));
+        next.photoDataUrl = '';
+    }
+    // v32：Storage 引用很小，可以写入 historyLogs/云端，方便跨设备读取；
+    // 但游客或旧版 dataURL 图片仍只保存在本机照片缓存，不写入云端 JSON。
     persistSleepResearchMeta(next);
 
     // v25：用规范化后的 日期+觉 去重。部分手机浏览器 date 输入可能返回 2026/07/02，
@@ -8894,9 +9132,10 @@ function submitSleepResearchMeta() {
         return;
     }
 
-    const finish = (photoDataUrls = []) => {
+    const finish = async (photoDataUrls = []) => {
         try {
-            const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls });
+            const storedPhotos = await uploadSleepResearchPhotoDataUrls(date, session, photoDataUrls);
+            const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls: storedPhotos });
             stickyCheckInDate = date;
             stickyCheckInSession = session;
             const modal = document.getElementById('sleep-research-modal');
@@ -9051,7 +9290,9 @@ async function deleteSleepResearchWithCaptures(date, session, event) {
     });
 
     historyLogs = mergeHistoryLogs([], historyLogs);
+    await removeSleepResearchPhotoEntriesFromStorage(getStoredSleepResearchPhotos(safeDate, safeSession));
     removeSleepResearchMeta(safeDate, safeSession);
+    removeSleepResearchPhotos(safeDate, safeSession);
     saveHistoryToLocal();
 
     let graduationChanged = false;
@@ -9107,7 +9348,7 @@ function renderEditSleepResearchPhotoManager() {
             ${photos.map((url, index) => `
             <div class="edit-research-photo-card min-w-0 bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden transition shadow-sm cursor-grab active:cursor-grabbing select-none" data-photo-index="${index}" draggable="true" ondragstart="handleEditResearchPhotoDragStart(event, ${index})" ondragover="handleEditResearchPhotoDragOver(event, ${index})" ondrop="handleEditResearchPhotoDrop(event)" ondragend="handleEditResearchPhotoDragEnd(event)">
                 <div class="relative bg-slate-100">
-                    <img src="${escapeHtmlAttr(url)}" class="w-full max-h-28 object-contain bg-slate-50 pointer-events-none" alt="当前大合照 ${index + 1}">
+                    <img src="${escapeHtmlAttr(getPhotoDisplayUrl(url))}" class="w-full max-h-28 object-contain bg-slate-50 pointer-events-none" alt="当前大合照 ${index + 1}">
                     <div class="absolute top-1.5 left-1.5 bg-slate-900/70 text-white text-[10px] font-black rounded-lg px-2 py-0.5">${index + 1}</div>
                     <div class="absolute top-1.5 right-1.5 bg-white/90 text-slate-500 text-[10px] font-black rounded-lg px-2 py-0.5 shadow-sm flex items-center gap-1">
                         <i class="fa-solid fa-grip-vertical"></i> 拖动排序
@@ -9256,39 +9497,13 @@ function submitEditSleepResearch(date, session) {
     const keptPhotos = basePhotos.filter((_, index) => !removeIndices.has(index));
     const files = photoEl && photoEl.files ? photoEl.files : [];
 
-    const finish = (newPhotos = []) => {
+    const finish = async (newPhotos = []) => {
         try {
-            const photoDataUrls = keptPhotos.concat(newPhotos || []);
-            const researchId = getSleepResearchId(date, session);
-    removeSleepResearchMeta(date, session);
-            const now = new Date().toISOString();
-            const oldResearch = historyLogs
-                .filter(log => log && isSleepResearchLog(log) && String(log.id) === String(researchId))
-                .reduce((best, item) => chooseNewerHistoryLog(best, item), null) || {};
-            const next = Object.assign({
-                id: researchId,
-                type: 'sleep_research',
-                date,
-                session,
-                createdAt: oldResearch.createdAt || now
-            }, oldResearch, {
-                id: researchId,
-                type: 'sleep_research',
-                date,
-                session,
-                sleepScore,
-                drowsyPower,
-                note,
-                photoDataUrls,
-                photoDataUrl: photoDataUrls[0] || '',
-                updatedAt: now
-            });
-            persistSleepResearchMeta(next);
-            // v24：编辑保存时强制去重同一日期+觉的睡眠研究。
-            // 否则旧版自动生成的空壳研究可能在 merge 时覆盖刚保存的分数/睡意之力。
-            historyLogs = historyLogs.filter(log => !(log && isSleepResearchLog(log) && String(log.id) === String(researchId)));
-            historyLogs.unshift(next);
-            historyLogs = mergeHistoryLogs([], historyLogs);
+            const removedPhotos = basePhotos.filter((_, index) => removeIndices.has(index));
+            await removeSleepResearchPhotoEntriesFromStorage(removedPhotos);
+            const uploadedNewPhotos = await uploadSleepResearchPhotoDataUrls(date, session, newPhotos || []);
+            const photoDataUrls = compactPhotoEntries(keptPhotos.concat(uploadedNewPhotos || []));
+            upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls });
             ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
             saveHistoryToLocal();
             if (currentCloudUser) scheduleSaveHistoryToCloud();
