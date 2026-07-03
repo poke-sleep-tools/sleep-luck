@@ -1152,6 +1152,85 @@ function getSleepResearchSessionStorageSlug(session) {
     return sanitizeStoragePathPart(normalized);
 }
 
+function getSleepResearchPhotoStoragePrefix(date, session) {
+    if (!currentCloudUser) return '';
+    const safeDate = normalizeSleepResearchDateValue(date || getTodayLocalDateString());
+    const safeSession = getSleepResearchSessionStorageSlug(session || '一觉');
+    return `${currentCloudUser.id}/${safeDate}/${safeSession}`;
+}
+
+function getPhotoEntryStableKey(item) {
+    const entry = normalizePhotoEntry(item);
+    if (!entry) return '';
+    return entry.path ? `path:${entry.path}` : `url:${entry.url}`;
+}
+
+async function listSleepResearchStoragePhotoEntries(date, session) {
+    if (!canUseSupabasePhotoStorage()) return [];
+    const prefix = getSleepResearchPhotoStoragePrefix(date, session);
+    if (!prefix) return [];
+    try {
+        const { data, error } = await supabaseClient.storage
+            .from(SLEEP_RESEARCH_PHOTO_BUCKET)
+            .list(prefix, {
+                limit: 100,
+                sortBy: { column: 'name', order: 'asc' }
+            });
+        if (error) {
+            console.warn('Storage 大合照索引读取失败：', error);
+            return [];
+        }
+        return compactPhotoEntries((data || [])
+            .filter(item => item && item.name && !String(item.name).endsWith('/'))
+            .map(item => {
+                const path = `${prefix}/${item.name}`;
+                const { data: publicData } = supabaseClient.storage.from(SLEEP_RESEARCH_PHOTO_BUCKET).getPublicUrl(path);
+                return {
+                    kind: 'storage',
+                    bucket: SLEEP_RESEARCH_PHOTO_BUCKET,
+                    path,
+                    url: publicData && publicData.publicUrl ? publicData.publicUrl : '',
+                    createdAt: item.created_at || item.updated_at || new Date().toISOString()
+                };
+            }));
+    } catch (e) {
+        console.warn('Storage 大合照索引读取异常：', e);
+        return [];
+    }
+}
+
+async function reconcileSleepResearchPhotosFromStorage(date, session, options = {}) {
+    if (!canUseSupabasePhotoStorage()) return false;
+    const safeDate = normalizeSleepResearchDateValue(date || getTodayLocalDateString());
+    const safeSession = normalizeSleepResearchSessionValue(session || '一觉');
+    const storagePhotos = await listSleepResearchStoragePhotoEntries(safeDate, safeSession);
+    if (!storagePhotos.length) return false;
+
+    const currentResearch = findSleepResearch(safeDate, safeSession) || { date: safeDate, session: safeSession };
+    const currentPhotos = getSleepResearchPhotos(currentResearch);
+    const currentKeys = new Set(compactPhotoEntries(currentPhotos).map(getPhotoEntryStableKey).filter(Boolean));
+    const hasNewStoragePhoto = storagePhotos.some(item => {
+        const key = getPhotoEntryStableKey(item);
+        return key && !currentKeys.has(key);
+    });
+    if (!hasNewStoragePhoto) return false;
+
+    const mergedPhotos = compactPhotoEntries(currentPhotos.concat(storagePhotos));
+    upsertSleepResearch({ date: safeDate, session: safeSession, photoDataUrls: mergedPhotos });
+    saveHistoryToLocal();
+    if (currentCloudUser && options.saveCloud !== false) {
+        await saveHistoryToCloudNow();
+    }
+    if (options.refreshDetail) {
+        const modal = document.getElementById('sleep-research-detail-modal');
+        if (modal) {
+            modal.remove();
+            openSleepResearchDetail(safeDate, safeSession);
+        }
+    }
+    return true;
+}
+
 function canUseSupabasePhotoStorage() {
     return !!(currentCloudUser && supabaseClient && supabaseClient.storage && supabaseClient.storage.from);
 }
@@ -9136,6 +9215,8 @@ function submitSleepResearchMeta() {
         try {
             const storedPhotos = await uploadSleepResearchPhotoDataUrls(date, session, photoDataUrls);
             const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls: storedPhotos });
+            // Storage 已上传后，必须立刻把图片引用写回云端 history_logs；否则另一台设备只会看到 Storage 文件本体，看不到这次研究的照片索引。
+            if (currentCloudUser) await saveHistoryToCloudNow();
             stickyCheckInDate = date;
             stickyCheckInSession = session;
             const modal = document.getElementById('sleep-research-modal');
@@ -9246,6 +9327,14 @@ function openSleepResearchDetail(date, session) {
         <div class="overflow-y-auto pr-1 flex flex-col gap-2">${rows}</div>
     </div>`;
     document.body.appendChild(modal);
+
+    // 跨设备兜底：另一台设备可能已经把照片上传进 Storage，但历史记录里的 photoDataUrls 引用还没同步过来。
+    // 打开详情时按固定路径反查 Storage，把实际存在的图片重新挂回这次睡眠研究。
+    if (currentCloudUser) {
+        reconcileSleepResearchPhotosFromStorage(date, session, { refreshDetail: true }).catch(e => {
+            console.warn('Storage 大合照索引恢复失败：', e);
+        });
+    }
 }
 
 
@@ -9506,7 +9595,8 @@ function submitEditSleepResearch(date, session) {
             upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls });
             ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
             saveHistoryToLocal();
-            if (currentCloudUser) scheduleSaveHistoryToCloud();
+            // 编辑研究信息，尤其新增 Storage 照片后，立刻同步云端，避免其他设备拿不到 photoDataUrls 索引。
+            if (currentCloudUser) await saveHistoryToCloudNow();
             const editModal = document.getElementById('sleep-research-edit-modal');
             if (editModal) editModal.remove();
             const detailModal = document.getElementById('sleep-research-detail-modal');
