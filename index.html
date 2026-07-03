@@ -10804,11 +10804,14 @@ function openEditHistoryLogModal(logId) {
     if (trackEl && item.track) trackEl.value = item.track;
     toggleCheckInFoodTrack();
 
-    const submitBtn = modal.querySelector('button[onclick="submitDailyCheckIn()"]');
+    // v33 修正：新版录入按钮的 onclick 是 submitDailyCheckIn(event)，并带有 data-submit-daily-checkin。
+    // 旧选择器只匹配 submitDailyCheckIn()，会导致历史编辑保存时走“新增捕捉”流程，生成一只新宝。
+    const submitBtn = modal.querySelector('[data-submit-daily-checkin="1"], #daily-checkin-submit-btn, button[onclick^="submitDailyCheckIn"]');
     if (submitBtn) {
-        submitBtn.setAttribute('onclick', `submitEditHistoryLog(${JSON.stringify(logId)})`);
+        submitBtn.setAttribute('onclick', `submitEditHistoryLog(${JSON.stringify(String(logId))})`);
+        submitBtn.dataset.editHistorySubmit = String(logId);
         submitBtn.className = 'w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md';
-        submitBtn.innerHTML = `<i class="fa-solid fa-cloud-arrow-up"></i> 溯源重算，洗髓历史大仓`;
+        submitBtn.innerHTML = `<i class="fa-solid fa-cloud-arrow-up"></i> 保存修改，不新增记录`;
     }
 }
 
@@ -10898,6 +10901,9 @@ function submitEditHistoryLog(logId) {
     oldItem.isShiny = isShiny;
     ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
     saveHistoryToLocal();
+    // v33 修正：历史编辑会回滚旧大仓并注入新大仓，必须同步保存 Box，
+    // 否则刷新后可能出现历史已改但大仓仍是旧状态。
+    localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
 
     // 历史记录如果被改成毕业 / 大毕业 / 金帮，就同步进毕业库。
     // 如果从毕业改成和解 / 没货，就从自动毕业库档案里移除。
@@ -11644,8 +11650,9 @@ function triggerLivePanelAudit() {
     let standardName = pokemonDictionary[rawName] ? pokemonDictionary[rawName].standard : rawName;
     let dict = pokemonDictionary[standardName];
 
-    if (dict && dict.type !== 'special_skill') {
-        // 树果型 / 技能型也允许记录食材形态；只是该字段不参与它们的评分。
+    if (dict) {
+        // 所有已识别宝可梦都允许记录食材形态；只有食材型会把该字段用于评分/轨道归档。
+        // 特殊技能宝（例如木守宫一家）也需要能保存实际食材组合，避免默认 ABB 无法修改。
         if (foodSlotsZone) foodSlotsZone.classList.remove('hidden');
     } else {
         if (foodSlotsZone) foodSlotsZone.classList.add('hidden');
@@ -12353,6 +12360,14 @@ window.submitDailyCheckIn = function submitDailyCheckInV22(event) {
     if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
 
     const modal = document.getElementById('daily-checkin-modal');
+
+    // v33 双保险：只要当前面板是历史记录编辑模式，就绝不能走新增捕捉流程。
+    // 这样即使某些浏览器没有吃到按钮 onclick 替换，也不会复制出一条新宝可梦记录。
+    const editHistoryId = modal?.dataset?.editHistoryId || '';
+    if (editHistoryId) {
+        return submitEditHistoryLog(editHistoryId);
+    }
+
     const modalContext = {
         sleepResearchId: modal?.dataset?.sleepResearchId || '',
         batchLeft: Number(modal?.dataset?.batchLeft || 0),
