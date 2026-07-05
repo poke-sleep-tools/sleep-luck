@@ -626,6 +626,9 @@
                     <button onclick="openGraduationDexModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-800 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="查看和补录已经出货的宝可梦个体面板">
                         <i class="fa-solid fa-trophy text-amber-600"></i> 🏆 出货库
                     </button>
+                    <button onclick="openBallPlannerModal()" id="ball-planner-main-btn" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-sky-100 text-sky-800 shadow-sm flex items-center gap-1 hover:bg-sky-200" title="记录精灵球库存、研究用球、活动/礼包计划和睡眠点数商店预算">
+                        <i class="fa-solid fa-baseball text-sky-600"></i> 🎒 精灵球规划
+                    </button>
                 </div>
             </div>
         </div>
@@ -857,6 +860,7 @@ function loadHistoryFromLocal() {
         const raw = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
         historyLogs = mergeHistoryLogs([], raw);
         ensureSleepResearchForExistingCaptures({ persist: true, syncCloud: false });
+        loadBallPlannerStateFromHistory();
     } catch (e) {
         console.error('历史抽卡库读取失败，已重置：', e);
         historyLogs = [];
@@ -873,6 +877,955 @@ function saveHistoryToLocal() {
         throw e;
     }
     scheduleSaveHistoryToCloud();
+}
+
+
+// ==========================================
+// 🎒 精灵球库存与规划中心 v1
+// 设计口径：当前库存只由玩家手动校准和睡眠研究用球自动扣回/补回改变；
+// 活动、礼包、商店、每日奖励只影响“预计库存”，不直接改当前库存。
+// 主数据作为 history_logs 中的一条特殊状态记录同步到账号云端，避免额外改 Supabase 表结构。
+// ==========================================
+const BALL_PLANNER_STATE_LOG_ID = 'ball_planner_state_v1';
+const BALL_KEYS = ['poke', 'great', 'ultra'];
+const BALL_LABELS = { poke: '红白球', great: '蓝球', ultra: '黑/黄球', bonus: '奖励球' };
+const BALL_DAILY_REWARD_EXPECTED = { poke: 0.2394 + 2 * 0.0131 + 3 * 0.0029, great: 0.0044, ultra: 0 };
+const BALL_SYSTEM_EVENT_TEMPLATES = [
+    { id: 'event_common_poke_5', sourceType: 'event', templateName: '常规活动红白球 ×5', balls: { poke: 5, great: 0, ultra: 0 }, note: '很多常见活动会送 5 个红白球，可用于快速录入。' }
+];
+const BALL_SYSTEM_DAILY_REWARD_TEMPLATES = [
+    { id: 'daily_poke_1', sourceType: 'dailyReward', templateName: '红白球 ×1', balls: { poke: 1, great: 0, ultra: 0 }, diamonds: 0, note: '每日奖励球类结果' },
+    { id: 'daily_poke_2', sourceType: 'dailyReward', templateName: '红白球 ×2', balls: { poke: 2, great: 0, ultra: 0 }, diamonds: 0, note: '每日奖励球类结果' },
+    { id: 'daily_poke_3', sourceType: 'dailyReward', templateName: '红白球 ×3', balls: { poke: 3, great: 0, ultra: 0 }, diamonds: 0, note: '每日奖励球类结果' },
+    { id: 'daily_great_1', sourceType: 'dailyReward', templateName: '蓝球 ×1', balls: { poke: 0, great: 1, ultra: 0 }, diamonds: 0, note: '每日奖励球类结果' },
+    { id: 'daily_diamond_15', sourceType: 'dailyReward', templateName: '钻石 ×15', balls: { poke: 0, great: 0, ultra: 0 }, diamonds: 15, note: '每日奖励非球结果示例，可按实际情况修改。' }
+];
+
+let ballPlannerState = getDefaultBallPlannerState();
+
+function getCurrentMonthKey() {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getMonthEndRemainingDays() {
+    const now = new Date();
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return Math.max(0, Math.ceil((end - now) / (24 * 60 * 60 * 1000)));
+}
+
+function getDefaultBallPlannerState() {
+    return {
+        enabled: false,
+        currentInventory: { poke: 0, great: 0, ultra: 0 },
+        entries: [],
+        templates: { bundle: [], event: [], dailyReward: [] },
+        shop: {
+            month: getCurrentMonthKey(),
+            hasPremiumPass: true,
+            sleepPointBalance: 0,
+            remainingDays: getMonthEndRemainingDays(),
+            monthlyPassBonusClaimed: false,
+            fullMoonClaimed: false,
+            fullMoonPoints: 2000,
+            includeDailyRewardExpectation: true,
+            includeShopPlanInForecast: true,
+            showForecastCurve: true,
+            extraSleepPoints: [],
+            priorityPlan: { goldSeed: true, silverSeed: true, islandTicket: true },
+            regularShopRemaining: { poke: 30, islandTicket: 1 },
+            premiumShopRemaining: { poke: 10, great: 5, goldSeed: 1, silverSeed: 1 }
+        },
+        updatedAt: new Date().toISOString()
+    };
+}
+
+function normalizeBallCounts(obj = {}) {
+    return {
+        poke: Math.max(0, Math.floor(Number(obj.poke) || 0)),
+        great: Math.max(0, Math.floor(Number(obj.great) || 0)),
+        ultra: Math.max(0, Math.floor(Number(obj.ultra) || 0))
+    };
+}
+
+function normalizeResearchBallUsage(raw = {}, session = '一觉', options = {}) {
+    const hasRaw = raw && typeof raw === 'object' && Object.keys(raw).length > 0;
+    const defaultBonus = options.defaultBonus === true ? (normalizeSleepResearchSessionValue(session) === '一觉' ? 1 : 0) : 0;
+    return {
+        bonus: Math.max(0, Math.floor(Number(hasRaw ? raw.bonus : defaultBonus) || 0)),
+        poke: Math.max(0, Math.floor(Number(hasRaw ? raw.poke : 0) || 0)),
+        great: Math.max(0, Math.floor(Number(hasRaw ? raw.great : 0) || 0)),
+        ultra: Math.max(0, Math.floor(Number(hasRaw ? raw.ultra : 0) || 0)),
+        note: String(hasRaw ? (raw.note || '') : '').trim()
+    };
+}
+
+function normalizeBallPlannerState(raw = {}) {
+    const def = getDefaultBallPlannerState();
+    const state = Object.assign({}, def, raw || {});
+    state.enabled = !!state.enabled;
+    state.currentInventory = normalizeBallCounts(state.currentInventory || {});
+    state.entries = Array.isArray(state.entries) ? state.entries.map(normalizeBallPlannerEntry).filter(Boolean) : [];
+    state.templates = Object.assign({ bundle: [], event: [], dailyReward: [] }, state.templates || {});
+    state.templates.bundle = Array.isArray(state.templates.bundle) ? state.templates.bundle.map(normalizeBallTemplate).filter(Boolean) : [];
+    state.templates.event = Array.isArray(state.templates.event) ? state.templates.event.map(normalizeBallTemplate).filter(Boolean) : [];
+    state.templates.dailyReward = Array.isArray(state.templates.dailyReward) ? state.templates.dailyReward.map(normalizeBallTemplate).filter(Boolean) : [];
+    state.shop = Object.assign({}, def.shop, state.shop || {});
+    state.shop.month = state.shop.month || getCurrentMonthKey();
+    state.shop.hasPremiumPass = !!state.shop.hasPremiumPass;
+    state.shop.sleepPointBalance = Math.max(0, Math.floor(Number(state.shop.sleepPointBalance) || 0));
+    state.shop.remainingDays = Math.max(0, Math.floor(Number(state.shop.remainingDays) || 0));
+    state.shop.monthlyPassBonusClaimed = !!state.shop.monthlyPassBonusClaimed;
+    state.shop.fullMoonClaimed = !!state.shop.fullMoonClaimed;
+    state.shop.fullMoonPoints = Math.max(0, Math.floor(Number(state.shop.fullMoonPoints) || 0));
+    state.shop.includeDailyRewardExpectation = state.shop.includeDailyRewardExpectation !== false;
+    state.shop.includeShopPlanInForecast = state.shop.includeShopPlanInForecast !== false;
+    state.shop.showForecastCurve = state.shop.showForecastCurve !== false;
+    state.shop.extraSleepPoints = Array.isArray(state.shop.extraSleepPoints) ? state.shop.extraSleepPoints.map(x => ({
+        id: x.id || `sp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: String(x.name || '额外睡眠点数').trim() || '额外睡眠点数',
+        points: Math.max(0, Math.floor(Number(x.points) || 0)),
+        claimed: !!x.claimed,
+        note: String(x.note || '').trim()
+    })) : [];
+    state.shop.priorityPlan = Object.assign({}, def.shop.priorityPlan, state.shop.priorityPlan || {});
+    state.shop.regularShopRemaining = Object.assign({}, def.shop.regularShopRemaining, state.shop.regularShopRemaining || {});
+    state.shop.premiumShopRemaining = Object.assign({}, def.shop.premiumShopRemaining, state.shop.premiumShopRemaining || {});
+    ['poke', 'islandTicket'].forEach(k => state.shop.regularShopRemaining[k] = Math.max(0, Math.floor(Number(state.shop.regularShopRemaining[k]) || 0)));
+    ['poke', 'great', 'goldSeed', 'silverSeed'].forEach(k => state.shop.premiumShopRemaining[k] = Math.max(0, Math.floor(Number(state.shop.premiumShopRemaining[k]) || 0)));
+    state.updatedAt = state.updatedAt || new Date().toISOString();
+    return state;
+}
+
+function normalizeBallTemplate(item = {}) {
+    if (!item) return null;
+    const rawType = String(item.sourceType || item.category || '').trim();
+    const sourceType = ['bundle', 'event', 'dailyReward'].includes(rawType) ? rawType : 'event';
+    return {
+        id: item.id || `tpl_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        sourceType,
+        templateName: String(item.templateName || item.name || '自定义模板').trim() || '自定义模板',
+        balls: normalizeBallCounts(item.balls || {}),
+        diamonds: Math.max(0, Math.floor(Number(item.diamonds) || 0)),
+        note: String(item.note || '').trim(),
+        createdAt: item.createdAt || new Date().toISOString()
+    };
+}
+
+function normalizeBallPlannerEntry(item = {}) {
+    if (!item) return null;
+    const sourceType = ['bundle', 'event', 'custom', 'dailyReward'].includes(item.sourceType) ? item.sourceType : 'custom';
+    const plannedWord = sourceType === 'bundle' ? 'planned' : 'planned';
+    return {
+        id: item.id || `ball_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        sourceType,
+        status: ['planned', 'received', 'purchased', 'skipped'].includes(item.status) ? item.status : plannedWord,
+        templateId: item.templateId || '',
+        templateName: String(item.templateName || '').trim(),
+        eventName: String(item.eventName || '').trim(),
+        displayName: String(item.displayName || item.eventName || item.sourceName || item.templateName || '自定义获取').trim() || '自定义获取',
+        date: item.date || getTodayLocalDateString(),
+        balls: normalizeBallCounts(item.balls || {}),
+        diamonds: Math.max(0, Math.floor(Number(item.diamonds) || 0)),
+        note: String(item.note || '').trim(),
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.updatedAt || item.createdAt || new Date().toISOString()
+    };
+}
+
+function isBallPlannerStateLog(log) {
+    return !!(log && log.type === 'ball_planner_state');
+}
+
+function isHistorySystemLog(log) {
+    return isSleepResearchLog(log) || isBallPlannerStateLog(log);
+}
+
+function isBallPlannerEnabled() {
+    return !!(ballPlannerState && ballPlannerState.enabled);
+}
+
+function loadBallPlannerStateFromHistory() {
+    const records = (Array.isArray(historyLogs) ? historyLogs : []).filter(isBallPlannerStateLog);
+    const newest = records.reduce((best, item) => chooseNewerHistoryLog(best, item), null);
+    ballPlannerState = normalizeBallPlannerState(newest && newest.state ? newest.state : {});
+    updateBallPlannerButton();
+}
+
+function saveBallPlannerStateToHistory(options = {}) {
+    ballPlannerState = normalizeBallPlannerState(Object.assign({}, ballPlannerState, { updatedAt: new Date().toISOString() }));
+    const log = {
+        id: BALL_PLANNER_STATE_LOG_ID,
+        type: 'ball_planner_state',
+        state: ballPlannerState,
+        createdAt: (historyLogs.find(isBallPlannerStateLog) || {}).createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+    historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !isBallPlannerStateLog(item));
+    historyLogs.push(log);
+    historyLogs = mergeHistoryLogs([], historyLogs);
+    saveHistoryToLocal();
+    updateBallPlannerButton();
+    if (options.saveCloudNow && currentCloudUser) saveHistoryToCloudNow();
+}
+
+function updateBallPlannerButton() {
+    const btn = document.getElementById('ball-planner-main-btn');
+    if (!btn) return;
+    if (isBallPlannerEnabled()) {
+        btn.className = 'px-3 py-1.5 rounded-xl font-bold text-xs transition bg-sky-600 text-white shadow-sm flex items-center gap-1 hover:bg-sky-500';
+        btn.innerHTML = '<i class="fa-solid fa-baseball"></i> 🎒 精灵球规划: 开';
+    } else {
+        btn.className = 'px-3 py-1.5 rounded-xl font-bold text-xs transition bg-slate-100 text-slate-600 shadow-sm flex items-center gap-1 hover:bg-slate-200';
+        btn.innerHTML = '<i class="fa-solid fa-baseball text-sky-500"></i> 🎒 精灵球规划: 关';
+    }
+}
+
+function getResearchBallUsageForDisplay(research) {
+    if (!research || !research.ballUsage) return null;
+    return normalizeResearchBallUsage(research.ballUsage, research.session || '一觉');
+}
+
+function getBallUsageInlineText(usage) {
+    if (!usage) return '';
+    const u = normalizeResearchBallUsage(usage);
+    const parts = [];
+    if (u.bonus) parts.push(`奖励×${u.bonus}`);
+    BALL_KEYS.forEach(k => { if (u[k]) parts.push(`${BALL_LABELS[k]}×${u[k]}`); });
+    return parts.length ? parts.join(' / ') : '未记录用球';
+}
+
+function renderBallUsageEditorHtml(context, session, usage = null) {
+    if (!isBallPlannerEnabled()) return '';
+    const u = normalizeResearchBallUsage(usage || {}, session, { defaultBonus: !usage });
+    const bonusDisabled = normalizeSleepResearchSessionValue(session || '一觉') === '二觉' ? 'disabled' : '';
+    return `<div class="col-span-1 sm:col-span-2 bg-sky-50/70 border border-sky-100 rounded-2xl p-3 flex flex-col gap-2">
+        <div class="flex items-start justify-between gap-2">
+            <div>
+                <div class="text-[10px] font-black text-sky-800 uppercase tracking-widest flex items-center gap-1"><i class="fa-solid fa-baseball text-sky-500"></i> 本次用球情况</div>
+                <div class="text-[10px] text-sky-700 font-bold mt-0.5">库存只会扣红白/蓝/黑黄球；奖励球默认一觉 1 个，不进库存。</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <label class="text-[10px] font-black text-slate-500">奖励球<input type="number" min="0" id="${context}-ball-bonus" value="${u.bonus}" ${bonusDisabled} class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400 disabled:bg-slate-100 disabled:text-slate-400"></label>
+            <label class="text-[10px] font-black text-slate-500">红白球<input type="number" min="0" id="${context}-ball-poke" value="${u.poke}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>
+            <label class="text-[10px] font-black text-slate-500">蓝球<input type="number" min="0" id="${context}-ball-great" value="${u.great}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>
+            <label class="text-[10px] font-black text-slate-500">黑/黄球<input type="number" min="0" id="${context}-ball-ultra" value="${u.ultra}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>
+        </div>
+        <textarea id="${context}-ball-note" rows="2" placeholder="用球备注（选填，例如：蓝球砸御三家 / 给闪光用了黑球）" class="w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-[11px] font-bold focus:outline-none focus:border-sky-400 resize-y">${escapeHtml(u.note || '')}</textarea>
+    </div>`;
+}
+
+function readBallUsageFromEditor(context, session) {
+    if (!isBallPlannerEnabled()) return null;
+    const num = id => Math.max(0, Math.floor(Number(document.getElementById(`${context}-ball-${id}`)?.value) || 0));
+    const normalizedSession = normalizeSleepResearchSessionValue(session || '一觉');
+    return normalizeResearchBallUsage({
+        bonus: normalizedSession === '二觉' ? 0 : num('bonus'),
+        poke: num('poke'),
+        great: num('great'),
+        ultra: num('ultra'),
+        note: String(document.getElementById(`${context}-ball-note`)?.value || '').trim()
+    }, session);
+}
+
+function applyResearchBallUsageInventoryDelta(oldUsage, newUsage) {
+    if (!isBallPlannerEnabled()) return;
+    const oldU = normalizeResearchBallUsage(oldUsage || {});
+    const newU = normalizeResearchBallUsage(newUsage || {});
+    BALL_KEYS.forEach(k => {
+        const deltaUsed = (Number(newU[k]) || 0) - (Number(oldU[k]) || 0);
+        ballPlannerState.currentInventory[k] = Math.floor(Number(ballPlannerState.currentInventory[k]) || 0) - deltaUsed;
+    });
+    saveBallPlannerStateToHistory();
+}
+
+function getBallPlannerShopForecast() {
+    const shop = normalizeBallPlannerState(ballPlannerState).shop;
+    let points = Math.max(0, Number(shop.sleepPointBalance) || 0);
+    points += Math.max(0, Number(shop.remainingDays) || 0) * 200;
+    if (shop.hasPremiumPass && !shop.monthlyPassBonusClaimed) points += 1000;
+    if (!shop.fullMoonClaimed) points += Math.max(0, Number(shop.fullMoonPoints) || 0);
+    (shop.extraSleepPoints || []).forEach(e => { if (!e.claimed) points += Math.max(0, Number(e.points) || 0); });
+
+    const costs = [];
+    if (shop.priorityPlan.islandTicket && Number(shop.regularShopRemaining.islandTicket) > 0) costs.push({ key: 'islandTicket', cost: 100, count: 1, label: '换岛券' });
+    if (shop.hasPremiumPass && shop.priorityPlan.goldSeed && Number(shop.premiumShopRemaining.goldSeed) > 0) costs.push({ key: 'goldSeed', cost: 1800, count: 1, label: '金瓜' });
+    if (shop.hasPremiumPass && shop.priorityPlan.silverSeed && Number(shop.premiumShopRemaining.silverSeed) > 0) costs.push({ key: 'silverSeed', cost: 1400, count: 1, label: '银瓜' });
+    let spentPriority = 0;
+    costs.forEach(item => { if (points >= item.cost) { points -= item.cost; spentPriority += item.cost; } });
+
+    const buy = { premiumPoke: 0, premiumGreat: 0, regularPoke: 0 };
+    if (shop.hasPremiumPass) {
+        buy.premiumPoke = Math.min(Number(shop.premiumShopRemaining.poke) || 0, Math.floor(points / 100));
+        points -= buy.premiumPoke * 100;
+        buy.premiumGreat = Math.min(Number(shop.premiumShopRemaining.great) || 0, Math.floor(points / 400));
+        points -= buy.premiumGreat * 400;
+    }
+    buy.regularPoke = Math.min(Number(shop.regularShopRemaining.poke) || 0, Math.floor(points / 150));
+    points -= buy.regularPoke * 150;
+    return { remainingPoints: Math.floor(points), spentPriority, buy, balls: { poke: buy.premiumPoke + buy.regularPoke, great: buy.premiumGreat, ultra: 0 } };
+}
+
+function getBallPlannerForecast() {
+    const state = normalizeBallPlannerState(ballPlannerState);
+    const current = normalizeBallCounts(state.currentInventory);
+    const future = { poke: 0, great: 0, ultra: 0 };
+    const breakdown = {
+        shop: { poke: 0, great: 0, ultra: 0 },
+        dailyExpected: { poke: 0, great: 0, ultra: 0 },
+        planned: { poke: 0, great: 0, ultra: 0 }
+    };
+    const shopForecast = getBallPlannerShopForecast();
+    if (state.shop.includeShopPlanInForecast) {
+        BALL_KEYS.forEach(k => {
+            breakdown.shop[k] = Number(shopForecast.balls?.[k]) || 0;
+            future[k] += breakdown.shop[k];
+        });
+    }
+    if (state.shop.includeDailyRewardExpectation) {
+        const days = Math.max(0, Number(state.shop.remainingDays) || 0);
+        BALL_KEYS.forEach(k => {
+            breakdown.dailyExpected[k] = (BALL_DAILY_REWARD_EXPECTED[k] || 0) * days;
+            future[k] += breakdown.dailyExpected[k];
+        });
+    }
+    (state.entries || []).forEach(e => {
+        if (e.status !== 'planned') return;
+        BALL_KEYS.forEach(k => {
+            const value = Number(e.balls?.[k]) || 0;
+            breakdown.planned[k] += value;
+            future[k] += value;
+        });
+    });
+    return {
+        current,
+        future,
+        projected: {
+            poke: current.poke + future.poke,
+            great: current.great + future.great,
+            ultra: current.ultra + future.ultra
+        },
+        breakdown,
+        shopForecast
+    };
+}
+
+function fmtBallNum(v) {
+    const n = Number(v) || 0;
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+function getBallSourceTypeLabel(sourceType) {
+    if (sourceType === 'bundle') return '礼包';
+    if (sourceType === 'event') return '活动';
+    if (sourceType === 'dailyReward') return '每日奖励';
+    return '其他';
+}
+
+function getBallEntryStatusLabel(entry) {
+    const sourceType = entry?.sourceType || 'custom';
+    if (entry?.status === 'planned') return sourceType === 'bundle' ? '待购买' : '待领取';
+    if (entry?.status === 'purchased') return '已购买';
+    if (entry?.status === 'received') return sourceType === 'bundle' ? '已购买' : '已领取';
+    if (entry?.status === 'skipped') return sourceType === 'bundle' ? '不买/跳过' : '不领取/跳过';
+    return entry?.status || '—';
+}
+
+function getBallPlannerDailyRewardStats() {
+    const total = { poke: 0, great: 0, ultra: 0, diamonds: 0 };
+    const monthly = { poke: 0, great: 0, ultra: 0, diamonds: 0 };
+    const byName = {};
+    const monthlyByName = {};
+    const month = getCurrentMonthKey();
+    let count = 0;
+    let monthlyCount = 0;
+    (ballPlannerState.entries || []).forEach(e => {
+        if (!e || e.sourceType !== 'dailyReward') return;
+        const name = e.displayName || e.templateName || '每日奖励';
+        count += 1;
+        if (!byName[name]) byName[name] = 0;
+        byName[name] += 1;
+        BALL_KEYS.forEach(k => total[k] += Number(e.balls?.[k]) || 0);
+        total.diamonds += Number(e.diamonds) || 0;
+        if (String(e.date || '').slice(0, 7) === month) {
+            monthlyCount += 1;
+            if (!monthlyByName[name]) monthlyByName[name] = 0;
+            monthlyByName[name] += 1;
+            BALL_KEYS.forEach(k => monthly[k] += Number(e.balls?.[k]) || 0);
+            monthly.diamonds += Number(e.diamonds) || 0;
+        }
+    });
+    return { count, total, monthlyCount, monthly, byName, monthlyByName };
+}
+
+function getBallPlannerResearchUsageByDate() {
+    const byDate = {};
+    getVisibleSleepResearchLogs(historyLogs).forEach(r => {
+        if (!r || !r.ballUsage) return;
+        const date = normalizeSleepResearchDateValue(r.date || getTodayLocalDateString());
+        if (!byDate[date]) byDate[date] = { date, poke: 0, great: 0, ultra: 0, bonus: 0, researchCount: 0 };
+        const u = normalizeResearchBallUsage(r.ballUsage, r.session || '一觉');
+        byDate[date].poke += Number(u.poke) || 0;
+        byDate[date].great += Number(u.great) || 0;
+        byDate[date].ultra += Number(u.ultra) || 0;
+        byDate[date].bonus += Number(u.bonus) || 0;
+        byDate[date].researchCount += 1;
+    });
+    return Object.values(byDate).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+function getBallPlannerUsageTotals() {
+    const total = { poke: 0, great: 0, ultra: 0, bonus: 0, researchCount: 0, dayCount: 0 };
+    const monthTotal = { poke: 0, great: 0, ultra: 0, bonus: 0, researchCount: 0, dayCount: 0 };
+    const month = getCurrentMonthKey();
+    getBallPlannerResearchUsageByDate().forEach(d => {
+        total.dayCount += 1;
+        total.researchCount += d.researchCount || 0;
+        ['poke', 'great', 'ultra', 'bonus'].forEach(k => total[k] += Number(d[k]) || 0);
+        if (String(d.date).slice(0, 7) === month) {
+            monthTotal.dayCount += 1;
+            monthTotal.researchCount += d.researchCount || 0;
+            ['poke', 'great', 'ultra', 'bonus'].forEach(k => monthTotal[k] += Number(d[k]) || 0);
+        }
+    });
+    return { total, monthTotal };
+}
+
+function getBallPlannerAffordanceMetrics(f = getBallPlannerForecast()) {
+    const state = normalizeBallPlannerState(ballPlannerState);
+    const days = Math.max(1, Math.floor(Number(state.shop?.remainingDays) || 0));
+    const redFutureGross = Number(f.future?.poke) || 0;
+    const redBaselineNeed = days; // 月卡玩家/多数玩家的一觉保底参考：未来每天预留 1 个红白球。
+    const redForecastNetGain = redFutureGross - redBaselineNeed;
+    const redAfterOnePerDay = (Number(f.current?.poke) || 0) + redForecastNetGain;
+    const knownInventory = {
+        poke: Number(f.current?.poke) || 0,
+        great: Number(f.current?.great) || 0,
+        ultra: Number(f.current?.ultra) || 0
+    };
+    return {
+        days,
+        knownInventory,
+        redFutureGross,
+        redBaselineNeed,
+        redForecastNetGain,
+        redAfterOnePerDay,
+        redExtraDaily: redAfterOnePerDay / days
+    };
+}
+
+function renderBallPlannerAnalysisHtml(f = getBallPlannerForecast()) {
+    const usage = getBallPlannerUsageTotals();
+    const daily = getBallPlannerDailyRewardStats();
+    const a = getBallPlannerAffordanceMetrics(f);
+    const redClass = a.redAfterOnePerDay >= 0 ? 'text-emerald-700' : 'text-rose-700';
+    const netClass = a.redForecastNetGain >= 0 ? 'text-emerald-700' : 'text-rose-700';
+    const dailyTop = Object.entries(daily.monthlyByName || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${escapeHtml(name)}×${count}`).join(' / ') || '暂无非球/球奖励分类';
+    return `<div class="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+        <div class="rounded-2xl bg-sky-50 border border-sky-100 p-3"><div class="text-[10px] font-black text-sky-700">当前已知库存</div><div class="text-sm font-black font-mono text-sky-800">红${fmtBallNum(a.knownInventory.poke)} / 蓝${fmtBallNum(a.knownInventory.great)} / 黑黄${fmtBallNum(a.knownInventory.ultra)}</div><div class="text-[10px] text-sky-700 font-bold">只看玩家校准 + 已录研究用球</div></div>
+        <div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3"><div class="text-[10px] font-black text-indigo-700">未来红白球预测获取</div><div class="text-sm font-black font-mono text-indigo-800">+${fmtBallNum(a.redFutureGross)}</div><div class="text-[10px] text-indigo-700 font-bold">商店/活动礼包计划/每日奖励期望</div></div>
+        <div class="rounded-2xl bg-emerald-50 border border-emerald-100 p-3"><div class="text-[10px] font-black text-emerald-700">红白球保底消耗后</div><div class="text-xl font-black font-mono ${redClass}">${fmtBallNum(a.redAfterOnePerDay)}</div><div class="text-[10px] text-emerald-700 font-bold">未来 ${a.days} 天每天 1 红白后的预计月底库存</div></div>
+        <div class="rounded-2xl bg-amber-50 border border-amber-100 p-3"><div class="text-[10px] font-black text-amber-700">本月每日奖励实录</div><div class="text-sm font-black font-mono text-amber-800">红${daily.monthly.poke} / 蓝${daily.monthly.great} / 黑黄${daily.monthly.ultra} / 非球${daily.monthly.diamonds}</div><div class="text-[10px] text-amber-700 font-bold">${daily.monthlyCount} 次 · ${dailyTop}</div></div>
+    </div>
+    <div class="rounded-2xl bg-slate-50 border border-slate-200 p-3 mt-3 text-[11px] font-bold text-slate-600 leading-relaxed">
+        本月已记录研究用球：红白 ${usage.monthTotal.poke} / 蓝 ${usage.monthTotal.great} / 黑黄 ${usage.monthTotal.ultra}，共 ${usage.monthTotal.dayCount} 天、${usage.monthTotal.researchCount} 次研究。红白球预测会额外扣除“未来每天 1 个红白球”的保底参考；蓝球和黑/黄球没有稳定收入与稳定日耗，变化分析只画已知库存曲线，不做虚线预测。
+        <span class="font-black ${netClass}">红白球未来净变化：+${fmtBallNum(a.redFutureGross)} - ${a.redBaselineNeed} = ${fmtBallNum(a.redForecastNetGain)}</span>
+    </div>`;
+}
+
+
+
+function renderBallPlannerTrendChartHtml(f = getBallPlannerForecast()) {
+    const timeline = getBallPlannerResearchUsageByDate();
+    const state = normalizeBallPlannerState(ballPlannerState);
+    const showForecast = !!state.shop.showForecastCurve;
+    const days = Math.max(0, Math.floor(Number(state.shop.remainingDays) || 0));
+    const width = 860;
+    const height = 260;
+    const padL = 38;
+    const padR = 24;
+    const padT = 28;
+    const padB = 34;
+    const colors = { poke: '#ef4444', great: '#2563eb', ultra: '#111827' };
+    const labels = { poke: '红白球', great: '蓝球', ultra: '黑/黄球' };
+
+    const historyPointsByKey = {};
+    BALL_KEYS.forEach(key => {
+        const currentValue = Number(f.current?.[key]) || 0;
+        const points = [];
+        let usedAfter = 0;
+        const reversed = [...timeline].reverse();
+        reversed.forEach(d => {
+            usedAfter += Number(d[key]) || 0;
+            points.unshift({ label: d.date.slice(5), value: currentValue + usedAfter, key, kind: 'history' });
+        });
+        points.push({ label: '今日', value: currentValue, key, kind: 'history' });
+        historyPointsByKey[key] = points;
+    });
+
+    const redForecastPoints = [];
+    if (showForecast && days > 0) {
+        const currentRed = Number(f.current?.poke) || 0;
+        const redFutureGross = Number(f.future?.poke) || 0;
+        const dailyRedGain = redFutureGross / days;
+        for (let i = 1; i <= days; i++) {
+            redForecastPoints.push({ label: `+${i}`, value: currentRed + dailyRedGain * i - i, key: 'poke', kind: 'forecast' });
+        }
+    }
+
+    const allPoints = BALL_KEYS.flatMap(k => historyPointsByKey[k]).concat(redForecastPoints);
+    const allValues = allPoints.map(p => Number(p.value) || 0);
+    const maxV = Math.max(1, ...allValues);
+    const minV = Math.min(0, ...allValues);
+    const totalLen = Math.max(2, Math.max(...BALL_KEYS.map(k => historyPointsByKey[k].length)) + redForecastPoints.length);
+    const scaleY = v => height - padB - ((v - minV) / Math.max(1, maxV - minV)) * (height - padT - padB);
+    const scaleX = idx => totalLen <= 1 ? padL : padL + idx * ((width - padL - padR) / (totalLen - 1));
+    const makePolyline = points => points.map((p, i) => `${scaleX(i).toFixed(1)},${scaleY(p.value).toFixed(1)}`).join(' ');
+    const historySvg = BALL_KEYS.map(key => `<polyline points="${makePolyline(historyPointsByKey[key])}" fill="none" stroke="${colors[key]}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />`).join('');
+    const redForecastPolyline = redForecastPoints.length ? [`${scaleX(historyPointsByKey.poke.length - 1).toFixed(1)},${scaleY(Number(f.current?.poke) || 0).toFixed(1)}`].concat(redForecastPoints.map((p, i) => `${scaleX(historyPointsByKey.poke.length + i).toFixed(1)},${scaleY(p.value).toFixed(1)}`)).join(' ') : '';
+    const dots = BALL_KEYS.map(key => historyPointsByKey[key].map((p, i) => `<circle cx="${scaleX(i).toFixed(1)}" cy="${scaleY(p.value).toFixed(1)}" r="3.5" fill="${colors[key]}"><title>${escapeHtmlAttr(labels[key])} ${p.label}：${fmtBallNum(p.value)}</title></circle>`).join('')).join('');
+    const forecastDots = redForecastPoints.map((p, i) => `<circle cx="${scaleX(historyPointsByKey.poke.length + i).toFixed(1)}" cy="${scaleY(p.value).toFixed(1)}" r="3" fill="#f59e0b"><title>红白球预测 ${escapeHtmlAttr(p.label)}：${fmtBallNum(p.value)}</title></circle>`).join('');
+    const b = f.breakdown || {};
+    const redGross = Number(f.future?.poke) || 0;
+    const redNet = redGross - days;
+    const emptyHint = !timeline.length ? '<div class="text-[10px] font-bold text-slate-400 mt-2">暂无已记录用球的研究；当前库存仍会显示为“今日”点。录入研究用球后，实线会回推出历史变化。</div>' : '';
+    return `<div class="rounded-3xl border border-slate-200 p-4 mt-4 flex flex-col gap-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-chart-line text-sky-500"></i> 精灵球变化分析</h4>
+            <div class="text-[10px] font-bold text-slate-400">三条实线：已知库存曲线；橙色虚线：红白球预测，已扣未来每日 1 红白球。</div>
+        </div>
+        <div class="overflow-x-auto bg-slate-50 border border-slate-100 rounded-2xl p-3">
+            <svg viewBox="0 0 ${width} ${height}" class="w-full min-w-[680px] h-64" role="img" aria-label="精灵球变化分析折线图">
+                <rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="#f8fafc" />
+                <line x1="${padL}" y1="${scaleY(0).toFixed(1)}" x2="${width - padR}" y2="${scaleY(0).toFixed(1)}" stroke="#cbd5e1" stroke-width="1" />
+                <text x="${padL}" y="17" font-size="10" font-weight="800" fill="#64748b">当前：红 ${fmtBallNum(f.current.poke)} / 蓝 ${fmtBallNum(f.current.great)} / 黑黄 ${fmtBallNum(f.current.ultra)}</text>
+                <text x="${width - padR - 130}" y="17" font-size="10" font-weight="800" fill="#64748b">范围 ${fmtBallNum(minV)} ~ ${fmtBallNum(maxV)}</text>
+                ${historySvg}
+                ${redForecastPolyline ? `<polyline points="${redForecastPolyline}" fill="none" stroke="#f59e0b" stroke-width="3.5" stroke-dasharray="8 6" stroke-linecap="round" stroke-linejoin="round" />` : ''}
+                ${dots}
+                ${forecastDots}
+                <text x="${padL}" y="${height - 12}" font-size="10" font-weight="800" fill="#ef4444">● 红白球</text>
+                <text x="${padL + 78}" y="${height - 12}" font-size="10" font-weight="800" fill="#2563eb">● 蓝球</text>
+                <text x="${padL + 138}" y="${height - 12}" font-size="10" font-weight="800" fill="#111827">● 黑/黄球</text>
+                <text x="${padL + 220}" y="${height - 12}" font-size="10" font-weight="800" fill="#f59e0b">- - 红白预测</text>
+            </svg>
+        </div>
+        <div class="rounded-2xl bg-amber-50 border border-amber-100 p-3 text-[11px] font-bold text-amber-800 leading-relaxed">
+            红白球预测来源：商店 +${fmtBallNum(b.shop?.poke || 0)} / 活动礼包计划 +${fmtBallNum(b.planned?.poke || 0)} / 每日奖励期望 +${fmtBallNum(b.dailyExpected?.poke || 0)}，合计 +${fmtBallNum(redGross)}；未来 ${days} 天按每天 1 个红白球扣除，净变化 ${fmtBallNum(redNet)}。蓝球与黑/黄球不画预测虚线，只显示已知库存曲线。
+        </div>
+        ${emptyHint}
+    </div>`;
+}
+
+function openBallPlannerModal() {
+    const old = document.getElementById('ball-planner-modal');
+    if (old) old.remove();
+    loadBallPlannerStateFromHistory();
+    const modal = document.createElement('div');
+    modal.id = 'ball-planner-modal';
+    modal.className = 'fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[85] flex items-center justify-center p-4 animate-fadeIn';
+    modal.innerHTML = `<div class="bg-white rounded-3xl border border-slate-200 w-full max-w-5xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col gap-4 p-5 relative" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('ball-planner-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+        <div class="pr-8">
+            <h3 class="text-base font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-baseball text-sky-500"></i> 精灵球库存与规划中心</h3>
+            <p class="text-[11px] text-slate-500 font-bold mt-1">当前库存只由手动校准和睡眠研究用球改变；活动、礼包、商店和每日奖励只影响预计库存。</p>
+        </div>
+        <div id="ball-planner-content"></div>
+    </div>`;
+    document.body.appendChild(modal);
+    renderBallPlannerModal();
+}
+
+function renderBallPlannerModal() {
+    const wrap = document.getElementById('ball-planner-content');
+    if (!wrap) return;
+    ballPlannerState = normalizeBallPlannerState(ballPlannerState);
+    if (!ballPlannerState.enabled) {
+        wrap.innerHTML = `<div class="rounded-3xl border border-sky-100 bg-sky-50/70 p-5 flex flex-col gap-4">
+            <div class="text-sm font-black text-sky-900">这个功能目前未启用</div>
+            <div class="text-xs text-sky-800 font-bold leading-relaxed">启用后，睡眠研究编辑里会出现“本次用球情况”；当前库存会在你录入/修改研究用球时自动扣回或补回。旧睡眠研究默认没有用球记录，不会影响库存。</div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                ${BALL_KEYS.map(k => `<label class="text-[10px] font-black text-slate-500">当前${BALL_LABELS[k]}库存<input type="number" min="0" id="ball-init-${k}" value="${ballPlannerState.currentInventory[k] || 0}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>`).join('')}
+            </div>
+            <button onclick="enableBallPlannerFromInit()" class="w-full bg-sky-600 hover:bg-sky-500 text-white rounded-2xl py-3 text-xs font-black shadow-sm"><i class="fa-solid fa-power-off mr-1"></i> 启用精灵球规划系统</button>
+        </div>`;
+        return;
+    }
+    const f = getBallPlannerForecast();
+    const state = ballPlannerState;
+    wrap.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            ${BALL_KEYS.map(k => `<div class="rounded-2xl bg-slate-50 border border-slate-200 p-4"><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">${BALL_LABELS[k]}</div><div class="text-2xl font-black font-mono ${f.current[k] < 0 ? 'text-rose-600' : 'text-slate-900'}">${fmtBallNum(f.current[k])}</div><div class="text-[10px] font-bold text-sky-700 mt-1">${k === 'poke' ? `红白预测 +${fmtBallNum(f.future[k])}；每日1红后见下方分析` : '变化分析只看已知库存曲线'}</div></div>`).join('')}
+        </div>
+        ${Object.values(f.current).some(v => Number(v) < 0) ? `<div class="rounded-2xl bg-rose-50 border border-rose-100 p-3 text-[11px] font-bold text-rose-700">当前库存出现负数，通常是因为启用前没有校准库存，或补录了旧研究用球。请在下方“手动校准库存”里同步一次游戏内真实库存。</div>` : ''}
+        ${renderBallPlannerAnalysisHtml(f)}
+        ${renderBallPlannerTrendChartHtml(f)}
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+            <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
+                <div class="flex items-center justify-between gap-2"><h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-sliders text-sky-500"></i> 总开关与库存校准</h4><button onclick="disableBallPlanner()" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-black">关闭功能</button></div>
+                <div class="grid grid-cols-3 gap-2">${BALL_KEYS.map(k => `<label class="text-[10px] font-black text-slate-500">${BALL_LABELS[k]}<input type="number" id="ball-inv-${k}" value="${state.currentInventory[k] || 0}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>`).join('')}</div>
+                <button onclick="saveBallInventoryCalibration()" class="bg-sky-600 hover:bg-sky-500 text-white rounded-2xl py-2.5 text-xs font-black">保存当前游戏内库存</button>
+                <div class="text-[10px] text-slate-400 font-bold leading-relaxed">旧研究不会自动补球；如果你想让旧研究参与库存，请进入那次研究编辑用球，保存后系统会按差额扣除。</div>
+            </div>
+            <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
+                <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-store text-indigo-500"></i> 睡眠点数商店预测</h4>
+                <div class="grid grid-cols-2 gap-2 text-[10px] font-black text-slate-500">
+                    <label>本月<input id="ball-shop-month" value="${escapeHtmlAttr(state.shop.month)}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"></label>
+                    <label>当前睡眠点数<input type="number" id="ball-shop-points" value="${state.shop.sleepPointBalance}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                    <label>刷新前剩余天数<input type="number" id="ball-shop-days" value="${state.shop.remainingDays}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                    <label>满月日点数<input type="number" id="ball-shop-fullmoon-points" value="${state.shop.fullMoonPoints}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px] font-black text-slate-600">
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-premium" ${state.shop.hasPremiumPass ? 'checked' : ''}> 开月卡</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-pass-claimed" ${state.shop.monthlyPassBonusClaimed ? 'checked' : ''}> 本月1000点已领</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-fullmoon-claimed" ${state.shop.fullMoonClaimed ? 'checked' : ''}> 满月日点数已领</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-forecast" ${state.shop.includeShopPlanInForecast ? 'checked' : ''}> 商店计划计入预计</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-daily" ${state.shop.includeDailyRewardExpectation ? 'checked' : ''}> 每日奖励期望计入预计</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-curve" ${state.shop.showForecastCurve ? 'checked' : ''}> 显示预测曲线</label>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px] font-black text-slate-500">
+                    <label>普通红球剩余<input type="number" id="ball-shop-regular-poke" value="${state.shop.regularShopRemaining.poke}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                    <label>换岛券剩余<input type="number" id="ball-shop-regular-ticket" value="${state.shop.regularShopRemaining.islandTicket}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                    <label>月卡红球剩余<input type="number" id="ball-shop-premium-poke" value="${state.shop.premiumShopRemaining.poke}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                    <label>月卡蓝球剩余<input type="number" id="ball-shop-premium-great" value="${state.shop.premiumShopRemaining.great}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                    <label>金瓜剩余<input type="number" id="ball-shop-premium-gold" value="${state.shop.premiumShopRemaining.goldSeed}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                    <label>银瓜剩余<input type="number" id="ball-shop-premium-silver" value="${state.shop.premiumShopRemaining.silverSeed}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                </div>
+                <div class="rounded-2xl bg-slate-50 border border-slate-200 p-2 flex flex-col gap-2">
+                    <div class="text-[10px] font-black text-slate-500">本月额外睡眠点数（未领取才计入未来预算）</div>
+                    <div id="ball-extra-points-list" class="flex flex-col gap-1.5">${(state.shop.extraSleepPoints || []).map(e => `<div class="flex flex-col gap-1 bg-white border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold"><div class="flex items-center justify-between gap-2"><span class="truncate">${escapeHtml(e.name)}：+${e.points}点${e.claimed ? '（已领）' : '（未领）'}</span><button onclick="deleteBallExtraSleepPoint('${escapeHtmlAttr(e.id)}')" class="text-rose-600 font-black">删</button></div><div class="flex flex-wrap gap-1">${e.claimed ? `<button onclick="setBallExtraSleepPointClaimed('${escapeHtmlAttr(e.id)}', false)" class="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-100 font-black">改为未领</button>` : `<button onclick="setBallExtraSleepPointClaimed('${escapeHtmlAttr(e.id)}', true)" class="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 font-black">改为已领</button>`}<button onclick="editBallExtraSleepPoint('${escapeHtmlAttr(e.id)}')" class="px-2 py-0.5 rounded-lg bg-slate-50 text-slate-600 border border-slate-200 font-black">编辑</button></div></div>`).join('') || '<div class="text-[10px] text-slate-400 font-bold">暂无额外点数</div>'}</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2"><input id="ball-extra-name" placeholder="活动名" class="bg-white border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold"><input type="number" id="ball-extra-points" placeholder="点数" class="bg-white border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-mono font-black"><label class="flex items-center gap-1 text-[10px] font-black text-slate-500"><input type="checkbox" id="ball-extra-claimed"> 已领取</label></div>
+                    <button onclick="addBallExtraSleepPoint()" class="bg-white hover:bg-slate-100 border border-slate-200 rounded-xl py-1.5 text-[10px] font-black text-slate-600">+ 添加额外点数</button>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-[10px] font-black text-slate-600">
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-buy-gold" ${state.shop.priorityPlan.goldSeed ? 'checked' : ''}> 优先金瓜</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-buy-silver" ${state.shop.priorityPlan.silverSeed ? 'checked' : ''}> 优先银瓜</label>
+                    <label class="flex items-center gap-1.5"><input type="checkbox" id="ball-shop-buy-ticket" ${state.shop.priorityPlan.islandTicket ? 'checked' : ''}> 优先换岛券</label>
+                </div>
+                <div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3 text-[11px] font-bold text-indigo-900 leading-relaxed">预计可买：红白球 ${f.shopForecast.balls.poke}，蓝球 ${f.shopForecast.balls.great}；买后剩余睡眠点数约 ${f.shopForecast.remainingPoints}。</div>
+                <button onclick="saveBallShopSettings()" class="bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-2.5 text-xs font-black">保存商店预测设置</button>
+            </div>
+        </div>
+        <div class="rounded-3xl border border-amber-200 bg-amber-50/30 p-4 mt-4 flex flex-col gap-3">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div><h4 class="text-xs font-black text-amber-800"><i class="fa-solid fa-calendar-day text-amber-500"></i> 每日奖励录入</h4><div class="text-[10px] text-amber-700 font-bold mt-0.5">用于统计每日奖励实际出了多少球；不会自动改变当前库存。</div></div>
+                <div class="text-[10px] font-black text-amber-800 bg-white/70 border border-amber-100 rounded-xl px-2 py-1">期望：红白 ${fmtBallNum(BALL_DAILY_REWARD_EXPECTED.poke)}/天 · 蓝 ${fmtBallNum(BALL_DAILY_REWARD_EXPECTED.great)}/天</div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-6 gap-2 text-[10px] font-black text-slate-500">
+                <label>日期<input type="date" id="ball-daily-date" value="${getTodayLocalDateString()}" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></label>
+                <label>奖励模板<select id="ball-daily-template" onchange="applyBallDailyRewardTemplate()" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></select></label>
+                <label>模板/奖励名称<input id="ball-daily-name" value="红白球 ×1" placeholder="选择自定义后填写，例如：钻石 ×15 / 碎片 ×1000" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></label>
+                <label>红白球<input type="number" id="ball-daily-poke" value="1" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                <label>蓝球<input type="number" id="ball-daily-great" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                <label>黑/黄球<input type="number" id="ball-daily-ultra" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                <label>钻石/非球数量<input type="number" id="ball-daily-diamonds" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                <button onclick="addBallDailyRewardEntry()" class="self-end bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl py-2.5 text-xs font-black">记录每日奖励</button>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+            <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
+                <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-gift text-rose-500"></i> 活动 / 礼包计划录入</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-black text-slate-500">
+                    <label>类型<select id="ball-entry-source" onchange="renderBallEntryTemplateSelect()" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"><option value="event">活动获取</option><option value="bundle">礼包购买</option><option value="custom">其他自由获取</option></select></label>
+                    <label>状态<select id="ball-entry-status" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"><option value="planned">待领取/待购买</option><option value="received">已领取/已购买</option><option value="skipped">已跳过/不买</option></select></label>
+                    <label>模板<select id="ball-entry-template" onchange="applyBallEntryTemplate()" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"></select></label>
+                    <label>活动/礼包名<input id="ball-entry-name" placeholder="不填活动名则使用模板名" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"></label>
+                    <label>红白球<input type="number" id="ball-entry-poke" value="5" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                    <label>蓝球<input type="number" id="ball-entry-great" value="0" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                    <label>黑/黄球<input type="number" id="ball-entry-ultra" value="0" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                    <label>钻石（礼包选填）<input type="number" id="ball-entry-diamonds" value="0" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
+                </div>
+                <textarea id="ball-entry-note" rows="2" placeholder="备注（选填）" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-[11px] font-bold resize-y"></textarea>
+                <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-600"><input type="checkbox" id="ball-entry-save-template"> 保存为我的常用模板</label>
+                <button onclick="addBallPlannerEntryFromForm()" class="bg-rose-600 hover:bg-rose-500 text-white rounded-2xl py-2.5 text-xs font-black">添加到预计计划</button>
+            </div>
+            <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
+                <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-list-check text-emerald-500"></i> 计划与记录</h4>
+                <div id="ball-entry-list" class="flex flex-col gap-2 max-h-96 overflow-y-auto pr-1"></div>
+            </div>
+        </div>`;
+    renderBallDailyRewardTemplateSelect();
+    renderBallEntryTemplateSelect();
+    renderBallEntryList();
+}
+
+function enableBallPlannerFromInit() {
+    BALL_KEYS.forEach(k => ballPlannerState.currentInventory[k] = Math.floor(Number(document.getElementById(`ball-init-${k}`)?.value) || 0));
+    ballPlannerState.enabled = true;
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已启用精灵球规划系统');
+}
+
+function disableBallPlanner() {
+    if (!confirm('关闭后不会显示研究用球区，也不会计算精灵球规划；已有数据会保留。确定关闭吗？')) return;
+    ballPlannerState.enabled = false;
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已关闭精灵球规划系统');
+}
+
+function saveBallInventoryCalibration() {
+    BALL_KEYS.forEach(k => ballPlannerState.currentInventory[k] = Math.floor(Number(document.getElementById(`ball-inv-${k}`)?.value) || 0));
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已同步当前库存');
+}
+
+function saveBallShopSettings() {
+    const shop = ballPlannerState.shop;
+    shop.month = String(document.getElementById('ball-shop-month')?.value || getCurrentMonthKey()).trim() || getCurrentMonthKey();
+    shop.sleepPointBalance = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-points')?.value) || 0));
+    shop.remainingDays = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-days')?.value) || 0));
+    shop.fullMoonPoints = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-fullmoon-points')?.value) || 0));
+    shop.hasPremiumPass = !!document.getElementById('ball-shop-premium')?.checked;
+    shop.monthlyPassBonusClaimed = !!document.getElementById('ball-shop-pass-claimed')?.checked;
+    shop.fullMoonClaimed = !!document.getElementById('ball-shop-fullmoon-claimed')?.checked;
+    shop.includeShopPlanInForecast = !!document.getElementById('ball-shop-forecast')?.checked;
+    shop.includeDailyRewardExpectation = !!document.getElementById('ball-shop-daily')?.checked;
+    shop.showForecastCurve = !!document.getElementById('ball-shop-curve')?.checked;
+    shop.regularShopRemaining.poke = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-regular-poke')?.value) || 0));
+    shop.regularShopRemaining.islandTicket = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-regular-ticket')?.value) || 0));
+    shop.premiumShopRemaining.poke = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-premium-poke')?.value) || 0));
+    shop.premiumShopRemaining.great = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-premium-great')?.value) || 0));
+    shop.premiumShopRemaining.goldSeed = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-premium-gold')?.value) || 0));
+    shop.premiumShopRemaining.silverSeed = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-premium-silver')?.value) || 0));
+    shop.priorityPlan.goldSeed = !!document.getElementById('ball-shop-buy-gold')?.checked;
+    shop.priorityPlan.silverSeed = !!document.getElementById('ball-shop-buy-silver')?.checked;
+    shop.priorityPlan.islandTicket = !!document.getElementById('ball-shop-buy-ticket')?.checked;
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已保存商店预测设置');
+}
+
+function addBallExtraSleepPoint() {
+    const name = String(document.getElementById('ball-extra-name')?.value || '').trim() || '额外睡眠点数';
+    const points = Math.max(0, Math.floor(Number(document.getElementById('ball-extra-points')?.value) || 0));
+    const claimed = !!document.getElementById('ball-extra-claimed')?.checked;
+    if (points <= 0) { alert('请填写大于 0 的额外睡眠点数。'); return; }
+    ballPlannerState.shop.extraSleepPoints.unshift({ id: `sp_${Date.now()}_${Math.random().toString(36).slice(2)}`, name, points, claimed, note: '' });
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+}
+
+function setBallExtraSleepPointClaimed(id, claimed) {
+    const item = (ballPlannerState.shop.extraSleepPoints || []).find(e => String(e.id) === String(id));
+    if (!item) return;
+    item.claimed = !!claimed;
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+}
+
+function editBallExtraSleepPoint(id) {
+    const item = (ballPlannerState.shop.extraSleepPoints || []).find(e => String(e.id) === String(id));
+    if (!item) return;
+    const nextName = prompt('修改额外睡眠点数名称：', item.name || '额外睡眠点数');
+    if (nextName === null) return;
+    const nextPointsRaw = prompt('修改点数：', String(item.points || 0));
+    if (nextPointsRaw === null) return;
+    const nextPoints = Math.max(0, Math.floor(Number(nextPointsRaw) || 0));
+    if (nextPoints <= 0) { alert('点数需要大于 0。'); return; }
+    item.name = String(nextName || '').trim() || '额外睡眠点数';
+    item.points = nextPoints;
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+}
+
+function getAllDailyRewardTemplates() {
+    return BALL_SYSTEM_DAILY_REWARD_TEMPLATES.concat(ballPlannerState.templates.dailyReward || []);
+}
+
+function renderBallDailyRewardTemplateSelect() {
+    const sel = document.getElementById('ball-daily-template');
+    if (!sel) return;
+    const templates = getAllDailyRewardTemplates();
+    sel.innerHTML = templates.map(t => `<option value="${escapeHtmlAttr(t.id)}">${escapeHtml(t.templateName || '每日奖励模板')}</option>`).join('') + '<option value="custom">自定义/自动创建模板</option>';
+}
+
+function applyBallDailyRewardTemplate() {
+    const id = document.getElementById('ball-daily-template')?.value || '';
+    if (id === 'custom') {
+        const nameEl = document.getElementById('ball-daily-name');
+        const p = document.getElementById('ball-daily-poke');
+        const g = document.getElementById('ball-daily-great');
+        const u = document.getElementById('ball-daily-ultra');
+        const d = document.getElementById('ball-daily-diamonds');
+        if (nameEl) { nameEl.value = ''; nameEl.placeholder = '填写新模板名，例如：钻石 ×15 / 碎片 ×1000'; nameEl.focus(); }
+        if (p) p.value = 0;
+        if (g) g.value = 0;
+        if (u) u.value = 0;
+        if (d) d.value = 0;
+        return;
+    }
+    const t = getAllDailyRewardTemplates().find(x => String(x.id) === String(id));
+    if (!t) return;
+    const nameEl = document.getElementById('ball-daily-name');
+    const p = document.getElementById('ball-daily-poke');
+    const g = document.getElementById('ball-daily-great');
+    const u = document.getElementById('ball-daily-ultra');
+    const d = document.getElementById('ball-daily-diamonds');
+    if (nameEl) nameEl.value = t.templateName || '每日奖励';
+    if (p) p.value = Number(t.balls?.poke) || 0;
+    if (g) g.value = Number(t.balls?.great) || 0;
+    if (u) u.value = Number(t.balls?.ultra) || 0;
+    if (d) d.value = Number(t.diamonds) || 0;
+}
+
+function addBallDailyRewardEntry() {
+    const balls = normalizeBallCounts({
+        poke: document.getElementById('ball-daily-poke')?.value,
+        great: document.getElementById('ball-daily-great')?.value,
+        ultra: document.getElementById('ball-daily-ultra')?.value
+    });
+    const diamonds = Math.max(0, Math.floor(Number(document.getElementById('ball-daily-diamonds')?.value) || 0));
+    const rewardName = String(document.getElementById('ball-daily-name')?.value || '').trim() || '每日奖励';
+    if (!BALL_KEYS.some(k => balls[k] > 0) && diamonds <= 0) { alert('请至少填写一种球，或填写一个非球数量（例如钻石 15）。'); return; }
+    const date = normalizeSleepResearchDateValue(document.getElementById('ball-daily-date')?.value || getTodayLocalDateString());
+    const selectedTemplateId = document.getElementById('ball-daily-template')?.value || '';
+    const selectedTemplate = selectedTemplateId === 'custom' ? null : getAllDailyRewardTemplates().find(t => String(t.id) === String(selectedTemplateId));
+    const selectedTemplateMatches = !!(selectedTemplate &&
+        String(selectedTemplate.templateName || '') === rewardName &&
+        Number(selectedTemplate.balls?.poke || 0) === balls.poke &&
+        Number(selectedTemplate.balls?.great || 0) === balls.great &&
+        Number(selectedTemplate.balls?.ultra || 0) === balls.ultra &&
+        Number(selectedTemplate.diamonds || 0) === diamonds);
+    let templateId = selectedTemplateMatches ? selectedTemplateId : '';
+    const existsTemplate = getAllDailyRewardTemplates().some(t =>
+        String(t.templateName || '') === rewardName &&
+        Number(t.balls?.poke || 0) === balls.poke &&
+        Number(t.balls?.great || 0) === balls.great &&
+        Number(t.balls?.ultra || 0) === balls.ultra &&
+        Number(t.diamonds || 0) === diamonds
+    );
+    if (!templateId && !existsTemplate) {
+        const tpl = normalizeBallTemplate({ sourceType: 'dailyReward', templateName: rewardName, balls, diamonds, note: '玩家自定义每日奖励模板' });
+        ballPlannerState.templates.dailyReward.unshift(tpl);
+        templateId = tpl.id;
+    }
+    const entry = normalizeBallPlannerEntry({
+        sourceType: 'dailyReward',
+        status: 'received',
+        templateId,
+        templateName: rewardName,
+        displayName: rewardName,
+        date,
+        balls,
+        diamonds,
+        note: '每日奖励实际获得；仅用于统计，不自动改变当前库存。'
+    });
+    ballPlannerState.entries.unshift(entry);
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已记录每日奖励');
+}
+
+function deleteBallExtraSleepPoint(id) {
+    ballPlannerState.shop.extraSleepPoints = (ballPlannerState.shop.extraSleepPoints || []).filter(e => String(e.id) !== String(id));
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+}
+
+function renderBallEntryTemplateSelect() {
+    const source = document.getElementById('ball-entry-source')?.value || 'event';
+    const sel = document.getElementById('ball-entry-template');
+    if (!sel) return;
+    const templates = source === 'event' ? BALL_SYSTEM_EVENT_TEMPLATES.concat(ballPlannerState.templates.event || []) : (source === 'bundle' ? (ballPlannerState.templates.bundle || []) : []);
+    sel.innerHTML = `<option value="">不使用模板</option>` + templates.map(t => `<option value="${escapeHtmlAttr(t.id)}">${escapeHtml(t.templateName || t.name || '模板')}</option>`).join('');
+}
+
+function applyBallEntryTemplate() {
+    const source = document.getElementById('ball-entry-source')?.value || 'event';
+    const id = document.getElementById('ball-entry-template')?.value || '';
+    const templates = source === 'event' ? BALL_SYSTEM_EVENT_TEMPLATES.concat(ballPlannerState.templates.event || []) : (ballPlannerState.templates.bundle || []);
+    const t = templates.find(x => String(x.id) === String(id));
+    if (!t) return;
+    document.getElementById('ball-entry-poke').value = Number(t.balls?.poke) || 0;
+    document.getElementById('ball-entry-great').value = Number(t.balls?.great) || 0;
+    document.getElementById('ball-entry-ultra').value = Number(t.balls?.ultra) || 0;
+    if (document.getElementById('ball-entry-diamonds')) document.getElementById('ball-entry-diamonds').value = Number(t.diamonds) || 0;
+    if (document.getElementById('ball-entry-note') && t.note) document.getElementById('ball-entry-note').value = t.note;
+}
+
+function addBallPlannerEntryFromForm() {
+    const sourceType = document.getElementById('ball-entry-source')?.value || 'event';
+    const status = document.getElementById('ball-entry-status')?.value || 'planned';
+    const templateId = document.getElementById('ball-entry-template')?.value || '';
+    const templates = sourceType === 'event' ? BALL_SYSTEM_EVENT_TEMPLATES.concat(ballPlannerState.templates.event || []) : (ballPlannerState.templates.bundle || []);
+    const tpl = templates.find(x => String(x.id) === String(templateId));
+    const nameInput = String(document.getElementById('ball-entry-name')?.value || '').trim();
+    const templateName = tpl?.templateName || (sourceType === 'bundle' ? '自定义礼包' : sourceType === 'event' ? '自定义活动' : '自定义获取');
+    const displayName = nameInput || templateName;
+    const balls = normalizeBallCounts({
+        poke: document.getElementById('ball-entry-poke')?.value,
+        great: document.getElementById('ball-entry-great')?.value,
+        ultra: document.getElementById('ball-entry-ultra')?.value
+    });
+    const entry = normalizeBallPlannerEntry({
+        sourceType,
+        status: sourceType === 'bundle' && status === 'received' ? 'purchased' : status,
+        templateId,
+        templateName,
+        eventName: nameInput,
+        displayName,
+        date: getTodayLocalDateString(),
+        balls,
+        diamonds: document.getElementById('ball-entry-diamonds')?.value,
+        note: document.getElementById('ball-entry-note')?.value
+    });
+    ballPlannerState.entries.unshift(entry);
+    if (document.getElementById('ball-entry-save-template')?.checked) {
+        const tplObj = normalizeBallTemplate({ sourceType, templateName: nameInput || templateName, balls, diamonds: entry.diamonds, note: entry.note });
+        if (sourceType === 'bundle') ballPlannerState.templates.bundle.unshift(tplObj);
+        else if (sourceType === 'event') ballPlannerState.templates.event.unshift(tplObj);
+    }
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已添加到精灵球预计计划');
+}
+
+function setBallEntryStatus(id, status) {
+    const item = (ballPlannerState.entries || []).find(e => String(e.id) === String(id));
+    if (!item) return;
+    item.status = status;
+    item.updatedAt = new Date().toISOString();
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+}
+
+function deleteBallEntry(id) {
+    if (!confirm('确定删除这条活动/礼包计划吗？')) return;
+    ballPlannerState.entries = (ballPlannerState.entries || []).filter(e => String(e.id) !== String(id));
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+}
+
+function renderBallEntryList() {
+    const wrap = document.getElementById('ball-entry-list');
+    if (!wrap) return;
+    const entries = ballPlannerState.entries || [];
+    if (!entries.length) {
+        wrap.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-[11px] text-slate-400 font-bold">暂无活动/礼包/每日奖励记录</div>`;
+        return;
+    }
+    wrap.innerHTML = entries.map(e => {
+        const sourceLabel = getBallSourceTypeLabel(e.sourceType);
+        const statusLabel = getBallEntryStatusLabel(e);
+        const isPlanned = e.status === 'planned';
+        const isDaily = e.sourceType === 'dailyReward';
+        const borderClass = isPlanned ? 'border-sky-200 bg-sky-50/50' : (isDaily ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-slate-50');
+        const plannedBtnText = e.sourceType === 'bundle' ? '改为待购买' : '改为待领取';
+        const doneBtnText = e.sourceType === 'bundle' ? '标记已购买' : '标记已领取';
+        return `<div class="rounded-2xl border ${borderClass} p-3 flex flex-col gap-2">
+            <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0"><div class="text-xs font-black text-slate-800 truncate">${escapeHtml(e.displayName || e.templateName)}</div><div class="text-[10px] font-bold text-slate-500">${sourceLabel} · ${statusLabel}${e.date ? ` · ${escapeHtml(e.date)}` : ''}${e.diamonds ? ` · 钻石 ${e.diamonds}` : ''}</div></div>
+                <button onclick="deleteBallEntry('${escapeHtmlAttr(e.id)}')" class="px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100 text-[10px] font-black">删</button>
+            </div>
+            <div class="text-[11px] font-mono font-black text-slate-700">红白 ${e.balls.poke} / 蓝 ${e.balls.great} / 黑黄 ${e.balls.ultra}${e.diamonds ? ` / 钻石 ${e.diamonds}` : ''}</div>
+            ${e.note ? `<div class="text-[10px] text-slate-500 font-bold leading-relaxed">${escapeHtml(e.note)}</div>` : ''}
+            ${isDaily ? `<div class="text-[10px] text-amber-700 font-bold">每日奖励实录只用于统计，不改变当前库存。</div>` : `<div class="flex flex-wrap gap-1.5">${e.status !== 'planned' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','planned')" class="px-2 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-100 text-[10px] font-black">${plannedBtnText}</button>` : ''}${e.status !== 'received' && e.status !== 'purchased' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','${e.sourceType === 'bundle' ? 'purchased' : 'received'}')" class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">${doneBtnText}</button>` : ''}${e.status !== 'skipped' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','skipped')" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-black">跳过</button>` : ''}</div>`}
+        </div>`;
+    }).join('');
 }
 
 function isHistoryDeleteMarker(log) {
@@ -1831,7 +2784,7 @@ function getVisibleHistoryLogs(logs = []) {
     );
 
     return (Array.isArray(logs) ? logs : [])
-        .filter(log => log && !isHistoryDeleteMarker(log) && !isSleepResearchLog(log))
+        .filter(log => log && !isHistoryDeleteMarker(log) && !isHistorySystemLog(log))
         .filter(log => !deletedIds.has(String(log.id)));
 }
 
@@ -1938,6 +2891,7 @@ async function loadHistoryFromCloud() {
             await saveHistoryToCloudNow();
         }
 
+        loadBallPlannerStateFromHistory();
         if (currentCloudUser) {
             rebuildTodayCheckInsFromHistory();
             renderTodayReportUI();
@@ -1947,6 +2901,7 @@ async function loadHistoryFromCloud() {
 
     // 老账号首次使用新版：云端还没有历史列数据时，用本地历史作为首份云端快照
     historyLogs = localSnapshot;
+    loadBallPlannerStateFromHistory();
     await saveHistoryToCloudNow();
 }
 
@@ -6058,6 +7013,7 @@ function updateAuthUI() {
         userInfo.classList.add('hidden');
         userInfo.innerText = "";
     }
+    updateBallPlannerButton();
 }
 
         
@@ -9171,6 +10127,7 @@ function openSleepResearchModal() {
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">研究笔记（选填）</label>
                 <textarea id="research-note" rows="3" placeholder="给这次睡眠研究写点备注" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400 resize-y"></textarea>
             </div>
+            ${renderBallUsageEditorHtml('research', stickyCheckInSession || '一觉', null)}
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">本次抓了几只</label>
                 <input type="number" min="0" max="20" value="1" id="research-catch-count" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
@@ -9201,6 +10158,7 @@ function submitSleepResearchMeta() {
     count = Math.max(0, Math.min(20, Math.floor(count)));
     const photoInput = document.getElementById('research-photos');
     const files = photoInput?.files || [];
+    const ballUsage = readBallUsageFromEditor('research', session);
 
     const existingResearch = findSleepResearch(date, session);
     if (existingResearch) {
@@ -9214,7 +10172,10 @@ function submitSleepResearchMeta() {
     const finish = async (photoDataUrls = []) => {
         try {
             const storedPhotos = await uploadSleepResearchPhotoDataUrls(date, session, photoDataUrls);
-            const research = upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls: storedPhotos });
+            const payload = { date, session, sleepScore, drowsyPower, note, photoDataUrls: storedPhotos };
+            if (ballUsage) payload.ballUsage = ballUsage;
+            const research = upsertSleepResearch(payload);
+            if (ballUsage) applyResearchBallUsageInventoryDelta(null, ballUsage);
             // Storage 已上传后，必须立刻把图片引用写回云端 history_logs；否则另一台设备只会看到 Storage 文件本体，看不到这次研究的照片索引。
             if (currentCloudUser) await saveHistoryToCloudNow();
             stickyCheckInDate = date;
@@ -9307,6 +10268,7 @@ function openSleepResearchDetail(date, session) {
                         <span>睡眠分数：${research.sleepScore || '未填'}</span>
                         <span>睡意之力：${research.drowsyPower || '未填'}</span>
                         <span>捕捉：${logs.length} 只</span>
+                        ${isBallPlannerEnabled() && getResearchBallUsageForDisplay(research) ? `<span>用球：${getBallUsageInlineText(getResearchBallUsageForDisplay(research))}</span>` : ''}
                     </div>
                 </div>
                 <div class="shrink-0 flex flex-col sm:flex-row gap-1.5">
@@ -9365,6 +10327,9 @@ async function deleteSleepResearchWithCaptures(date, session, event) {
 
     // 先扣回 Box 资产；只对捕捉记录扣，不对 sleep_research 元信息扣。
     logs.forEach(log => rollbackCheckInAsset(log));
+    if (research && research.ballUsage) {
+        applyResearchBallUsageInventoryDelta(research.ballUsage, null);
+    }
 
     historyLogs = (Array.isArray(historyLogs) ? historyLogs : [])
         .filter(h => {
@@ -9544,6 +10509,13 @@ function openEditSleepResearchModal(date, session) {
         const powerBlock = powerInput.closest('div');
         if (powerBlock && powerBlock.parentNode) powerBlock.parentNode.insertBefore(noteWrap, powerBlock.nextSibling);
     }
+    if (isBallPlannerEnabled() && !document.getElementById('edit-ball-poke')) {
+        const noteArea = document.getElementById('edit-research-note');
+        const ballWrap = document.createElement('div');
+        ballWrap.innerHTML = renderBallUsageEditorHtml('edit', session, research.ballUsage || null);
+        const targetBlock = noteArea ? noteArea.closest('div') : null;
+        if (targetBlock && targetBlock.parentNode) targetBlock.parentNode.insertBefore(ballWrap.firstElementChild, targetBlock.nextSibling);
+    }
     renderEditSleepResearchPhotoManager();
 }
 
@@ -9555,6 +10527,9 @@ function submitEditSleepResearch(date, session) {
     const photoEl = document.getElementById('edit-research-photos');
     const noteEl = document.getElementById('edit-research-note');
     const saveBtn = document.querySelector('#sleep-research-edit-modal button[data-date][data-session].bg-indigo-600');
+    const previousResearchForBallUsage = findSleepResearch(date, session);
+    const previousBallUsage = previousResearchForBallUsage && previousResearchForBallUsage.ballUsage ? previousResearchForBallUsage.ballUsage : null;
+    const nextBallUsage = readBallUsageFromEditor('edit', session);
     let sleepScore = scoreEl ? String(scoreEl.value || '').trim() : '';
     const drowsyPower = powerEl ? String(powerEl.value || '').trim() : '';
     const note = noteEl ? String(noteEl.value || '').trim() : '';
@@ -9592,7 +10567,10 @@ function submitEditSleepResearch(date, session) {
             await removeSleepResearchPhotoEntriesFromStorage(removedPhotos);
             const uploadedNewPhotos = await uploadSleepResearchPhotoDataUrls(date, session, newPhotos || []);
             const photoDataUrls = compactPhotoEntries(keptPhotos.concat(uploadedNewPhotos || []));
-            upsertSleepResearch({ date, session, sleepScore, drowsyPower, note, photoDataUrls });
+            const payload = { date, session, sleepScore, drowsyPower, note, photoDataUrls };
+            if (nextBallUsage) payload.ballUsage = nextBallUsage;
+            upsertSleepResearch(payload);
+            if (nextBallUsage) applyResearchBallUsageInventoryDelta(previousBallUsage, nextBallUsage);
             ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
             saveHistoryToLocal();
             // 编辑研究信息，尤其新增 Storage 照片后，立刻同步云端，避免其他设备拿不到 photoDataUrls 索引。
@@ -10772,7 +11750,7 @@ async function openHistoryModal(skipCloudRefresh = false) {
             return `<div data-research-date="${rDate}" class="w-full bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-2xl p-3 transition flex items-center justify-between gap-3">
                 <button type="button" data-date="${rDate}" data-session="${rSession}" onclick="openSleepResearchDetail(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left">
                     <span class="block text-xs font-black text-slate-800"><i class="fa-solid fa-moon text-indigo-500"></i> ${r.date || '未知日期'} · ${r.session || '一觉'}</span>
-                    <span class="block text-[10px] text-slate-500 font-bold mt-1">睡眠分数 ${r.sleepScore || '未填'} · 睡意之力 ${r.drowsyPower || '未填'} · 捕捉 ${logs.length} 只 ${getSleepResearchPhotos(r).length ? `· 大合照 ${getSleepResearchPhotos(r).length} 张` : ''}${r.note ? ' · 有笔记' : ''}</span>
+                    <span class="block text-[10px] text-slate-500 font-bold mt-1">睡眠分数 ${r.sleepScore || '未填'} · 睡意之力 ${r.drowsyPower || '未填'} · 捕捉 ${logs.length} 只 ${getSleepResearchPhotos(r).length ? `· 大合照 ${getSleepResearchPhotos(r).length} 张` : ''}${r.note ? ' · 有笔记' : ''}${isBallPlannerEnabled() && getResearchBallUsageForDisplay(r) ? ` · 用球 ${getBallUsageInlineText(getResearchBallUsageForDisplay(r))}` : ''}</span>
                 </button>
                 <div class="shrink-0 flex items-center gap-2">
                     <button type="button" data-date="${rDate}" data-session="${rSession}" onclick="deleteSleepResearchWithCaptures(this.dataset.date, this.dataset.session, event)" class="px-2 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-[10px] font-black" title="删除这次睡眠研究及其捕捉记录">
