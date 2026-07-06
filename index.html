@@ -882,8 +882,8 @@ function saveHistoryToLocal() {
 
 // ==========================================
 // 🎒 精灵球库存与规划中心 v1
-// 设计口径：当前库存只由玩家手动校准和睡眠研究用球自动扣回/补回改变；
-// 活动、礼包、商店、每日奖励只影响“预计库存”，不直接改当前库存。
+// 设计口径：当前库存由玩家手动校准、睡眠研究用球自动扣回/补回、以及“已领取/已购买/每日奖励实录”的球类获取自动增减；
+// 未领取活动、未购买礼包、商店计划和每日奖励期望只影响“预计库存”，不直接改当前库存。
 // 主数据作为 history_logs 中的一条特殊状态记录同步到账号云端，避免额外改 Supabase 表结构。
 // ==========================================
 const BALL_PLANNER_STATE_LOG_ID = 'ball_planner_state_v1';
@@ -1028,6 +1028,7 @@ function normalizeBallPlannerEntry(item = {}) {
         balls: normalizeBallCounts(item.balls || {}),
         diamonds: Math.max(0, Math.floor(Number(item.diamonds) || 0)),
         note: String(item.note || '').trim(),
+        inventoryApplied: item.inventoryApplied === true,
         createdAt: item.createdAt || new Date().toISOString(),
         updatedAt: item.updatedAt || item.createdAt || new Date().toISOString()
     };
@@ -1138,6 +1139,61 @@ function applyResearchBallUsageInventoryDelta(oldUsage, newUsage) {
         ballPlannerState.currentInventory[k] = Math.floor(Number(ballPlannerState.currentInventory[k]) || 0) - deltaUsed;
     });
     saveBallPlannerStateToHistory();
+}
+
+function isBallPlannerEntryActualInventoryStatus(entry) {
+    if (!entry) return false;
+    const sourceType = entry.sourceType || 'custom';
+    const status = entry.status || 'planned';
+    if (status === 'skipped' || status === 'planned') return false;
+    if (sourceType === 'bundle') return status === 'purchased' || status === 'received';
+    return status === 'received' || status === 'purchased';
+}
+
+function applyBallPlannerEntryInventoryDelta(oldEntry, newEntry, options = {}) {
+    if (!isBallPlannerEnabled()) return;
+    const oldE = oldEntry ? normalizeBallPlannerEntry(oldEntry) : null;
+    const newE = newEntry ? normalizeBallPlannerEntry(newEntry) : null;
+    const oldBalls = (oldE && oldE.inventoryApplied === true) ? normalizeBallCounts(oldE.balls || {}) : normalizeBallCounts({});
+    const shouldApplyNew = !!(newE && isBallPlannerEntryActualInventoryStatus(newE) && options.applyNew !== false);
+    const newBalls = shouldApplyNew ? normalizeBallCounts(newE.balls || {}) : normalizeBallCounts({});
+    BALL_KEYS.forEach(k => {
+        const deltaGain = (Number(newBalls[k]) || 0) - (Number(oldBalls[k]) || 0);
+        ballPlannerState.currentInventory[k] = Math.floor(Number(ballPlannerState.currentInventory[k]) || 0) + deltaGain;
+    });
+    if (newEntry) newEntry.inventoryApplied = shouldApplyNew && BALL_KEYS.some(k => (Number(newBalls[k]) || 0) > 0);
+}
+
+function getBallPlannerActualEntryGainsByDate() {
+    const byDate = {};
+    (ballPlannerState.entries || []).forEach(raw => {
+        const e = normalizeBallPlannerEntry(raw);
+        if (!e || !isBallPlannerEntryActualInventoryStatus(e)) return;
+        const balls = normalizeBallCounts(e.balls || {});
+        if (!BALL_KEYS.some(k => balls[k] > 0)) return;
+        const date = normalizeSleepResearchDateValue(e.date || getTodayLocalDateString());
+        if (!byDate[date]) byDate[date] = { date, pokeGain: 0, greatGain: 0, ultraGain: 0, gainCount: 0 };
+        BALL_KEYS.forEach(k => byDate[date][`${k}Gain`] += Number(balls[k]) || 0);
+        byDate[date].gainCount += 1;
+    });
+    return byDate;
+}
+
+function getBallPlannerKnownBallMovementsByDate() {
+    const byDate = {};
+    getBallPlannerResearchUsageByDate().forEach(d => {
+        const date = normalizeSleepResearchDateValue(d.date || getTodayLocalDateString());
+        if (!byDate[date]) byDate[date] = { date, pokeUsed: 0, greatUsed: 0, ultraUsed: 0, pokeGain: 0, greatGain: 0, ultraGain: 0, researchCount: 0, gainCount: 0 };
+        BALL_KEYS.forEach(k => byDate[date][`${k}Used`] += Number(d[k]) || 0);
+        byDate[date].researchCount += Number(d.researchCount) || 0;
+    });
+    Object.values(getBallPlannerActualEntryGainsByDate()).forEach(d => {
+        const date = normalizeSleepResearchDateValue(d.date || getTodayLocalDateString());
+        if (!byDate[date]) byDate[date] = { date, pokeUsed: 0, greatUsed: 0, ultraUsed: 0, pokeGain: 0, greatGain: 0, ultraGain: 0, researchCount: 0, gainCount: 0 };
+        BALL_KEYS.forEach(k => byDate[date][`${k}Gain`] += Number(d[`${k}Gain`]) || 0);
+        byDate[date].gainCount += Number(d.gainCount) || 0;
+    });
+    return Object.values(byDate).sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
 function getBallPlannerShopForecast() {
@@ -1337,7 +1393,7 @@ function renderBallPlannerAnalysisHtml(f = getBallPlannerForecast()) {
 
 
 function renderBallPlannerTrendChartHtml(f = getBallPlannerForecast()) {
-    const timeline = getBallPlannerResearchUsageByDate();
+    const timeline = getBallPlannerKnownBallMovementsByDate();
     const state = normalizeBallPlannerState(ballPlannerState);
     const showForecast = !!state.shop.showForecastCurve;
     const days = Math.max(0, Math.floor(Number(state.shop.remainingDays) || 0));
@@ -1354,13 +1410,22 @@ function renderBallPlannerTrendChartHtml(f = getBallPlannerForecast()) {
     BALL_KEYS.forEach(key => {
         const currentValue = Number(f.current?.[key]) || 0;
         const points = [];
-        let usedAfter = 0;
+        let netReverseDelta = 0; // 往过去回推：用球会让过去库存更高，实际获得会让过去库存更低。
         const reversed = [...timeline].reverse();
         reversed.forEach(d => {
-            usedAfter += Number(d[key]) || 0;
-            points.unshift({ label: d.date.slice(5), value: currentValue + usedAfter, key, kind: 'history' });
+            const used = Number(d[`${key}Used`]) || 0;
+            const gain = Number(d[`${key}Gain`]) || 0;
+            netReverseDelta += used - gain;
+            points.unshift({
+                label: d.date.slice(5),
+                value: currentValue + netReverseDelta,
+                key,
+                kind: 'history',
+                used,
+                gain
+            });
         });
-        points.push({ label: '今日', value: currentValue, key, kind: 'history' });
+        points.push({ label: '今日', value: currentValue, key, kind: 'history', used: 0, gain: 0 });
         historyPointsByKey[key] = points;
     });
 
@@ -1384,16 +1449,16 @@ function renderBallPlannerTrendChartHtml(f = getBallPlannerForecast()) {
     const makePolyline = points => points.map((p, i) => `${scaleX(i).toFixed(1)},${scaleY(p.value).toFixed(1)}`).join(' ');
     const historySvg = BALL_KEYS.map(key => `<polyline points="${makePolyline(historyPointsByKey[key])}" fill="none" stroke="${colors[key]}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />`).join('');
     const redForecastPolyline = redForecastPoints.length ? [`${scaleX(historyPointsByKey.poke.length - 1).toFixed(1)},${scaleY(Number(f.current?.poke) || 0).toFixed(1)}`].concat(redForecastPoints.map((p, i) => `${scaleX(historyPointsByKey.poke.length + i).toFixed(1)},${scaleY(p.value).toFixed(1)}`)).join(' ') : '';
-    const dots = BALL_KEYS.map(key => historyPointsByKey[key].map((p, i) => `<circle cx="${scaleX(i).toFixed(1)}" cy="${scaleY(p.value).toFixed(1)}" r="3.5" fill="${colors[key]}"><title>${escapeHtmlAttr(labels[key])} ${p.label}：${fmtBallNum(p.value)}</title></circle>`).join('')).join('');
+    const dots = BALL_KEYS.map(key => historyPointsByKey[key].map((p, i) => `<circle cx="${scaleX(i).toFixed(1)}" cy="${scaleY(p.value).toFixed(1)}" r="3.5" fill="${colors[key]}"><title>${escapeHtmlAttr(labels[key])} ${p.label}：库存 ${fmtBallNum(p.value)}${(p.gain || p.used) ? `（实际获取 +${fmtBallNum(p.gain || 0)} / 用球 -${fmtBallNum(p.used || 0)}）` : ''}</title></circle>`).join('')).join('');
     const forecastDots = redForecastPoints.map((p, i) => `<circle cx="${scaleX(historyPointsByKey.poke.length + i).toFixed(1)}" cy="${scaleY(p.value).toFixed(1)}" r="3" fill="#f59e0b"><title>红白球预测 ${escapeHtmlAttr(p.label)}：${fmtBallNum(p.value)}</title></circle>`).join('');
     const b = f.breakdown || {};
     const redGross = Number(f.future?.poke) || 0;
     const redNet = redGross - days;
-    const emptyHint = !timeline.length ? '<div class="text-[10px] font-bold text-slate-400 mt-2">暂无已记录用球的研究；当前库存仍会显示为“今日”点。录入研究用球后，实线会回推出历史变化。</div>' : '';
+    const emptyHint = !timeline.length ? '<div class="text-[10px] font-bold text-slate-400 mt-2">暂无已记录用球或实际获取；当前库存仍会显示为“今日”点。录入研究用球、每日奖励或已领取活动/礼包后，实线会回推出历史变化。</div>' : '';
     return `<div class="rounded-3xl border border-slate-200 p-4 mt-4 flex flex-col gap-3">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-chart-line text-sky-500"></i> 精灵球变化分析</h4>
-            <div class="text-[10px] font-bold text-slate-400">三条实线：已知库存曲线；橙色虚线：红白球预测，已扣未来每日 1 红白球。</div>
+            <div class="text-[10px] font-bold text-slate-400">三条实线：已知库存曲线（含研究用球与已实录获取）；橙色虚线：红白球预测，已扣未来每日 1 红白球。</div>
         </div>
         <div class="overflow-x-auto bg-slate-50 border border-slate-100 rounded-2xl p-3">
             <svg viewBox="0 0 ${width} ${height}" class="w-full min-w-[680px] h-64" role="img" aria-label="精灵球变化分析折线图">
@@ -1429,7 +1494,7 @@ function openBallPlannerModal() {
         <button onclick="document.getElementById('ball-planner-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         <div class="pr-8">
             <h3 class="text-base font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-baseball text-sky-500"></i> 精灵球库存与规划中心</h3>
-            <p class="text-[11px] text-slate-500 font-bold mt-1">当前库存只由手动校准和睡眠研究用球改变；活动、礼包、商店和每日奖励只影响预计库存。</p>
+            <p class="text-[11px] text-slate-500 font-bold mt-1">当前库存由手动校准、睡眠研究用球扣除、以及已实录领取的每日奖励/活动/礼包自动增减；未领取计划、商店和每日奖励期望只影响预计库存。</p>
         </div>
         <div id="ball-planner-content"></div>
     </div>`;
@@ -1444,7 +1509,7 @@ function renderBallPlannerModal() {
     if (!ballPlannerState.enabled) {
         wrap.innerHTML = `<div class="rounded-3xl border border-sky-100 bg-sky-50/70 p-5 flex flex-col gap-4">
             <div class="text-sm font-black text-sky-900">这个功能目前未启用</div>
-            <div class="text-xs text-sky-800 font-bold leading-relaxed">启用后，睡眠研究编辑里会出现“本次用球情况”；当前库存会在你录入/修改研究用球时自动扣回或补回。旧睡眠研究默认没有用球记录，不会影响库存。</div>
+            <div class="text-xs text-sky-800 font-bold leading-relaxed">启用后，睡眠研究编辑里会出现“本次用球情况”；当前库存会在你录入/修改研究用球时自动扣回或补回。每日奖励或活动/礼包标记为已领取/已购买后，也会自动增加对应库存。旧睡眠研究默认没有用球记录，不会影响库存。</div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 ${BALL_KEYS.map(k => `<label class="text-[10px] font-black text-slate-500">当前${BALL_LABELS[k]}库存<input type="number" min="0" id="ball-init-${k}" value="${ballPlannerState.currentInventory[k] || 0}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>`).join('')}
             </div>
@@ -1466,7 +1531,7 @@ function renderBallPlannerModal() {
                 <div class="flex items-center justify-between gap-2"><h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-sliders text-sky-500"></i> 总开关与库存校准</h4><button onclick="disableBallPlanner()" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-black">关闭功能</button></div>
                 <div class="grid grid-cols-3 gap-2">${BALL_KEYS.map(k => `<label class="text-[10px] font-black text-slate-500">${BALL_LABELS[k]}<input type="number" id="ball-inv-${k}" value="${state.currentInventory[k] || 0}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>`).join('')}</div>
                 <button onclick="saveBallInventoryCalibration()" class="bg-sky-600 hover:bg-sky-500 text-white rounded-2xl py-2.5 text-xs font-black">保存当前游戏内库存</button>
-                <div class="text-[10px] text-slate-400 font-bold leading-relaxed">旧研究不会自动补球；如果你想让旧研究参与库存，请进入那次研究编辑用球，保存后系统会按差额扣除。</div>
+                <div class="text-[10px] text-slate-400 font-bold leading-relaxed">库存校准会把当前数值作为新的真实锚点。之后录入研究用球会扣库存；实录每日奖励、已领取活动或已购买礼包会加库存，并显示在库存曲线上。</div>
             </div>
             <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
                 <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-store text-indigo-500"></i> 睡眠点数商店预测</h4>
@@ -1509,12 +1574,18 @@ function renderBallPlannerModal() {
         </div>
         <div class="rounded-3xl border border-amber-200 bg-amber-50/30 p-4 mt-4 flex flex-col gap-3">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div><h4 class="text-xs font-black text-amber-800"><i class="fa-solid fa-calendar-day text-amber-500"></i> 每日奖励录入</h4><div class="text-[10px] text-amber-700 font-bold mt-0.5">用于统计每日奖励实际出了多少球；不会自动改变当前库存。</div></div>
+                <div><h4 class="text-xs font-black text-amber-800"><i class="fa-solid fa-calendar-day text-amber-500"></i> 每日奖励录入</h4><div class="text-[10px] text-amber-700 font-bold mt-0.5">用于记录每日奖励实际出了什么；如果是球，会自动增加当前库存，并进入库存曲线。</div></div>
                 <div class="text-[10px] font-black text-amber-800 bg-white/70 border border-amber-100 rounded-xl px-2 py-1">期望：红白 ${fmtBallNum(BALL_DAILY_REWARD_EXPECTED.poke)}/天 · 蓝 ${fmtBallNum(BALL_DAILY_REWARD_EXPECTED.great)}/天</div>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-6 gap-2 text-[10px] font-black text-slate-500">
                 <label>日期<input type="date" id="ball-daily-date" value="${getTodayLocalDateString()}" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></label>
-                <label>奖励模板<select id="ball-daily-template" onchange="applyBallDailyRewardTemplate()" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></select></label>
+                <div>
+                    <label class="block">奖励模板<select id="ball-daily-template" onchange="applyBallDailyRewardTemplate()" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></select></label>
+                    <div class="flex gap-1 mt-1">
+                        <button type="button" onclick="editSelectedBallDailyRewardTemplate()" class="flex-1 bg-white hover:bg-amber-50 border border-amber-100 text-amber-700 rounded-lg py-1 text-[10px] font-black">编辑模板</button>
+                        <button type="button" onclick="deleteSelectedBallDailyRewardTemplate()" class="flex-1 bg-white hover:bg-rose-50 border border-rose-100 text-rose-600 rounded-lg py-1 text-[10px] font-black">删模板</button>
+                    </div>
+                </div>
                 <label>模板/奖励名称<input id="ball-daily-name" value="红白球 ×1" placeholder="选择自定义后填写，例如：钻石 ×15 / 碎片 ×1000" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-bold"></label>
                 <label>红白球<input type="number" id="ball-daily-poke" value="1" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
                 <label>蓝球<input type="number" id="ball-daily-great" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
@@ -1529,7 +1600,13 @@ function renderBallPlannerModal() {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-black text-slate-500">
                     <label>类型<select id="ball-entry-source" onchange="renderBallEntryTemplateSelect()" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"><option value="event">活动获取</option><option value="bundle">礼包购买</option><option value="custom">其他自由获取</option></select></label>
                     <label>状态<select id="ball-entry-status" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"><option value="planned">待领取/待购买</option><option value="received">已领取/已购买</option><option value="skipped">已跳过/不买</option></select></label>
-                    <label>模板<select id="ball-entry-template" onchange="applyBallEntryTemplate()" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"></select></label>
+                    <div>
+                    <label class="block">模板<select id="ball-entry-template" onchange="applyBallEntryTemplate()" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"></select></label>
+                    <div class="flex gap-1 mt-1">
+                        <button type="button" onclick="editSelectedBallEntryTemplate()" class="flex-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 rounded-lg py-1 text-[10px] font-black">编辑模板</button>
+                        <button type="button" onclick="deleteSelectedBallEntryTemplate()" class="flex-1 bg-white hover:bg-rose-50 border border-rose-100 text-rose-600 rounded-lg py-1 text-[10px] font-black">删模板</button>
+                    </div>
+                </div>
                     <label>活动/礼包名<input id="ball-entry-name" placeholder="不填活动名则使用模板名" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold"></label>
                     <label>红白球<input type="number" id="ball-entry-poke" value="5" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
                     <label>蓝球<input type="number" id="ball-entry-great" value="0" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
@@ -1538,7 +1615,8 @@ function renderBallPlannerModal() {
                 </div>
                 <textarea id="ball-entry-note" rows="2" placeholder="备注（选填）" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-[11px] font-bold resize-y"></textarea>
                 <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-600"><input type="checkbox" id="ball-entry-save-template"> 保存为我的常用模板</label>
-                <button onclick="addBallPlannerEntryFromForm()" class="bg-rose-600 hover:bg-rose-500 text-white rounded-2xl py-2.5 text-xs font-black">添加到预计计划</button>
+                <button onclick="addBallPlannerEntryFromForm()" class="bg-rose-600 hover:bg-rose-500 text-white rounded-2xl py-2.5 text-xs font-black">添加到计划 / 实际记录</button>
+                <div class="text-[10px] text-slate-400 font-bold leading-relaxed">状态为“已领取/已购买”时会自动增加当前库存；从已领取改回待领取/跳过或删除记录时，会按差额扣回。</div>
             </div>
             <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
                 <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-list-check text-emerald-500"></i> 计划与记录</h4>
@@ -1712,8 +1790,9 @@ function addBallDailyRewardEntry() {
         date,
         balls,
         diamonds,
-        note: '每日奖励实际获得；仅用于统计，不自动改变当前库存。'
+        note: '每日奖励实际获得；球类奖励会自动增加当前库存，并显示在库存曲线上。'
     });
+    applyBallPlannerEntryInventoryDelta(null, entry);
     ballPlannerState.entries.unshift(entry);
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
@@ -1747,6 +1826,95 @@ function applyBallEntryTemplate() {
     if (document.getElementById('ball-entry-note') && t.note) document.getElementById('ball-entry-note').value = t.note;
 }
 
+function getUserBallTemplateList(sourceType) {
+    const type = ['bundle', 'event', 'dailyReward'].includes(sourceType) ? sourceType : 'event';
+    if (!ballPlannerState.templates) ballPlannerState.templates = { bundle: [], event: [], dailyReward: [] };
+    if (!Array.isArray(ballPlannerState.templates[type])) ballPlannerState.templates[type] = [];
+    return ballPlannerState.templates[type];
+}
+
+function getUserBallTemplateById(sourceType, id) {
+    return getUserBallTemplateList(sourceType).find(t => String(t.id) === String(id)) || null;
+}
+
+function readBallTemplatePromptNumber(label, currentValue) {
+    const raw = prompt(label, String(Math.max(0, Math.floor(Number(currentValue) || 0))));
+    if (raw === null) return null;
+    return Math.max(0, Math.floor(Number(raw) || 0));
+}
+
+function editBallTemplateById(sourceType, id) {
+    const tpl = getUserBallTemplateById(sourceType, id);
+    if (!tpl) {
+        alert('只能编辑你自己保存的自定义模板；系统预设模板不能修改。');
+        return;
+    }
+    const nextName = prompt('模板名称：', tpl.templateName || '自定义模板');
+    if (nextName === null) return;
+    const nextPoke = readBallTemplatePromptNumber('红白球数量：', tpl.balls?.poke || 0);
+    if (nextPoke === null) return;
+    const nextGreat = readBallTemplatePromptNumber('蓝球数量：', tpl.balls?.great || 0);
+    if (nextGreat === null) return;
+    const nextUltra = readBallTemplatePromptNumber('黑/黄球数量：', tpl.balls?.ultra || 0);
+    if (nextUltra === null) return;
+    const nextDiamonds = readBallTemplatePromptNumber('钻石/非球数量：', tpl.diamonds || 0);
+    if (nextDiamonds === null) return;
+    const nextNote = prompt('备注（可留空）：', tpl.note || '');
+    if (nextNote === null) return;
+
+    tpl.templateName = String(nextName || '').trim() || '自定义模板';
+    tpl.balls = normalizeBallCounts({ poke: nextPoke, great: nextGreat, ultra: nextUltra });
+    tpl.diamonds = nextDiamonds;
+    tpl.note = String(nextNote || '').trim();
+    tpl.updatedAt = new Date().toISOString();
+
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已更新自定义模板');
+}
+
+function deleteBallTemplateById(sourceType, id) {
+    const list = getUserBallTemplateList(sourceType);
+    const tpl = list.find(t => String(t.id) === String(id));
+    if (!tpl) {
+        alert('只能删除你自己保存的自定义模板；系统预设模板不能删除。');
+        return;
+    }
+    if (!confirm(`确定删除自定义模板「${tpl.templateName || '自定义模板'}」吗？已创建的历史记录不会被删除。`)) return;
+    ballPlannerState.templates[sourceType] = list.filter(t => String(t.id) !== String(id));
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已删除自定义模板');
+}
+
+function editSelectedBallDailyRewardTemplate() {
+    const id = document.getElementById('ball-daily-template')?.value || '';
+    if (!id || id === 'custom') { alert('请先选择一个自定义每日奖励模板。'); return; }
+    editBallTemplateById('dailyReward', id);
+}
+
+function deleteSelectedBallDailyRewardTemplate() {
+    const id = document.getElementById('ball-daily-template')?.value || '';
+    if (!id || id === 'custom') { alert('请先选择一个自定义每日奖励模板。'); return; }
+    deleteBallTemplateById('dailyReward', id);
+}
+
+function editSelectedBallEntryTemplate() {
+    const source = document.getElementById('ball-entry-source')?.value || 'event';
+    const id = document.getElementById('ball-entry-template')?.value || '';
+    if (!id) { alert('请先选择一个自定义活动/礼包模板。'); return; }
+    if (!['event', 'bundle'].includes(source)) { alert('当前类型没有模板可编辑。'); return; }
+    editBallTemplateById(source, id);
+}
+
+function deleteSelectedBallEntryTemplate() {
+    const source = document.getElementById('ball-entry-source')?.value || 'event';
+    const id = document.getElementById('ball-entry-template')?.value || '';
+    if (!id) { alert('请先选择一个自定义活动/礼包模板。'); return; }
+    if (!['event', 'bundle'].includes(source)) { alert('当前类型没有模板可删除。'); return; }
+    deleteBallTemplateById(source, id);
+}
+
 function addBallPlannerEntryFromForm() {
     const sourceType = document.getElementById('ball-entry-source')?.value || 'event';
     const status = document.getElementById('ball-entry-status')?.value || 'planned';
@@ -1773,6 +1941,7 @@ function addBallPlannerEntryFromForm() {
         diamonds: document.getElementById('ball-entry-diamonds')?.value,
         note: document.getElementById('ball-entry-note')?.value
     });
+    applyBallPlannerEntryInventoryDelta(null, entry);
     ballPlannerState.entries.unshift(entry);
     if (document.getElementById('ball-entry-save-template')?.checked) {
         const tplObj = normalizeBallTemplate({ sourceType, templateName: nameInput || templateName, balls, diamonds: entry.diamonds, note: entry.note });
@@ -1787,14 +1956,19 @@ function addBallPlannerEntryFromForm() {
 function setBallEntryStatus(id, status) {
     const item = (ballPlannerState.entries || []).find(e => String(e.id) === String(id));
     if (!item) return;
+    const oldItem = JSON.parse(JSON.stringify(item));
     item.status = status;
     item.updatedAt = new Date().toISOString();
+    applyBallPlannerEntryInventoryDelta(oldItem, item);
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
 }
 
 function deleteBallEntry(id) {
-    if (!confirm('确定删除这条活动/礼包计划吗？')) return;
+    const item = (ballPlannerState.entries || []).find(e => String(e.id) === String(id));
+    const label = item?.sourceType === 'dailyReward' ? '每日奖励记录' : '活动/礼包计划';
+    if (!confirm(`确定删除这条${label}吗？如果它曾自动增加库存，系统会同步扣回。`)) return;
+    if (item) applyBallPlannerEntryInventoryDelta(item, null);
     ballPlannerState.entries = (ballPlannerState.entries || []).filter(e => String(e.id) !== String(id));
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
@@ -1823,7 +1997,7 @@ function renderBallEntryList() {
             </div>
             <div class="text-[11px] font-mono font-black text-slate-700">红白 ${e.balls.poke} / 蓝 ${e.balls.great} / 黑黄 ${e.balls.ultra}${e.diamonds ? ` / 钻石 ${e.diamonds}` : ''}</div>
             ${e.note ? `<div class="text-[10px] text-slate-500 font-bold leading-relaxed">${escapeHtml(e.note)}</div>` : ''}
-            ${isDaily ? `<div class="text-[10px] text-amber-700 font-bold">每日奖励实录只用于统计，不改变当前库存。</div>` : `<div class="flex flex-wrap gap-1.5">${e.status !== 'planned' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','planned')" class="px-2 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-100 text-[10px] font-black">${plannedBtnText}</button>` : ''}${e.status !== 'received' && e.status !== 'purchased' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','${e.sourceType === 'bundle' ? 'purchased' : 'received'}')" class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">${doneBtnText}</button>` : ''}${e.status !== 'skipped' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','skipped')" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-black">跳过</button>` : ''}</div>`}
+            ${isDaily ? `<div class="text-[10px] text-amber-700 font-bold">每日奖励实录：球类奖励会自动增加当前库存，并显示在库存曲线中。${e.inventoryApplied ? '（已应用到库存）' : '（旧记录未自动改库存）'}</div>` : `<div class="flex flex-wrap gap-1.5">${e.status !== 'planned' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','planned')" class="px-2 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-100 text-[10px] font-black">${plannedBtnText}</button>` : ''}${e.status !== 'received' && e.status !== 'purchased' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','${e.sourceType === 'bundle' ? 'purchased' : 'received'}')" class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">${doneBtnText}</button>` : ''}${e.status !== 'skipped' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','skipped')" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-black">跳过</button>` : ''}${e.inventoryApplied ? `<span class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">已应用库存</span>` : ''}</div>`}
         </div>`;
     }).join('');
 }
