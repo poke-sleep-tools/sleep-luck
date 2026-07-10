@@ -1262,7 +1262,7 @@ function isBallPlannerStateLog(log) {
 }
 
 function isHistorySystemLog(log) {
-    return isSleepResearchLog(log) || isBallPlannerStateLog(log);
+    return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log);
 }
 
 function isBallPlannerEnabled() {
@@ -3146,6 +3146,7 @@ function openSleepResearchPhotoViewer(galleryId, index = 0) {
         </div>`;
     modal.onclick = () => modal.remove();
     document.body.appendChild(modal);
+    enhanceDrySpellModalControls(modal);
 }
 
 function upsertSleepResearch(payload = {}) {
@@ -10150,6 +10151,9 @@ function setDailyCheckInSubmitButtonBusy(isBusy) {
 function submitDailyCheckIn(event) {
     if (event && typeof event.preventDefault === 'function') event.preventDefault();
     if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+    const modal = document.getElementById('daily-checkin-modal');
+    if (modal?.dataset?.mode === 'graduationBackfill') return submitGraduationDexBackfill();
+    if (modal?.dataset?.editGraduationDexId) return submitEditGraduationDexEntry(modal.dataset.editGraduationDexId, modal.dataset.editGraduationDexMode || 'current');
     if (dailyCheckInSubmitting) return;
 
     dailyCheckInSubmitting = true;
@@ -11717,7 +11721,7 @@ function openGraduationBackfillModal(prefill = null) {
         toggleCheckInFoodTrack();
     }
 
-    const submitBtn = modal.querySelector('button[onclick="submitDailyCheckIn()"]');
+    const submitBtn = modal.querySelector('[data-submit-daily-checkin="1"]') || modal.querySelector('button[onclick="submitDailyCheckIn(event)"]') || modal.querySelector('button[onclick="submitDailyCheckIn()"]');
     if (submitBtn) {
         submitBtn.setAttribute('onclick', 'submitGraduationDexBackfill()');
         submitBtn.className = 'w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md';
@@ -12020,7 +12024,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     toggleCheckInFoodTrack();
     if (mode === 'current') applyCurrentStateEditRestrictions(item);
 
-    const submitBtn = modal.querySelector('button[onclick="submitDailyCheckIn()"]');
+    const submitBtn = modal.querySelector('[data-submit-daily-checkin="1"]') || modal.querySelector('button[onclick="submitDailyCheckIn(event)"]') || modal.querySelector('button[onclick="submitDailyCheckIn()"]');
     if (submitBtn) {
         submitBtn.setAttribute('onclick', `submitEditGraduationDexEntry(${JSON.stringify(id)}, ${JSON.stringify(mode)})`);
         submitBtn.className = mode === 'capture'
@@ -12170,6 +12174,769 @@ function filterHistoryResearchByDate() {
     });
 }
 
+// ==========================================
+// 📉 毕业断档分析：历史流水的一次性非洲检测
+// 设计原则：不实时演算；玩家确认断档起点与补正后，点击按钮才计算一次。
+// ==========================================
+const DRY_SPELL_STORAGE_KEY = 'sleep_luck_dry_spell_last_analysis_v1';
+const DRY_SPELL_STATE_LOG_ID = 'dry_spell_analysis_state_v1';
+let lastDrySpellAnalysisSnapshot = null;
+const DRY_SPELL_RESULT_DEFINITION_META = {
+    gradPlus: { label: '毕业及以上', hint: '毕业 / 大毕业 / 金帮毕业', results: ['grad', 'bigGrad', 'goldGrad'] },
+    tiedPlus: { label: '和解及以上', hint: '和解 / 毕业 / 大毕业 / 金帮毕业', results: ['tied', 'grad', 'bigGrad', 'goldGrad'] },
+    goldOnly: { label: '只看金帮毕业', hint: '仅金帮毕业', results: ['goldGrad'] }
+};
+
+function getDrySpellDefinitionMeta(definition = 'gradPlus') {
+    return DRY_SPELL_RESULT_DEFINITION_META[definition] || DRY_SPELL_RESULT_DEFINITION_META.gradPlus;
+}
+
+function isDrySpellGraduationResult(result, definition = 'gradPlus') {
+    return getDrySpellDefinitionMeta(definition).results.includes(result);
+}
+
+function getDrySpellResultName(result) {
+    return { none: '没货', tied: '和解', grad: '毕业', bigGrad: '大毕业', goldGrad: '金帮毕业' }[result] || '未知';
+}
+
+function getDrySpellSessionOrder(session) {
+    return normalizeSleepResearchSessionValue(session || '一觉') === '二觉' ? 2 : 1;
+}
+
+function getDrySpellLogIdNumber(log) {
+    const raw = String(log?.id ?? '');
+    const numeric = Number(raw.replace(/[^0-9]/g, '').slice(0, 13));
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    const t = Date.parse(log?.createdAt || log?.updatedAt || log?.timestamp || '');
+    return Number.isFinite(t) ? t : 0;
+}
+
+function getDrySpellLogSortTuple(log) {
+    const date = normalizeSleepResearchDateValue(log?.date || '');
+    const dateValue = Date.parse(date + 'T00:00:00');
+    return { date, dateValue: Number.isFinite(dateValue) ? dateValue : 0, sessionOrder: getDrySpellSessionOrder(log?.session || '一觉'), idValue: getDrySpellLogIdNumber(log) };
+}
+
+function compareDrySpellLogsAscending(a, b) {
+    const ta = getDrySpellLogSortTuple(a);
+    const tb = getDrySpellLogSortTuple(b);
+    return (ta.dateValue - tb.dateValue) || (ta.sessionOrder - tb.sessionOrder) || (ta.idValue - tb.idValue) || String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+function compareDrySpellLogsDescending(a, b) { return compareDrySpellLogsAscending(b, a); }
+
+function getDrySpellCaptureLogs() {
+    return getVisibleHistoryLogs(historyLogs)
+        .filter(log => log && log.name && log.result !== undefined && log.date && !isHistorySystemLog(log))
+        .map(log => Object.assign({}, log, { name: normalizeStandardName(log.name) }))
+        .sort(compareDrySpellLogsAscending);
+}
+
+function getDrySpellCandidateLogs(definition = 'gradPlus') {
+    return getDrySpellCaptureLogs().filter(log => isDrySpellGraduationResult(log.result, definition)).sort(compareDrySpellLogsDescending);
+}
+
+function getDrySpellGraduationDexCandidates(definition = 'gradPlus') {
+    normalizeGraduationDex();
+    return (graduationDex || [])
+        .map(item => {
+            const cap = getGraduationCapture(item);
+            const cur = getGraduationCurrent(item);
+            const result = cap.result || cur.result || 'grad';
+            if (!isDrySpellGraduationResult(result, definition)) return null;
+
+            let date = normalizeSleepResearchDateValue(cap.date || cur.date || '');
+            if (!date && item.createdAt) {
+                const d = new Date(item.createdAt);
+                if (!Number.isNaN(d.getTime())) date = d.toISOString().slice(0, 10);
+            }
+            if (!date) return null;
+
+            const session = normalizeSleepResearchSessionValue(cap.session || cur.session || '一觉');
+            return {
+                id: `dex_${item.id}`,
+                sourceDexId: item.id,
+                source: 'graduation_dex',
+                date,
+                session,
+                name: normalizeStandardName(cap.name || cur.name || item.nickname || ''),
+                result,
+                createdAt: item.createdAt || cur.updatedAt || '',
+                updatedAt: item.updatedAt || cur.updatedAt || item.createdAt || ''
+            };
+        })
+        .filter(Boolean)
+        .sort(compareDrySpellLogsDescending);
+}
+
+function getDrySpellStartDescription(start) {
+    if (!start) return '未找到断档起点';
+    const base = `${start.date || '未知日期'} ${start.session || ''}`.trim();
+    const name = start.name ? ` · ${start.name}` : '';
+    const result = start.result ? ` · ${getDrySpellResultName(start.result)}` : '';
+    return `${base}${name}${result}`;
+}
+
+function getDrySpellStartBoundaryFromForm() {
+    const definition = document.getElementById('dry-spell-definition')?.value || 'gradPlus';
+    const mode = document.querySelector('input[name="dry-spell-start-mode"]:checked')?.value || 'system';
+    const candidates = getDrySpellCandidateLogs(definition);
+    const dexCandidates = getDrySpellGraduationDexCandidates(definition);
+    let sourceLabel = '系统推测';
+    let startLog = null;
+
+    if (mode === 'history') {
+        const selectedId = document.getElementById('dry-spell-start-log-id')?.value || '';
+        startLog = candidates.find(log => String(log.id) === String(selectedId)) || candidates[0] || null;
+        sourceLabel = '玩家从历史记录选择';
+    } else if (mode === 'dex') {
+        const selectedDexId = document.getElementById('dry-spell-start-dex-id')?.value || '';
+        startLog = dexCandidates.find(log => String(log.id) === String(selectedDexId)) || dexCandidates[0] || null;
+        sourceLabel = '玩家从毕业库选择';
+    } else if (mode === 'manual') {
+        const manualDate = normalizeSleepResearchDateValue(document.getElementById('dry-spell-manual-date')?.value || '');
+        const manualSession = document.getElementById('dry-spell-manual-session')?.value || '';
+        const manualName = (document.getElementById('dry-spell-manual-name')?.value || '').trim();
+        const manualResult = document.getElementById('dry-spell-manual-result')?.value || 'grad';
+        if (!manualDate) return { ok: false, message: '请先填写最近毕业日期。', definition, mode };
+        const dateValue = Date.parse(manualDate + 'T00:00:00');
+        const sessionOrder = manualSession ? getDrySpellSessionOrder(manualSession) : 99;
+        return {
+            ok: true,
+            mode,
+            definition,
+            sourceLabel: '玩家手动输入',
+            manual: true,
+            date: manualDate,
+            session: manualSession,
+            name: manualName,
+            result: manualResult,
+            tuple: { date: manualDate, dateValue: Number.isFinite(dateValue) ? dateValue : 0, sessionOrder, idValue: Number.MAX_SAFE_INTEGER },
+            description: `${manualDate}${manualSession ? ' ' + manualSession : ' 之后'}${manualName ? ' · ' + manualName : ''}${manualResult ? ' · ' + getDrySpellResultName(manualResult) : ''}`
+        };
+    } else {
+        startLog = candidates[0] || null;
+        sourceLabel = '系统根据历史抽卡库推测';
+    }
+
+    if (!startLog) return { ok: false, message: '当前所选来源里找不到可作为断档起点的毕业记录。请换用历史记录、毕业库或手动输入最近毕业时间。', definition, mode };
+    const tuple = getDrySpellLogSortTuple(startLog);
+    return { ok: true, mode, definition, sourceLabel, startLog, date: tuple.date, session: startLog.session || '一觉', tuple, description: getDrySpellStartDescription(startLog) };
+}
+
+function isDrySpellLogAfterBoundary(log, boundary) {
+    if (!boundary || !boundary.ok) return false;
+    const t = getDrySpellLogSortTuple(log);
+    if (boundary.manual && !boundary.session) return t.dateValue > boundary.tuple.dateValue;
+    return (t.dateValue > boundary.tuple.dateValue)
+        || (t.dateValue === boundary.tuple.dateValue && t.sessionOrder > boundary.tuple.sessionOrder)
+        || (t.dateValue === boundary.tuple.dateValue && t.sessionOrder === boundary.tuple.sessionOrder && t.idValue > boundary.tuple.idValue);
+}
+
+function buildDrySpellCatchIndexMap(captureLogs = null) {
+    const logs = (captureLogs || getDrySpellCaptureLogs()).slice().sort(compareDrySpellLogsAscending);
+    const historyCounts = {};
+    logs.forEach(log => { const name = normalizeStandardName(log.name); historyCounts[name] = (historyCounts[name] || 0) + 1; });
+    const boxCounts = {};
+    (playerBox || []).forEach(p => { const name = normalizeStandardName(p?.name || ''); if (name) boxCounts[name] = Math.max(boxCounts[name] || 0, Math.floor(Number(p.count) || 0)); });
+    const offsets = {};
+    Object.keys(historyCounts).forEach(name => { offsets[name] = Math.max(0, (boxCounts[name] || 0) - (historyCounts[name] || 0)); });
+    const seen = {};
+    const map = new Map();
+    logs.forEach(log => {
+        const name = normalizeStandardName(log.name);
+        seen[name] = (seen[name] || 0) + 1;
+        map.set(String(log.id), (offsets[name] || 0) + seen[name]);
+    });
+    return map;
+}
+
+function getDrySpellBoxRecord(name) {
+    const standard = normalizeStandardName(name);
+    return (playerBox || []).find(p => normalizeStandardName(p?.name || '') === standard) || null;
+}
+
+function getDrySpellBroadTypeFromScoringType(pType) {
+    if (pType === 'berry') return 'berry';
+    if (pType === 'food') return 'food';
+    return 'skill';
+}
+
+function getDrySpellProbabilityKeysForName(name, definition = 'gradPlus') {
+    if (definition === 'goldOnly') return ['goldGrad'];
+    if (definition === 'tiedPlus') return ['tied', 'grad', 'bigGrad', 'goldGrad'];
+    if (isSpecialStandardDowngradeName(name) || isEspeonScoringName(name)) return ['tied', 'grad', 'bigGrad', 'goldGrad'];
+    return ['grad', 'bigGrad', 'goldGrad'];
+}
+
+function getDrySpellSingleCatchGraduationProbability(name, catchIndex, lockMode, definition = 'gradPlus', options = {}) {
+    const standard = normalizeStandardName(name);
+    if (!standard || catchIndex <= 0) return null;
+    if (isLegendaryFirstFixedBadName(standard) && catchIndex <= 1) return 0;
+    const pType = getLuckScoringTypeForPokemon(standard);
+    if (!pType || !LUCK_PROB_MATRIX[pType]) return null;
+    const pLike = { name: standard, count: Math.max(1, catchIndex), lockMode: lockMode || getRecommendedLockModeForName(standard) || 'two' };
+    const lockType = getLuckLockTypeForCatchIndex(pLike, catchIndex);
+    const events = getLuckEventProbabilitiesForLock(pType, lockType);
+    const keys = getDrySpellProbabilityKeysForName(standard, definition);
+    let baseProb = keys.reduce((sum, key) => sum + (Number(events[key]) || 0), 0);
+    if (pType === 'food') {
+        if (options.track) {
+            const track = normalizeFoodTrack(options.track) || getFoodTrackForNameAndCombo(standard, options.foodCombo || '') || 'AAA';
+            baseProb *= (Number(FOOD_TRACK_META[track]?.probWeight) || 1);
+        } else if (options.boxRecord) {
+            const rows = getLuckFoodRowsForScoring(options.boxRecord);
+            baseProb *= (rows.reduce((sum, row) => sum + (Number(row.probWeight) || 0), 0) || 1);
+        }
+    }
+    return Math.min(0.95, Math.max(0, baseProb));
+}
+
+function getDrySpellProbabilityForLog(log, catchIndex, definition = 'gradPlus') {
+    if (!log) return null;
+    const standard = normalizeStandardName(log.name || '');
+    const boxRecord = getDrySpellBoxRecord(standard);
+    const track = log.track || getCheckInTrackMode(standard, log.foodCombo || '') || null;
+    return getDrySpellSingleCatchGraduationProbability(standard, catchIndex, log.lockMode || boxRecord?.lockMode || getRecommendedLockModeForName(standard), definition, { track, foodCombo: log.foodCombo || '', boxRecord });
+}
+
+function getDrySpellAverageProbabilitiesFromBox(definition = 'gradPlus') {
+    const out = { all: { sum: 0, count: 0 }, berry: { sum: 0, count: 0 }, food: { sum: 0, count: 0 }, skill: { sum: 0, count: 0 } };
+    (playerBox || []).forEach(p => {
+        const standard = normalizeStandardName(p?.name || '');
+        if (!standard) return;
+        const pType = getLuckScoringTypeForPokemon(standard);
+        if (!pType || !LUCK_PROB_MATRIX[pType]) return;
+        const broad = getDrySpellBroadTypeFromScoringType(pType);
+        const count = Math.max(0, Math.floor(Number(p.count) || 0));
+        for (let i = 1; i <= count; i++) {
+            const prob = getDrySpellSingleCatchGraduationProbability(standard, i, p.lockMode || getRecommendedLockModeForName(standard), definition, { boxRecord: p });
+            if (prob === null) continue;
+            out.all.sum += prob; out.all.count += 1;
+            out[broad].sum += prob; out[broad].count += 1;
+        }
+    });
+    const avg = {};
+    Object.keys(out).forEach(key => { avg[key] = out[key].count > 0 ? out[key].sum / out[key].count : 0; });
+    return avg;
+}
+
+function getDrySpellExtraAverageProbability(definition, mode, rangeItems) {
+    const boxAvg = getDrySpellAverageProbabilitiesFromBox(definition);
+    if (mode === 'streak') {
+        const valid = (rangeItems || []).filter(item => Number.isFinite(item.probability));
+        if (valid.length > 0) return valid.reduce((s, item) => s + item.probability, 0) / valid.length;
+        return boxAvg.all || 0;
+    }
+    if (mode === 'manual') {
+        const berry = Math.max(0, Number(document.getElementById('dry-spell-ratio-berry')?.value) || 0);
+        const food = Math.max(0, Number(document.getElementById('dry-spell-ratio-food')?.value) || 0);
+        const skill = Math.max(0, Number(document.getElementById('dry-spell-ratio-skill')?.value) || 0);
+        const total = berry + food + skill;
+        if (total <= 0) return boxAvg.all || 0;
+        return ((boxAvg.berry || 0) * berry + (boxAvg.food || 0) * food + (boxAvg.skill || 0) * skill) / total;
+    }
+    return boxAvg.all || 0;
+}
+
+function getDrySpellLuckLabel(zeroProb) {
+    if (zeroProb >= 0.30) return { label: '正常波动', cls: 'text-slate-700 bg-slate-100 border-slate-200' };
+    if (zeroProb >= 0.10) return { label: '略微偏干', cls: 'text-amber-700 bg-amber-50 border-amber-100' };
+    if (zeroProb >= 0.03) return { label: '明显偏非', cls: 'text-orange-700 bg-orange-50 border-orange-100' };
+    if (zeroProb >= 0.01) return { label: '很非', cls: 'text-red-700 bg-red-50 border-red-100' };
+    return { label: '非常非', cls: 'text-rose-700 bg-rose-50 border-rose-100' };
+}
+
+function formatDrySpellPercent(x) {
+    const v = Math.max(0, Math.min(1, Number(x) || 0));
+    if (v < 0.001) return '<0.1%';
+    return (v * 100).toFixed(v < 0.03 ? 2 : 1) + '%';
+}
+
+function refreshDrySpellStartSuggestion() {
+    const definition = document.getElementById('dry-spell-definition')?.value || 'gradPlus';
+    const candidates = getDrySpellCandidateLogs(definition);
+    const dexCandidates = getDrySpellGraduationDexCandidates(definition);
+    const system = candidates[0] || null;
+    const suggest = document.getElementById('dry-spell-system-suggestion');
+    if (suggest) suggest.innerHTML = system ? `系统推测：<strong>${escapeHtml(getDrySpellStartDescription(system))}</strong>` : `系统未找到符合「${escapeHtml(getDrySpellDefinitionMeta(definition).label)}」的历史毕业记录，请手动指定起点或从毕业库选择。`;
+    const select = document.getElementById('dry-spell-start-log-id');
+    if (select) select.innerHTML = candidates.length ? candidates.map(log => `<option value="${escapeHtmlAttr(log.id)}">${escapeHtml(getDrySpellStartDescription(log))}</option>`).join('') : `<option value="">没有可选历史毕业记录</option>`;
+    const dexSelect = document.getElementById('dry-spell-start-dex-id');
+    if (dexSelect) dexSelect.innerHTML = dexCandidates.length ? dexCandidates.map(log => `<option value="${escapeHtmlAttr(log.id)}">${escapeHtml(getDrySpellStartDescription(log))}</option>`).join('') : `<option value="">没有可选毕业库档案</option>`;
+}
+
+function openGraduationDrySpellModal() {
+    const old = document.getElementById('graduation-dry-spell-modal');
+    if (old) old.remove();
+    const candidates = getDrySpellCandidateLogs('gradPlus');
+    const dexCandidates = getDrySpellGraduationDexCandidates('gradPlus');
+    const system = candidates[0] || null;
+    const today = getTodayLocalDateString();
+    const modal = document.createElement('div');
+    modal.id = 'graduation-dry-spell-modal';
+    modal.className = 'fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-center justify-center z-[70] p-4 animate-fadeIn';
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-5 md:p-6 max-w-3xl w-full shadow-2xl flex flex-col gap-4 relative max-h-[88vh] overflow-y-auto" onclick="event.stopPropagation()">
+        <button onclick="document.getElementById('graduation-dry-spell-modal')?.remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
+        <div class="text-center border-b border-slate-100 pb-3 pr-8">
+            <h3 class="text-base font-black text-slate-900 flex items-center justify-center gap-1.5"><i class="fa-solid fa-cloud-rain text-rose-500"></i> 毕业断档分析</h3>
+            <p class="text-[10px] text-slate-500 font-bold mt-1">确认最近一次毕业起点与未记录补正后，点击按钮才会计算一次；不会实时演算。</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col gap-2">
+                <label class="text-[10px] font-black text-slate-500 uppercase tracking-widest">毕业定义</label>
+                <select id="dry-spell-definition" onchange="refreshDrySpellStartSuggestion()" class="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-black focus:outline-none focus:border-rose-400">
+                    <option value="gradPlus">毕业及以上</option><option value="tiedPlus">和解及以上</option><option value="goldOnly">只看金帮毕业</option>
+                </select>
+                <p class="text-[10px] text-slate-500 leading-relaxed">默认把毕业 / 大毕业 / 金帮毕业视为断档终点；和解是否算终点可自行切换。</p>
+            </div>
+            <div class="bg-rose-50/70 border border-rose-100 rounded-2xl p-3 flex flex-col gap-2">
+                <div class="text-[10px] font-black text-rose-700 uppercase tracking-widest">系统默认起点</div>
+                <div id="dry-spell-system-suggestion" class="text-xs text-rose-950 leading-relaxed">${system ? `系统推测：<strong>${escapeHtml(getDrySpellStartDescription(system))}</strong>` : '系统未找到历史毕业记录，请手动指定起点。'}</div>
+                <p class="text-[10px] text-rose-700 leading-relaxed">如果这不是你真实最近一次毕业，请选择下方手动起点。</p>
+            </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-2xl p-3 flex flex-col gap-3">
+            <div class="font-black text-slate-800 text-xs flex items-center gap-1"><i class="fa-solid fa-location-dot text-indigo-500"></i> 断档起点确认</div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-2 text-[11px] font-bold text-slate-700">
+                <label class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"><input type="radio" name="dry-spell-start-mode" value="system" checked class="accent-rose-500">使用系统推测</label>
+                <label class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"><input type="radio" name="dry-spell-start-mode" value="history" class="accent-rose-500">从历史记录选择</label>
+                <label class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"><input type="radio" name="dry-spell-start-mode" value="dex" class="accent-rose-500">从毕业库选择</label>
+                <label class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"><input type="radio" name="dry-spell-start-mode" value="manual" class="accent-rose-500">手动输入时间</label>
+            </div>
+            <div><label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">历史记录起点</label><select id="dry-spell-start-log-id" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400">${candidates.length ? candidates.map(log => `<option value="${escapeHtmlAttr(log.id)}">${escapeHtml(getDrySpellStartDescription(log))}</option>`).join('') : '<option value="">没有可选历史毕业记录</option>'}</select></div>
+            <div><label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">毕业库起点</label><select id="dry-spell-start-dex-id" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400">${dexCandidates.length ? dexCandidates.map(log => `<option value="${escapeHtmlAttr(log.id)}">${escapeHtml(getDrySpellStartDescription(log))}</option>`).join('') : '<option value="">没有可选毕业库档案</option>'}</select></div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+                <div><label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">手动日期</label><input id="dry-spell-manual-date" type="date" value="${escapeHtmlAttr(today)}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400"></div>
+                <div><label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">一觉/二觉</label><select id="dry-spell-manual-session" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400"><option value="">不确定：从该日期之后</option><option value="一觉">一觉之后</option><option value="二觉">二觉之后</option></select></div>
+                <div><label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">宝可梦名</label><input id="dry-spell-manual-name" type="text" placeholder="选填" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400"></div>
+                <div><label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">档位</label><select id="dry-spell-manual-result" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400"><option value="grad">毕业</option><option value="bigGrad">大毕业</option><option value="goldGrad">金帮毕业</option><option value="tied">和解</option></select></div>
+            </div>
+        </div>
+        <div class="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3 flex flex-col gap-3">
+            <div class="font-black text-indigo-900 text-xs flex items-center gap-1"><i class="fa-solid fa-sliders text-indigo-500"></i> 未记录失败样本补正</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div><label class="block text-[10px] font-black text-indigo-700 mb-1">最近毕业后，额外未记录的未毕业捕捉数</label><input id="dry-spell-extra-miss" type="number" min="0" value="0" class="w-full bg-white border border-indigo-100 rounded-xl px-3 py-2 text-xs font-mono font-black focus:outline-none focus:border-indigo-400"><p class="text-[10px] text-indigo-700 mt-1 leading-relaxed">例如你知道最近毕业之后还抓了 20 只没出货，但没录进历史抽卡库，就填 20。</p></div>
+                <div><label class="block text-[10px] font-black text-indigo-700 mb-1">额外样本概率估算</label><select id="dry-spell-extra-mode" class="w-full bg-white border border-indigo-100 rounded-xl px-3 py-2 text-xs font-black focus:outline-none focus:border-indigo-400"><option value="box">按当前 Box 平均结构估算</option><option value="streak">按本段已记录捕捉结构估算</option><option value="manual">手动指定三系比例</option></select></div>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+                <label class="text-[10px] font-black text-amber-700">树果权重<input id="dry-spell-ratio-berry" type="number" min="0" value="1" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                <label class="text-[10px] font-black text-emerald-700">食材权重<input id="dry-spell-ratio-food" type="number" min="0" value="1" class="mt-1 w-full bg-white border border-emerald-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                <label class="text-[10px] font-black text-purple-700">技能权重<input id="dry-spell-ratio-skill" type="number" min="0" value="1" class="mt-1 w-full bg-white border border-purple-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+            </div>
+        </div>
+        <button onclick="runGraduationDrySpellAnalysis()" class="w-full bg-gradient-to-r from-rose-600 via-orange-500 to-rose-600 hover:from-rose-500 hover:via-orange-400 hover:to-rose-500 text-white font-black text-sm py-3 rounded-2xl shadow-lg active:scale-95 transition flex items-center justify-center gap-2"><i class="fa-solid fa-calculator"></i> 开始计算毕业断档</button>
+        <div id="dry-spell-result" class="hidden"></div>
+    </div>`;
+    document.body.appendChild(modal);
+    enhanceDrySpellModalControls(modal);
+}
+
+function formatDateTimeForDisplay(dateLike) {
+    const d = dateLike instanceof Date ? dateLike : new Date(dateLike);
+    if (!d || Number.isNaN(d.getTime())) return '';
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function getDrySpellScore(zeroProb) {
+    if (!Number.isFinite(zeroProb)) return 0;
+    const p = Math.max(Number(zeroProb) || 0, 1e-12);
+    return Math.max(0, Math.min(99.9, -Math.log10(p) * 10));
+}
+
+function formatDrySpellScore(score) {
+    const s = Number(score) || 0;
+    return (Math.round(s * 10) / 10).toFixed(1);
+}
+
+function collectDrySpellFormSnapshot() {
+    return {
+        definition: document.getElementById('dry-spell-definition')?.value || 'gradPlus',
+        mode: document.querySelector('input[name="dry-spell-start-mode"]:checked')?.value || 'system',
+        selectedId: document.getElementById('dry-spell-start-log-id')?.value || '',
+        selectedDexId: document.getElementById('dry-spell-start-dex-id')?.value || '',
+        manualDate: normalizeSleepResearchDateValue(document.getElementById('dry-spell-manual-date')?.value || ''),
+        manualSession: document.getElementById('dry-spell-manual-session')?.value || '',
+        manualName: (document.getElementById('dry-spell-manual-name')?.value || '').trim(),
+        manualResult: document.getElementById('dry-spell-manual-result')?.value || 'grad',
+        extraMiss: Math.max(0, Math.floor(Number(document.getElementById('dry-spell-extra-miss')?.value) || 0)),
+        extraMode: document.getElementById('dry-spell-extra-mode')?.value || 'box',
+        ratioBerry: Math.max(0, Number(document.getElementById('dry-spell-ratio-berry')?.value) || 0),
+        ratioFood: Math.max(0, Number(document.getElementById('dry-spell-ratio-food')?.value) || 0),
+        ratioSkill: Math.max(0, Number(document.getElementById('dry-spell-ratio-skill')?.value) || 0)
+    };
+}
+
+function applyDrySpellFormSnapshot(snapshot) {
+    if (!snapshot) return;
+    const setValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = value;
+    };
+    setValue('dry-spell-definition', snapshot.definition || 'gradPlus');
+    const mode = snapshot.mode || 'system';
+    const radio = document.querySelector(`input[name="dry-spell-start-mode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
+    refreshDrySpellStartSuggestion();
+    setValue('dry-spell-start-log-id', snapshot.selectedId || '');
+    setValue('dry-spell-start-dex-id', snapshot.selectedDexId || '');
+    setValue('dry-spell-manual-date', snapshot.manualDate || '');
+    setValue('dry-spell-manual-session', snapshot.manualSession || '');
+    setValue('dry-spell-manual-name', snapshot.manualName || '');
+    setValue('dry-spell-manual-result', snapshot.manualResult || 'grad');
+    setValue('dry-spell-extra-miss', snapshot.extraMiss ?? 0);
+    setValue('dry-spell-extra-mode', snapshot.extraMode || 'box');
+    setValue('dry-spell-ratio-berry', snapshot.ratioBerry ?? 1);
+    setValue('dry-spell-ratio-food', snapshot.ratioFood ?? 1);
+    setValue('dry-spell-ratio-skill', snapshot.ratioSkill ?? 1);
+}
+
+function isDrySpellAnalysisStateLog(log) {
+    return !!(log && log.type === 'dry_spell_analysis_state');
+}
+
+function getDrySpellAnalysisStateFromHistory() {
+    const records = (Array.isArray(historyLogs) ? historyLogs : []).filter(isDrySpellAnalysisStateLog);
+    if (!records.length) return null;
+    const newest = records.reduce((best, item) => chooseNewerHistoryLog(best, item), null);
+    return newest && newest.payload ? newest.payload : null;
+}
+
+function saveDrySpellAnalysisSnapshot(payload, options = {}) {
+    try { localStorage.setItem(DRY_SPELL_STORAGE_KEY, JSON.stringify(payload)); } catch (_) {}
+    lastDrySpellAnalysisSnapshot = payload;
+
+    if (currentCloudUser) {
+        const existing = (Array.isArray(historyLogs) ? historyLogs : []).find(isDrySpellAnalysisStateLog);
+        const now = new Date().toISOString();
+        const log = {
+            id: DRY_SPELL_STATE_LOG_ID,
+            type: 'dry_spell_analysis_state',
+            payload,
+            createdAt: existing?.createdAt || now,
+            updatedAt: now
+        };
+        historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !isDrySpellAnalysisStateLog(item));
+        historyLogs.push(log);
+        historyLogs = mergeHistoryLogs([], historyLogs);
+        saveHistoryToLocal();
+        if (options.saveCloudNow !== false) saveHistoryToCloudNow();
+    }
+
+    const loadBtn = document.getElementById('dry-spell-load-last-btn');
+    if (loadBtn) loadBtn.disabled = false;
+}
+
+function loadDrySpellAnalysisSnapshot() {
+    const cloudPayload = currentCloudUser ? getDrySpellAnalysisStateFromHistory() : null;
+    if (cloudPayload && cloudPayload.summary) {
+        lastDrySpellAnalysisSnapshot = cloudPayload;
+        try { localStorage.setItem(DRY_SPELL_STORAGE_KEY, JSON.stringify(cloudPayload)); } catch (_) {}
+        return cloudPayload;
+    }
+
+    if (lastDrySpellAnalysisSnapshot) return lastDrySpellAnalysisSnapshot;
+
+    try {
+        const raw = localStorage.getItem(DRY_SPELL_STORAGE_KEY);
+        if (!raw) return null;
+        lastDrySpellAnalysisSnapshot = JSON.parse(raw);
+        return lastDrySpellAnalysisSnapshot;
+    } catch (_) {
+        return null;
+    }
+}
+
+function enhanceDrySpellModalControls(modal) {
+    if (!modal || modal.dataset.drySpellEnhanced === '1') return;
+    modal.dataset.drySpellEnhanced = '1';
+    const calcBtn = modal.querySelector('button[onclick="runGraduationDrySpellAnalysis()"]');
+    if (!calcBtn) return;
+    const container = calcBtn.parentElement;
+    if (!container) return;
+
+    const row = document.createElement('div');
+    row.className = 'grid grid-cols-1 md:grid-cols-3 gap-2';
+    calcBtn.classList.add('md:col-span-2');
+    row.appendChild(calcBtn);
+
+    const loadBtn = document.createElement('button');
+    loadBtn.id = 'dry-spell-load-last-btn';
+    loadBtn.type = 'button';
+    loadBtn.className = 'w-full bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-black text-sm py-3 rounded-2xl shadow-sm active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-45 disabled:cursor-not-allowed';
+    loadBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> 载入上次结果';
+    loadBtn.onclick = restoreDrySpellLastAnalysis;
+    const saved = loadDrySpellAnalysisSnapshot();
+    loadBtn.disabled = !(saved && saved.summary);
+    row.appendChild(loadBtn);
+    container.insertBefore(row, calcBtn);
+
+    const note = document.createElement('div');
+    note.className = 'text-[10px] text-slate-500 font-bold bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2';
+    note.textContent = '说明：本模块不会实时计算。点击“开始计算毕业断档”后，结果会自动保存；登录状态下会跟随账号同步，下次可直接点“载入上次结果”。';
+    container.insertBefore(note, calcBtn.nextSibling);
+}
+
+function renderDrySpellAnalysisResult(summary) {
+    const definitionLabel = summary.definitionLabel || '毕业及以上';
+    const warningHTML = summary.recordedGrad > 0
+        ? `<div class="bg-rose-50 border border-rose-100 text-rose-800 rounded-2xl p-3 text-xs leading-relaxed"><strong>注意：</strong>你选择的断档起点之后，历史记录里仍检测到 ${summary.recordedGrad} 只符合「${escapeHtml(definitionLabel)}」的记录。这通常说明起点不是最近毕业，或者历史记录/毕业定义需要调整。本报告仍会给出统计，但“连续 0 毕业概率”只适合作为参考。</div>`
+        : '';
+    const typeCards = [
+        ['berry', '树果型', 'amber'],
+        ['food', '食材型', 'emerald'],
+        ['skill', '技能型', 'purple']
+    ].map(([key, label, color]) => {
+        const stats = summary.typeStats?.[key] || { count: 0, expected: 0 };
+        return `<div class="bg-white border border-${color}-100 rounded-2xl p-3"><div class="text-[10px] font-black text-${color}-700">${label}</div><div class="text-lg font-mono font-black text-${color}-700">${stats.count || 0}</div><div class="text-[10px] text-slate-500 font-bold">期望 ${Number(stats.expected || 0).toFixed(2)} 只</div></div>`;
+    }).join('');
+
+    return `
+        <div class="mt-2 bg-slate-50 border border-slate-200 rounded-3xl p-4 flex flex-col gap-4 text-xs">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                    <div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">断档分析结果</div>
+                    <div class="text-sm font-black text-slate-900 mt-1">起点：${escapeHtml(summary.boundaryDescription || '未指定')}</div>
+                    <div class="text-[10px] text-slate-500 font-bold mt-0.5">起点来源：${escapeHtml(summary.sourceLabel || '未知')} · 毕业定义：${escapeHtml(definitionLabel)}${summary.generatedAtLabel ? ' · 生成于：' + escapeHtml(summary.generatedAtLabel) : ''}</div>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap justify-end">
+                    <span class="inline-flex items-center justify-center px-3 py-2 rounded-2xl border text-xs font-black ${summary.luckCls || 'bg-slate-100 text-slate-700 border-slate-200'}">${escapeHtml(summary.luckLabel || '已计算')}</span>
+                    <div class="bg-white border border-slate-200 rounded-2xl px-3 py-2 text-center min-w-[92px]">
+                        <div class="text-[9px] font-black text-slate-400">断档评分</div>
+                        <div class="text-lg font-mono font-black text-slate-900">${formatDrySpellScore(summary.dryScore)}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" onclick="downloadDrySpellAnalysisSummaryImage()" class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-black transition"><i class="fa-solid fa-image mr-1"></i>生成总结图片</button>
+                <button type="button" onclick="restoreDrySpellLastAnalysis()" class="px-3 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-[11px] font-black transition"><i class="fa-solid fa-clock-rotate-left mr-1"></i>载入已保存结果</button>
+            </div>
+            ${warningHTML}
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-2">
+                <div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">已记录捕捉</div><div class="text-xl font-mono font-black text-slate-900">${summary.recordedTotal}</div></div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">已记录未毕业</div><div class="text-xl font-mono font-black text-slate-900">${summary.recordedMiss}</div></div>
+                <div class="bg-white border border-indigo-100 rounded-2xl p-3"><div class="text-[9px] font-black text-indigo-500">人工补正未毕业</div><div class="text-xl font-mono font-black text-indigo-700">+${summary.extraMiss}</div></div>
+                <div class="bg-white border border-amber-100 rounded-2xl p-3"><div class="text-[9px] font-black text-amber-500">理论期望毕业</div><div class="text-xl font-mono font-black text-amber-700">${Number(summary.expectedTotal || 0).toFixed(2)}</div></div>
+                <div class="bg-white border border-rose-100 rounded-2xl p-3"><div class="text-[9px] font-black text-rose-500">连续 0 毕业概率</div><div class="text-xl font-mono font-black text-rose-700">${formatDrySpellPercent(summary.zeroProbTotal || 0)}</div></div>
+                <div class="bg-white border border-sky-100 rounded-2xl p-3"><div class="text-[9px] font-black text-sky-500">至少 1 毕业概率</div><div class="text-xl font-mono font-black text-sky-700">${formatDrySpellPercent(1 - (summary.zeroProbTotal || 0))}</div></div>
+            </div>
+            <div class="bg-white border border-slate-200 rounded-2xl p-3 leading-relaxed text-slate-600">解释：以这段已记录捕捉结构加上人工补正样本估算，理论上应该出现约 <strong>${Number(summary.expectedTotal || 0).toFixed(2)}</strong> 只「${escapeHtml(definitionLabel)}」。连续没有出现的概率约为 <strong>${formatDrySpellPercent(summary.zeroProbTotal || 0)}</strong>；也就是理论上至少出 1 只的概率约为 <strong>${formatDrySpellPercent(1 - (summary.zeroProbTotal || 0))}</strong>。断档评分采用 <strong>-10 × log10(连续 0 毕业概率)</strong>，分数越高，代表这段断档越非、越罕见。</div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-2">${typeCards}</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="font-black text-slate-800 mb-2">这段都抓了哪些宝</div>${(summary.topSpeciesByCount || []).length ? summary.topSpeciesByCount.map(s => `<div class="flex justify-between gap-2 border-b border-slate-50 last:border-0 py-1"><span class="font-bold text-slate-600">${escapeHtml(s.name)}</span><span class="font-mono font-black text-slate-800">${s.count} 只</span></div>`).join('') : '<div class="text-slate-400 font-bold">没有可统计的历史捕捉。</div>'}</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="font-black text-slate-800 mb-2">理论最该出货但没出的来源</div>${(summary.topSpeciesByExpected || []).length ? summary.topSpeciesByExpected.map(s => `<div class="flex justify-between gap-2 border-b border-slate-50 last:border-0 py-1"><span class="font-bold text-slate-600">${escapeHtml(s.name)} · ${s.count} 抓</span><span class="font-mono font-black text-rose-700">期望 ${Number(s.expected || 0).toFixed(2)}</span></div>`).join('') : '<div class="text-slate-400 font-bold">没有可统计的理论期望。</div>'}</div>
+            </div>
+            <div class="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3 text-indigo-900 leading-relaxed">人工补正：${summary.extraMiss} 只；估算口径：${escapeHtml(summary.extraModeLabel || '按当前 Box 平均结构估算')}；补正样本单抓平均毕业率约 ${formatDrySpellPercent(summary.extraAvgProb || 0)}。${summary.unknownCount ? `另有 ${summary.unknownCount} 条记录因宝可梦类型/概率矩阵缺失未计入概率，只计入数量。` : ''} 本次结果已自动保存；登录状态下会跟随账号同步，下次可直接载入。</div>
+        </div>`;
+}
+
+function renderDrySpellResultFromSummary(summary) {
+    const resultEl = document.getElementById('dry-spell-result');
+    if (!resultEl || !summary) return;
+    resultEl.classList.remove('hidden');
+    resultEl.innerHTML = renderDrySpellAnalysisResult(summary);
+}
+
+function restoreDrySpellLastAnalysis() {
+    const payload = loadDrySpellAnalysisSnapshot();
+    if (!payload || !payload.summary) {
+        showToast('还没有已保存的毕业断档分析结果');
+        return;
+    }
+    applyDrySpellFormSnapshot(payload.form || {});
+    renderDrySpellResultFromSummary(payload.summary);
+    showToast('已载入上次保存的毕业断档分析结果');
+}
+
+function downloadDrySpellAnalysisSummaryImage() {
+    const payload = loadDrySpellAnalysisSnapshot();
+    const summary = payload?.summary;
+    if (!summary) {
+        showToast('请先计算一次毕业断档分析');
+        return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1440;
+    const ctx = canvas.getContext('2d');
+    const fillRoundRect = (x, y, w, h, r, fill, stroke) => {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+    };
+    const drawText = (text, x, y, opt = {}) => {
+        const { size = 30, color = '#0f172a', weight = '700', maxWidth = 900, lineHeight = size * 1.45 } = opt;
+        ctx.fillStyle = color;
+        ctx.font = `${weight} ${size}px sans-serif`;
+        const chars = String(text || '').split('');
+        let line = '';
+        let yy = y;
+        chars.forEach((ch, idx) => {
+            const test = line + ch;
+            if (ctx.measureText(test).width > maxWidth && line) {
+                ctx.fillText(line, x, yy);
+                line = ch;
+                yy += lineHeight;
+            } else {
+                line = test;
+            }
+            if (idx === chars.length - 1 && line) ctx.fillText(line, x, yy);
+        });
+        return yy;
+    };
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    fillRoundRect(36, 36, 1008, 1368, 28, '#ffffff', '#e2e8f0');
+    ctx.fillStyle = '#e11d48';
+    ctx.font = '900 46px sans-serif';
+    ctx.fillText('📉 毕业断档分析总结', 72, 110);
+    drawText(`断档评分 ${formatDrySpellScore(summary.dryScore)} · ${summary.luckLabel}`, 72, 165, { size: 34, color: '#334155', weight: '800' });
+    drawText(`起点：${summary.boundaryDescription || '未指定'}`, 72, 215, { size: 24, color: '#475569', weight: '700' });
+    drawText(`起点来源：${summary.sourceLabel || '未知'} · 毕业定义：${summary.definitionLabel || '毕业及以上'}`, 72, 252, { size: 20, color: '#64748b', weight: '700' });
+    if (summary.generatedAtLabel) drawText(`生成于：${summary.generatedAtLabel}`, 72, 284, { size: 18, color: '#94a3b8', weight: '700' });
+
+    const cards = [
+        ['已记录捕捉', String(summary.recordedTotal)],
+        ['已记录未毕业', String(summary.recordedMiss)],
+        ['人工补正未毕业', '+' + String(summary.extraMiss)],
+        ['理论期望毕业', Number(summary.expectedTotal || 0).toFixed(2)],
+        ['连续0毕业概率', formatDrySpellPercent(summary.zeroProbTotal || 0)],
+        ['至少1毕业概率', formatDrySpellPercent(1 - (summary.zeroProbTotal || 0))]
+    ];
+    let cx = 72, cy = 330;
+    cards.forEach((card, i) => {
+        fillRoundRect(cx, cy, 292, 120, 18, '#f8fafc', '#e2e8f0');
+        drawText(card[0], cx + 18, 370, { size: 18, color: '#64748b', weight: '800', maxWidth: 250 });
+        drawText(card[1], cx + 18, 415, { size: 32, color: '#0f172a', weight: '900', maxWidth: 250 });
+        cx += 320;
+        if ((i % 3) === 2) { cx = 72; cy += 144; }
+    });
+
+    let y = 640;
+    fillRoundRect(72, y, 936, 140, 20, '#fff7ed', '#fdba74');
+    drawText(`解释：理论上这段已记录捕捉加上补正样本，应该出现约 ${Number(summary.expectedTotal || 0).toFixed(2)} 只「${summary.definitionLabel || '毕业及以上'}」。连续没有出现的概率约为 ${formatDrySpellPercent(summary.zeroProbTotal || 0)}。`, 92, y + 40, { size: 22, color: '#7c2d12', weight: '700', maxWidth: 896, lineHeight: 34 });
+    y += 170;
+
+    fillRoundRect(72, y, 448, 300, 20, '#f8fafc', '#e2e8f0');
+    drawText('这段都抓了哪些宝', 92, y + 35, { size: 24, color: '#0f172a', weight: '900' });
+    (summary.topSpeciesByCount || []).slice(0, 8).forEach((s, idx) => {
+        drawText(`${idx + 1}. ${s.name}`, 92, y + 78 + idx * 26, { size: 18, color: '#475569', weight: '700', maxWidth: 250 });
+        drawText(`${s.count}只`, 460, y + 78 + idx * 26, { size: 18, color: '#0f172a', weight: '800', maxWidth: 50 });
+    });
+    fillRoundRect(560, y, 448, 300, 20, '#f8fafc', '#e2e8f0');
+    drawText('理论最该出货但没出的来源', 580, y + 35, { size: 24, color: '#0f172a', weight: '900' });
+    (summary.topSpeciesByExpected || []).slice(0, 8).forEach((s, idx) => {
+        drawText(`${idx + 1}. ${s.name}`, 580, y + 78 + idx * 26, { size: 18, color: '#475569', weight: '700', maxWidth: 230 });
+        drawText(`期望${Number(s.expected || 0).toFixed(2)}`, 912, y + 78 + idx * 26, { size: 18, color: '#be123c', weight: '900', maxWidth: 80 });
+    });
+    y += 330;
+
+    fillRoundRect(72, y, 936, 210, 20, '#eef2ff', '#c7d2fe');
+    drawText(`人工补正：${summary.extraMiss} 只；估算口径：${summary.extraModeLabel || '按当前 Box 平均结构估算'}；补正样本平均毕业率约 ${formatDrySpellPercent(summary.extraAvgProb || 0)}。`, 92, y + 40, { size: 22, color: '#312e81', weight: '700', maxWidth: 896, lineHeight: 34 });
+    drawText('说明：本图由网站“毕业断档分析”一键生成，仅作为过往断档统计回顾，不代表未来保底。', 92, y + 130, { size: 18, color: '#4338ca', weight: '700', maxWidth: 896, lineHeight: 28 });
+
+    const link = document.createElement('a');
+    const safeDate = (summary.generatedAtLabel || new Date().toISOString().slice(0, 10)).replace(/[^0-9A-Za-z\-]/g, '-');
+    link.href = canvas.toDataURL('image/png');
+    link.download = `毕业断档分析总结_${safeDate}.png`;
+    link.click();
+}
+
+function runGraduationDrySpellAnalysis() {
+    const resultEl = document.getElementById('dry-spell-result');
+    if (!resultEl) return;
+    const boundary = getDrySpellStartBoundaryFromForm();
+    if (!boundary.ok) {
+        showToast(boundary.message || '请先确认断档起点');
+        resultEl.classList.remove('hidden');
+        resultEl.innerHTML = `<div class="bg-rose-50 border border-rose-100 text-rose-700 rounded-2xl p-3 text-xs font-bold">${escapeHtml(boundary.message || '无法计算')}</div>`;
+        return;
+    }
+    const definition = boundary.definition || 'gradPlus';
+    const captureLogs = getDrySpellCaptureLogs();
+    const catchIndexMap = buildDrySpellCatchIndexMap(captureLogs);
+    const rangeLogs = captureLogs.filter(log => isDrySpellLogAfterBoundary(log, boundary));
+    const rangeItems = rangeLogs.map(log => {
+        const catchIndex = catchIndexMap.get(String(log.id)) || 1;
+        const probability = getDrySpellProbabilityForLog(log, catchIndex, definition);
+        const isGrad = isDrySpellGraduationResult(log.result, definition);
+        const pType = getLuckScoringTypeForPokemon(normalizeStandardName(log.name));
+        return { log, catchIndex, probability, isGrad, broadType: getDrySpellBroadTypeFromScoringType(pType) };
+    });
+
+    const recordedTotal = rangeItems.length;
+    const recordedGrad = rangeItems.filter(item => item.isGrad).length;
+    const recordedMiss = Math.max(0, recordedTotal - recordedGrad);
+    const validItems = rangeItems.filter(item => Number.isFinite(item.probability));
+    const unknownItems = rangeItems.filter(item => !Number.isFinite(item.probability));
+    const expectedRecorded = validItems.reduce((sum, item) => sum + item.probability, 0);
+    const zeroProbRecorded = validItems.reduce((prod, item) => prod * Math.max(0, 1 - item.probability), 1);
+    const extraMiss = Math.max(0, Math.floor(Number(document.getElementById('dry-spell-extra-miss')?.value) || 0));
+    const extraMode = document.getElementById('dry-spell-extra-mode')?.value || 'box';
+    const extraAvgProb = getDrySpellExtraAverageProbability(definition, extraMode, validItems);
+    const expectedTotal = expectedRecorded + extraMiss * extraAvgProb;
+    const zeroProbTotal = zeroProbRecorded * Math.pow(Math.max(0, 1 - extraAvgProb), extraMiss);
+    const luck = getDrySpellLuckLabel(zeroProbTotal);
+    const dryScore = getDrySpellScore(zeroProbTotal);
+
+    const speciesStats = new Map();
+    const typeStats = { berry: { count: 0, expected: 0 }, food: { count: 0, expected: 0 }, skill: { count: 0, expected: 0 } };
+    rangeItems.forEach(item => {
+        const name = normalizeStandardName(item.log.name);
+        if (!speciesStats.has(name)) speciesStats.set(name, { name, count: 0, expected: 0, grad: 0 });
+        const s = speciesStats.get(name);
+        s.count += 1;
+        s.expected += Number.isFinite(item.probability) ? item.probability : 0;
+        if (item.isGrad) s.grad += 1;
+        const t = typeStats[item.broadType] || typeStats.skill;
+        t.count += 1;
+        t.expected += Number.isFinite(item.probability) ? item.probability : 0;
+    });
+
+    const topSpeciesByCount = Array.from(speciesStats.values()).sort((a, b) => b.count - a.count || b.expected - a.expected).slice(0, 8);
+    const topSpeciesByExpected = Array.from(speciesStats.values()).sort((a, b) => b.expected - a.expected || b.count - a.count).slice(0, 8);
+    const definitionLabel = getDrySpellDefinitionMeta(definition).label;
+    const extraModeLabel = extraMode === 'streak'
+        ? '按本段已记录捕捉结构估算'
+        : (extraMode === 'manual' ? '按手动三系比例估算' : '按当前 Box 平均结构估算');
+
+    const summary = {
+        boundaryDescription: boundary.description,
+        sourceLabel: boundary.sourceLabel,
+        definition,
+        definitionLabel,
+        recordedTotal,
+        recordedGrad,
+        recordedMiss,
+        extraMiss,
+        expectedTotal,
+        zeroProbTotal,
+        dryScore,
+        luckLabel: luck.label,
+        luckCls: luck.cls,
+        typeStats,
+        topSpeciesByCount,
+        topSpeciesByExpected,
+        extraModeLabel,
+        extraAvgProb,
+        unknownCount: unknownItems.length,
+        generatedAt: new Date().toISOString(),
+        generatedAtLabel: formatDateTimeForDisplay(new Date())
+    };
+
+    renderDrySpellResultFromSummary(summary);
+    saveDrySpellAnalysisSnapshot({ form: collectDrySpellFormSnapshot(), summary, savedAt: new Date().toISOString() });
+    showToast(currentCloudUser ? '已完成毕业断档分析，并同步保存到账号' : '已完成毕业断档分析，并自动保存本次结果');
+}
 async function openHistoryModal(skipCloudRefresh = false) {
     // 登录状态优先拉云端最新历史；但删除/编辑后本地已是最新时，可跳过云端刷新，避免旧云端数据被合并回画面。
     if (skipCloudRefresh) {
@@ -12279,6 +13046,10 @@ async function openHistoryModal(skipCloudRefresh = false) {
             <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-book-open text-indigo-500"></i> 历史抽卡时光长卷</h3>
             <p class="text-[10px] text-slate-400 font-medium mt-0.5">可按睡眠研究查看，也可切回原始捕捉流水。</p>
         </div>
+
+        <button onclick="openGraduationDrySpellModal()" class="w-full bg-gradient-to-r from-rose-50 via-orange-50 to-rose-50 hover:from-rose-100 hover:via-orange-100 hover:to-rose-100 text-rose-700 border border-rose-100 font-black text-xs py-2.5 rounded-2xl transition flex items-center justify-center gap-2" title="基于历史抽卡库，点击后一次性分析距离上一个毕业宝后的断档情况">
+            <i class="fa-solid fa-cloud-rain"></i> 📉 毕业断档分析
+        </button>
 
         <div class="grid grid-cols-2 gap-2">
             <button id="history-tab-research" onclick="setHistoryViewMode('research')" class="bg-slate-900 text-white rounded-xl px-3 py-2 text-xs font-black">睡眠研究视图</button>
@@ -13941,6 +14712,17 @@ window.submitDailyCheckIn = function submitDailyCheckInV22(event) {
     const editHistoryId = modal?.dataset?.editHistoryId || '';
     if (editHistoryId) {
         return submitEditHistoryLog(editHistoryId);
+    }
+
+    // v39 修正：出货库补录 / 出货库编辑复用了每日录入面板，但绝不能走每日捕捉新增流程。
+    // 即使某些浏览器没有吃到按钮 onclick 替换，也要由 submitDailyCheckIn 在入口强制分流，避免出货库保存时误增大仓捕捉数。
+    if (modal?.dataset?.mode === 'graduationBackfill') {
+        return submitGraduationDexBackfill();
+    }
+
+    const editGraduationDexId = modal?.dataset?.editGraduationDexId || '';
+    if (editGraduationDexId) {
+        return submitEditGraduationDexEntry(editGraduationDexId, modal?.dataset?.editGraduationDexMode || 'current');
     }
 
     const modalContext = {
