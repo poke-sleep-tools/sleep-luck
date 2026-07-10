@@ -12658,7 +12658,12 @@ function enhanceDrySpellModalControls(modal) {
     if (!container) return;
 
     const row = document.createElement('div');
-    row.className = 'grid grid-cols-1 md:grid-cols-3 gap-2';
+    row.className = 'sticky bottom-0 z-20 grid grid-cols-1 md:grid-cols-3 gap-2 bg-white/95 backdrop-blur border-t border-slate-200 pt-3 pb-1 -mx-1 px-1 shadow-[0_-8px_18px_rgba(15,23,42,0.06)]';
+
+    // 必须先把新容器插入原位置，再移动计算按钮。
+    // 旧逻辑先 row.appendChild(calcBtn)，会让 calcBtn 脱离 container，随后 insertBefore(row, calcBtn)
+    // 因参照节点已不属于 container 而抛出 NotFoundError，最终整组按钮都消失。
+    container.insertBefore(row, calcBtn);
     calcBtn.classList.add('md:col-span-2');
     row.appendChild(calcBtn);
 
@@ -12671,12 +12676,11 @@ function enhanceDrySpellModalControls(modal) {
     const saved = loadDrySpellAnalysisSnapshot();
     loadBtn.disabled = !(saved && saved.summary);
     row.appendChild(loadBtn);
-    container.insertBefore(row, calcBtn);
 
     const note = document.createElement('div');
-    note.className = 'text-[10px] text-slate-500 font-bold bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2';
+    note.className = 'md:col-span-3 text-[10px] text-slate-500 font-bold bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2';
     note.textContent = '说明：本模块不会实时计算。点击“开始计算毕业断档”后，结果会自动保存；登录状态下会跟随账号同步，下次可直接点“载入上次结果”。';
-    container.insertBefore(note, calcBtn.nextSibling);
+    row.appendChild(note);
 }
 
 function renderDrySpellAnalysisResult(summary) {
