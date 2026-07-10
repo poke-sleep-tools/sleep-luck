@@ -314,7 +314,7 @@
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <div class="bg-white border border-sky-100 rounded-2xl p-3">
                                     <div class="font-black text-sky-700 mb-2">库存曲线</div>
-                                    <p class="text-slate-600">睡眠研究中用掉的球会形成消耗记录；每日奖励、活动和礼包如果标记为已获得，会自动进入库存变化，并反映在库存曲线上。</p>
+                                    <p class="text-slate-600">睡眠研究中用掉的球会形成消耗记录；每日奖励、睡眠点数商店购买、活动和礼包如果标记为已获得/已购买，会自动进入库存变化，并反映在库存曲线上。</p>
                                 </div>
                                 <div class="bg-white border border-sky-100 rounded-2xl p-3">
                                     <div class="font-black text-sky-700 mb-2">模板管理</div>
@@ -1077,7 +1077,7 @@ function saveHistoryToLocal() {
 // ==========================================
 // 🎒 精灵球库存与规划中心 v1
 // 设计口径：当前库存由玩家手动校准、睡眠研究用球自动扣回/补回、以及“已领取/已购买/每日奖励实录”的球类获取自动增减；
-// 未领取活动、未购买礼包、商店计划和每日奖励期望只影响“预计库存”，不直接改当前库存。
+// 未领取活动、未购买礼包、商店计划和每日奖励期望只影响“预计库存”，不直接改当前库存；睡眠点数商店实际购买会作为真实流水进入库存曲线。
 // 主数据作为 history_logs 中的一条特殊状态记录同步到账号云端，避免额外改 Supabase 表结构。
 // ==========================================
 const BALL_PLANNER_STATE_LOG_ID = 'ball_planner_state_v1';
@@ -1094,6 +1094,7 @@ const BALL_SYSTEM_DAILY_REWARD_TEMPLATES = [
     { id: 'daily_great_1', sourceType: 'dailyReward', templateName: '蓝球 ×1', balls: { poke: 0, great: 1, ultra: 0 }, diamonds: 0, note: '每日奖励球类结果' },
     { id: 'daily_diamond_15', sourceType: 'dailyReward', templateName: '钻石 ×15', balls: { poke: 0, great: 0, ultra: 0 }, diamonds: 15, note: '每日奖励非球结果示例，可按实际情况修改。' }
 ];
+const BALL_SHOP_PURCHASE_COSTS = { regularPoke: 150, premiumPoke: 100, premiumGreat: 400 };
 
 let ballPlannerState = getDefaultBallPlannerState();
 
@@ -1228,8 +1229,9 @@ function normalizeBallTemplate(item = {}) {
 
 function normalizeBallPlannerEntry(item = {}) {
     if (!item) return null;
-    const sourceType = ['bundle', 'event', 'custom', 'dailyReward'].includes(item.sourceType) ? item.sourceType : 'custom';
-    const plannedWord = sourceType === 'bundle' ? 'planned' : 'planned';
+    const sourceType = ['bundle', 'event', 'custom', 'dailyReward', 'shopPurchase'].includes(item.sourceType) ? item.sourceType : 'custom';
+    const plannedWord = sourceType === 'shopPurchase' ? 'purchased' : 'planned';
+    const rawShopPurchase = item.shopPurchase || {};
     return {
         id: item.id || `ball_${Date.now()}_${Math.random().toString(36).slice(2)}`,
         sourceType,
@@ -1237,12 +1239,19 @@ function normalizeBallPlannerEntry(item = {}) {
         templateId: item.templateId || '',
         templateName: String(item.templateName || '').trim(),
         eventName: String(item.eventName || '').trim(),
-        displayName: String(item.displayName || item.eventName || item.sourceName || item.templateName || '自定义获取').trim() || '自定义获取',
+        displayName: String(item.displayName || item.eventName || item.sourceName || item.templateName || (sourceType === 'shopPurchase' ? '睡眠点数商店购买' : '自定义获取')).trim() || (sourceType === 'shopPurchase' ? '睡眠点数商店购买' : '自定义获取'),
         date: item.date || getTodayLocalDateString(),
         balls: normalizeBallCounts(item.balls || {}),
         diamonds: Math.max(0, Math.floor(Number(item.diamonds) || 0)),
         note: String(item.note || '').trim(),
+        shopPurchase: {
+            regularPoke: Math.max(0, Math.floor(Number(rawShopPurchase.regularPoke) || 0)),
+            premiumPoke: Math.max(0, Math.floor(Number(rawShopPurchase.premiumPoke) || 0)),
+            premiumGreat: Math.max(0, Math.floor(Number(rawShopPurchase.premiumGreat) || 0)),
+            spentPoints: Math.max(0, Math.floor(Number(rawShopPurchase.spentPoints) || 0))
+        },
         inventoryApplied: item.inventoryApplied === true,
+        shopApplied: item.shopApplied === true,
         createdAt: item.createdAt || new Date().toISOString(),
         updatedAt: item.updatedAt || item.createdAt || new Date().toISOString()
     };
@@ -1360,7 +1369,7 @@ function isBallPlannerEntryActualInventoryStatus(entry) {
     const sourceType = entry.sourceType || 'custom';
     const status = entry.status || 'planned';
     if (status === 'skipped' || status === 'planned') return false;
-    if (sourceType === 'bundle') return status === 'purchased' || status === 'received';
+    if (sourceType === 'bundle' || sourceType === 'shopPurchase') return status === 'purchased' || status === 'received';
     return status === 'received' || status === 'purchased';
 }
 
@@ -1376,6 +1385,45 @@ function applyBallPlannerEntryInventoryDelta(oldEntry, newEntry, options = {}) {
         ballPlannerState.currentInventory[k] = Math.floor(Number(ballPlannerState.currentInventory[k]) || 0) + deltaGain;
     });
     if (newEntry) newEntry.inventoryApplied = shouldApplyNew && BALL_KEYS.some(k => (Number(newBalls[k]) || 0) > 0);
+}
+
+function getBallShopPurchasePayload(entry, isOld = false, options = {}) {
+    const e = entry ? normalizeBallPlannerEntry(entry) : null;
+    if (!e || e.sourceType !== 'shopPurchase') return { regularPoke: 0, premiumPoke: 0, premiumGreat: 0, spentPoints: 0 };
+    const shouldApply = isOld ? e.shopApplied === true : (isBallPlannerEntryActualInventoryStatus(e) && options.applyNew !== false);
+    if (!shouldApply) return { regularPoke: 0, premiumPoke: 0, premiumGreat: 0, spentPoints: 0 };
+    const p = e.shopPurchase || {};
+    return {
+        regularPoke: Math.max(0, Math.floor(Number(p.regularPoke) || 0)),
+        premiumPoke: Math.max(0, Math.floor(Number(p.premiumPoke) || 0)),
+        premiumGreat: Math.max(0, Math.floor(Number(p.premiumGreat) || 0)),
+        spentPoints: Math.max(0, Math.floor(Number(p.spentPoints) || 0))
+    };
+}
+
+function applyBallPlannerShopPurchaseDelta(oldEntry, newEntry, options = {}) {
+    if (!isBallPlannerEnabled()) return;
+    const oldP = getBallShopPurchasePayload(oldEntry, true, options);
+    const newP = getBallShopPurchasePayload(newEntry, false, options);
+    const deltaRegularPoke = newP.regularPoke - oldP.regularPoke;
+    const deltaPremiumPoke = newP.premiumPoke - oldP.premiumPoke;
+    const deltaPremiumGreat = newP.premiumGreat - oldP.premiumGreat;
+    const deltaSpent = newP.spentPoints - oldP.spentPoints;
+
+    const shop = ballPlannerState.shop || (ballPlannerState.shop = getDefaultBallPlannerState().shop);
+    shop.sleepPointBalance = Math.max(0, Math.floor(Number(shop.sleepPointBalance) || 0) - deltaSpent);
+    shop.regularShopRemaining = Object.assign({}, getDefaultBallPlannerState().shop.regularShopRemaining, shop.regularShopRemaining || {});
+    shop.premiumShopRemaining = Object.assign({}, getDefaultBallPlannerState().shop.premiumShopRemaining, shop.premiumShopRemaining || {});
+    shop.regularShopRemaining.poke = Math.max(0, Math.floor(Number(shop.regularShopRemaining.poke) || 0) - deltaRegularPoke);
+    shop.premiumShopRemaining.poke = Math.max(0, Math.floor(Number(shop.premiumShopRemaining.poke) || 0) - deltaPremiumPoke);
+    shop.premiumShopRemaining.great = Math.max(0, Math.floor(Number(shop.premiumShopRemaining.great) || 0) - deltaPremiumGreat);
+
+    if (newEntry) newEntry.shopApplied = (newP.regularPoke + newP.premiumPoke + newP.premiumGreat + newP.spentPoints) > 0;
+}
+
+function applyBallPlannerEntryFullDelta(oldEntry, newEntry, options = {}) {
+    applyBallPlannerEntryInventoryDelta(oldEntry, newEntry, options);
+    applyBallPlannerShopPurchaseDelta(oldEntry, newEntry, options);
 }
 
 function getBallPlannerActualEntryGainsByDate() {
@@ -1490,6 +1538,7 @@ function getBallSourceTypeLabel(sourceType) {
     if (sourceType === 'bundle') return '礼包';
     if (sourceType === 'event') return '活动';
     if (sourceType === 'dailyReward') return '每日奖励';
+    if (sourceType === 'shopPurchase') return '睡眠点数商店';
     return '其他';
 }
 
@@ -1593,13 +1642,13 @@ function renderBallPlannerAnalysisHtml(f = getBallPlannerForecast()) {
     const netClass = a.redForecastNetGain >= 0 ? 'text-emerald-700' : 'text-rose-700';
     const dailyTop = Object.entries(daily.monthlyByName || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${escapeHtml(name)}×${count}`).join(' / ') || '暂无非球/球奖励分类';
     return `<div class="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-        <div class="rounded-2xl bg-sky-50 border border-sky-100 p-3"><div class="text-[10px] font-black text-sky-700">当前已知库存</div><div class="text-sm font-black font-mono text-sky-800">红${fmtBallNum(a.knownInventory.poke)} / 蓝${fmtBallNum(a.knownInventory.great)} / 黑黄${fmtBallNum(a.knownInventory.ultra)}</div><div class="text-[10px] text-sky-700 font-bold">只看玩家校准 + 已录研究用球</div></div>
+        <div class="rounded-2xl bg-sky-50 border border-sky-100 p-3"><div class="text-[10px] font-black text-sky-700">当前已知库存</div><div class="text-sm font-black font-mono text-sky-800">红${fmtBallNum(a.knownInventory.poke)} / 蓝${fmtBallNum(a.knownInventory.great)} / 黑黄${fmtBallNum(a.knownInventory.ultra)}</div><div class="text-[10px] text-sky-700 font-bold">校准 + 已录用球 + 实际获取流水</div></div>
         <div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3"><div class="text-[10px] font-black text-indigo-700">未来红白球预测获取</div><div class="text-sm font-black font-mono text-indigo-800">+${fmtBallNum(a.redFutureGross)}</div><div class="text-[10px] text-indigo-700 font-bold">商店/活动礼包计划/每日奖励期望</div></div>
         <div class="rounded-2xl bg-emerald-50 border border-emerald-100 p-3"><div class="text-[10px] font-black text-emerald-700">红白球保底消耗后</div><div class="text-xl font-black font-mono ${redClass}">${fmtBallNum(a.redAfterOnePerDay)}</div><div class="text-[10px] text-emerald-700 font-bold">未来 ${a.days} 天每天 1 红白后的预计月底库存</div></div>
         <div class="rounded-2xl bg-amber-50 border border-amber-100 p-3"><div class="text-[10px] font-black text-amber-700">本月每日奖励实录</div><div class="text-sm font-black font-mono text-amber-800">红${daily.monthly.poke} / 蓝${daily.monthly.great} / 黑黄${daily.monthly.ultra} / 非球${daily.monthly.diamonds}</div><div class="text-[10px] text-amber-700 font-bold">${daily.monthlyCount} 次 · ${dailyTop}</div></div>
     </div>
     <div class="rounded-2xl bg-slate-50 border border-slate-200 p-3 mt-3 text-[11px] font-bold text-slate-600 leading-relaxed">
-        本月已记录研究用球：红白 ${usage.monthTotal.poke} / 蓝 ${usage.monthTotal.great} / 黑黄 ${usage.monthTotal.ultra}，共 ${usage.monthTotal.dayCount} 天、${usage.monthTotal.researchCount} 次研究。红白球预测会额外扣除“未来每天 1 个红白球”的保底参考；蓝球和黑/黄球没有稳定收入与稳定日耗，变化分析只画已知库存曲线，不做虚线预测。
+        本月已记录研究用球：红白 ${usage.monthTotal.poke} / 蓝 ${usage.monthTotal.great} / 黑黄 ${usage.monthTotal.ultra}，共 ${usage.monthTotal.dayCount} 天、${usage.monthTotal.researchCount} 次研究。每日奖励、商店购买、已领取活动/礼包会作为实际获取进入库存曲线。红白球预测会额外扣除“未来每天 1 个红白球”的保底参考；蓝球和黑/黄球没有稳定收入与稳定日耗，变化分析只画已知库存曲线，不做虚线预测。
         <span class="font-black ${netClass}">红白球未来净变化：+${fmtBallNum(a.redFutureGross)} - ${a.redBaselineNeed} = ${fmtBallNum(a.redForecastNetGain)}</span>
     </div>`;
 }
@@ -1708,7 +1757,7 @@ function openBallPlannerModal() {
         <button onclick="document.getElementById('ball-planner-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         <div class="pr-8">
             <h3 class="text-base font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-baseball text-sky-500"></i> 精灵球库存与规划中心</h3>
-            <p class="text-[11px] text-slate-500 font-bold mt-1">当前库存由手动校准、睡眠研究用球扣除、以及已实录领取的每日奖励/活动/礼包自动增减；未领取计划、商店和每日奖励期望只影响预计库存。</p>
+            <p class="text-[11px] text-slate-500 font-bold mt-1">当前库存由手动校准、睡眠研究用球扣除、每日奖励/活动/礼包实录、以及睡眠点数商店实际购买自动增减；未领取计划和每日奖励期望只影响预计库存。</p>
         </div>
         <div id="ball-planner-content"></div>
     </div>`;
@@ -1745,7 +1794,7 @@ function renderBallPlannerModal() {
                 <div class="flex items-center justify-between gap-2"><h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-sliders text-sky-500"></i> 总开关与库存校准</h4><button onclick="disableBallPlanner()" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-black">关闭功能</button></div>
                 <div class="grid grid-cols-3 gap-2">${BALL_KEYS.map(k => `<label class="text-[10px] font-black text-slate-500">${BALL_LABELS[k]}<input type="number" id="ball-inv-${k}" value="${state.currentInventory[k] || 0}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>`).join('')}</div>
                 <button onclick="saveBallInventoryCalibration()" class="bg-sky-600 hover:bg-sky-500 text-white rounded-2xl py-2.5 text-xs font-black">保存当前游戏内库存</button>
-                <div class="text-[10px] text-slate-400 font-bold leading-relaxed">库存校准会把当前数值作为新的真实锚点。之后录入研究用球会扣库存；实录每日奖励、已领取活动或已购买礼包会加库存，并显示在库存曲线上。</div>
+                <div class="text-[10px] text-slate-400 font-bold leading-relaxed">库存校准会把当前数值作为新的真实锚点，不会作为一次事件画入曲线。之后录入研究用球会扣库存；实录每日奖励、商店购买、已领取活动或已购买礼包会加库存，并显示在库存曲线上。</div>
             </div>
             <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
                 <h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-store text-indigo-500"></i> 睡眠点数商店预测</h4>
@@ -1793,6 +1842,20 @@ function renderBallPlannerModal() {
                 </div>
                 <div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3 text-[11px] font-bold text-indigo-900 leading-relaxed">预计可买：红白球 ${f.shopForecast.balls.poke}，蓝球 ${f.shopForecast.balls.great}；买后剩余睡眠点数约 ${f.shopForecast.remainingPoints}。</div>
                 <button onclick="saveBallShopSettings()" class="bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-2.5 text-xs font-black">保存商店预测设置</button>
+                <div class="rounded-2xl bg-emerald-50 border border-emerald-100 p-3 flex flex-col gap-2">
+                    <div>
+                        <div class="text-[10px] font-black text-emerald-800"><i class="fa-solid fa-cart-shopping text-emerald-600"></i> 睡眠点数商店实际购买</div>
+                        <div class="text-[10px] text-emerald-700 font-bold mt-0.5 leading-relaxed">这里记录已经买到手的球：会自动加库存、扣睡眠点数、扣本月商店剩余，并显示在库存曲线中。</div>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-black text-slate-500">
+                        <label>购买日期<input type="date" id="ball-shop-purchase-date" value="${getTodayLocalDateString()}" class="mt-1 w-full bg-white border border-emerald-100 rounded-xl px-2 py-1.5 text-xs font-bold"></label>
+                        <label>普通红球<input type="number" min="0" id="ball-shop-purchase-regular-poke" value="0" class="mt-1 w-full bg-white border border-emerald-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                        <label>月卡红球<input type="number" min="0" id="ball-shop-purchase-premium-poke" value="0" class="mt-1 w-full bg-white border border-emerald-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                        <label>月卡蓝球<input type="number" min="0" id="ball-shop-purchase-premium-great" value="0" class="mt-1 w-full bg-white border border-emerald-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black"></label>
+                    </div>
+                    <textarea id="ball-shop-purchase-note" rows="2" placeholder="购买备注（选填，例如：月底补红球 / 月卡蓝球买满）" class="w-full bg-white border border-emerald-100 rounded-xl px-3 py-2 text-[11px] font-bold focus:outline-none focus:border-emerald-400 resize-y"></textarea>
+                    <button onclick="addBallShopPurchaseEntry()" class="bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl py-2.5 text-xs font-black">记录本次商店购买</button>
+                </div>
             </div>
         </div>
         <div class="rounded-3xl border border-amber-200 bg-amber-50/30 p-4 mt-4 flex flex-col gap-3">
@@ -1874,7 +1937,7 @@ function saveBallInventoryCalibration() {
     showToast('已同步当前库存');
 }
 
-function saveBallShopSettings() {
+function syncBallShopSettingsDraftFromDom() {
     const shop = ballPlannerState.shop;
     syncBallShopAutoCalendarFields(ballPlannerState);
     shop.sleepPointBalance = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-points')?.value) || 0));
@@ -1894,9 +1957,55 @@ function saveBallShopSettings() {
     shop.priorityPlan.goldSeed = !!document.getElementById('ball-shop-buy-gold')?.checked;
     shop.priorityPlan.silverSeed = !!document.getElementById('ball-shop-buy-silver')?.checked;
     shop.priorityPlan.islandTicket = !!document.getElementById('ball-shop-buy-ticket')?.checked;
+}
+
+function saveBallShopSettings() {
+    syncBallShopSettingsDraftFromDom();
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
     showToast('已保存商店预测设置');
+}
+
+function addBallShopPurchaseEntry() {
+    syncBallShopSettingsDraftFromDom();
+    const regularPoke = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-purchase-regular-poke')?.value) || 0));
+    const premiumPoke = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-purchase-premium-poke')?.value) || 0));
+    const premiumGreat = Math.max(0, Math.floor(Number(document.getElementById('ball-shop-purchase-premium-great')?.value) || 0));
+    if (regularPoke + premiumPoke + premiumGreat <= 0) {
+        alert('请至少填写一种本次购买的球。');
+        return;
+    }
+    const shop = ballPlannerState.shop;
+    if ((premiumPoke > 0 || premiumGreat > 0) && !shop.hasPremiumPass) { alert('当前未勾选开月卡，不能记录月卡商店购买。'); return; }
+    if (regularPoke > Number(shop.regularShopRemaining.poke || 0)) { alert('普通红球购买数超过当前普通商店剩余数。'); return; }
+    if (premiumPoke > Number(shop.premiumShopRemaining.poke || 0)) { alert('月卡红球购买数超过当前月卡商店剩余数。'); return; }
+    if (premiumGreat > Number(shop.premiumShopRemaining.great || 0)) { alert('月卡蓝球购买数超过当前月卡商店剩余数。'); return; }
+    const spentPoints = regularPoke * BALL_SHOP_PURCHASE_COSTS.regularPoke + premiumPoke * BALL_SHOP_PURCHASE_COSTS.premiumPoke + premiumGreat * BALL_SHOP_PURCHASE_COSTS.premiumGreat;
+    if (spentPoints > Number(shop.sleepPointBalance || 0)) {
+        alert(`本次购买需要 ${spentPoints} 睡眠点数，但当前记录的睡眠点数只有 ${shop.sleepPointBalance}。请先更新当前睡眠点数，或减少购买数量。`);
+        return;
+    }
+    const date = normalizeSleepResearchDateValue(document.getElementById('ball-shop-purchase-date')?.value || getTodayLocalDateString());
+    const balls = normalizeBallCounts({ poke: regularPoke + premiumPoke, great: premiumGreat, ultra: 0 });
+    const nameParts = [];
+    if (regularPoke) nameParts.push(`普通红球×${regularPoke}`);
+    if (premiumPoke) nameParts.push(`月卡红球×${premiumPoke}`);
+    if (premiumGreat) nameParts.push(`月卡蓝球×${premiumGreat}`);
+    const entry = normalizeBallPlannerEntry({
+        sourceType: 'shopPurchase',
+        status: 'purchased',
+        templateName: '睡眠点数商店购买',
+        displayName: `睡眠点数商店购买：${nameParts.join(' / ')}`,
+        date,
+        balls,
+        shopPurchase: { regularPoke, premiumPoke, premiumGreat, spentPoints },
+        note: String(document.getElementById('ball-shop-purchase-note')?.value || '').trim() || `实际购买，消耗睡眠点数 ${spentPoints}`
+    });
+    applyBallPlannerEntryFullDelta(null, entry);
+    ballPlannerState.entries.unshift(entry);
+    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    renderBallPlannerModal();
+    showToast('已记录睡眠点数商店购买');
 }
 
 function addBallExtraSleepPoint() {
@@ -2014,7 +2123,7 @@ function addBallDailyRewardEntry() {
         diamonds,
         note: '每日奖励实际获得；球类奖励会自动增加当前库存，并显示在库存曲线上。'
     });
-    applyBallPlannerEntryInventoryDelta(null, entry);
+    applyBallPlannerEntryFullDelta(null, entry);
     ballPlannerState.entries.unshift(entry);
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
@@ -2163,7 +2272,7 @@ function addBallPlannerEntryFromForm() {
         diamonds: document.getElementById('ball-entry-diamonds')?.value,
         note: document.getElementById('ball-entry-note')?.value
     });
-    applyBallPlannerEntryInventoryDelta(null, entry);
+    applyBallPlannerEntryFullDelta(null, entry);
     ballPlannerState.entries.unshift(entry);
     if (document.getElementById('ball-entry-save-template')?.checked) {
         const tplObj = normalizeBallTemplate({ sourceType, templateName: nameInput || templateName, balls, diamonds: entry.diamonds, note: entry.note });
@@ -2181,16 +2290,16 @@ function setBallEntryStatus(id, status) {
     const oldItem = JSON.parse(JSON.stringify(item));
     item.status = status;
     item.updatedAt = new Date().toISOString();
-    applyBallPlannerEntryInventoryDelta(oldItem, item);
+    applyBallPlannerEntryFullDelta(oldItem, item);
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
 }
 
 function deleteBallEntry(id) {
     const item = (ballPlannerState.entries || []).find(e => String(e.id) === String(id));
-    const label = item?.sourceType === 'dailyReward' ? '每日奖励记录' : '活动/礼包计划';
+    const label = item?.sourceType === 'dailyReward' ? '每日奖励记录' : (item?.sourceType === 'shopPurchase' ? '睡眠点数商店购买记录' : '活动/礼包计划');
     if (!confirm(`确定删除这条${label}吗？如果它曾自动增加库存，系统会同步扣回。`)) return;
-    if (item) applyBallPlannerEntryInventoryDelta(item, null);
+    if (item) applyBallPlannerEntryFullDelta(item, null);
     ballPlannerState.entries = (ballPlannerState.entries || []).filter(e => String(e.id) !== String(id));
     saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
@@ -2201,7 +2310,7 @@ function renderBallEntryList() {
     if (!wrap) return;
     const entries = ballPlannerState.entries || [];
     if (!entries.length) {
-        wrap.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-[11px] text-slate-400 font-bold">暂无活动/礼包/每日奖励记录</div>`;
+        wrap.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-[11px] text-slate-400 font-bold">暂无活动/礼包/每日奖励/商店购买记录</div>`;
         return;
     }
     wrap.innerHTML = entries.map(e => {
@@ -2209,17 +2318,19 @@ function renderBallEntryList() {
         const statusLabel = getBallEntryStatusLabel(e);
         const isPlanned = e.status === 'planned';
         const isDaily = e.sourceType === 'dailyReward';
-        const borderClass = isPlanned ? 'border-sky-200 bg-sky-50/50' : (isDaily ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-slate-50');
+        const isShopPurchase = e.sourceType === 'shopPurchase';
+        const borderClass = isPlanned ? 'border-sky-200 bg-sky-50/50' : (isDaily ? 'border-amber-200 bg-amber-50/40' : (isShopPurchase ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-slate-50'));
         const plannedBtnText = e.sourceType === 'bundle' ? '改为待购买' : '改为待领取';
         const doneBtnText = e.sourceType === 'bundle' ? '标记已购买' : '标记已领取';
+        const shopLine = isShopPurchase ? ` / 消耗点数 ${Number(e.shopPurchase?.spentPoints) || 0}` : '';
         return `<div class="rounded-2xl border ${borderClass} p-3 flex flex-col gap-2">
             <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0"><div class="text-xs font-black text-slate-800 truncate">${escapeHtml(e.displayName || e.templateName)}</div><div class="text-[10px] font-bold text-slate-500">${sourceLabel} · ${statusLabel}${e.date ? ` · ${escapeHtml(e.date)}` : ''}${e.diamonds ? ` · 钻石 ${e.diamonds}` : ''}</div></div>
                 <button onclick="deleteBallEntry('${escapeHtmlAttr(e.id)}')" class="px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100 text-[10px] font-black">删</button>
             </div>
-            <div class="text-[11px] font-mono font-black text-slate-700">红白 ${e.balls.poke} / 蓝 ${e.balls.great} / 黑黄 ${e.balls.ultra}${e.diamonds ? ` / 钻石 ${e.diamonds}` : ''}</div>
+            <div class="text-[11px] font-mono font-black text-slate-700">红白 ${e.balls.poke} / 蓝 ${e.balls.great} / 黑黄 ${e.balls.ultra}${e.diamonds ? ` / 钻石 ${e.diamonds}` : ''}${shopLine}</div>
             ${e.note ? `<div class="text-[10px] text-slate-500 font-bold leading-relaxed">${escapeHtml(e.note)}</div>` : ''}
-            ${isDaily ? `<div class="text-[10px] text-amber-700 font-bold">每日奖励实录：球类奖励会自动增加当前库存，并显示在库存曲线中。${e.inventoryApplied ? '（已应用到库存）' : '（旧记录未自动改库存）'}</div>` : `<div class="flex flex-wrap gap-1.5">${e.status !== 'planned' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','planned')" class="px-2 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-100 text-[10px] font-black">${plannedBtnText}</button>` : ''}${e.status !== 'received' && e.status !== 'purchased' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','${e.sourceType === 'bundle' ? 'purchased' : 'received'}')" class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">${doneBtnText}</button>` : ''}${e.status !== 'skipped' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','skipped')" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-black">跳过</button>` : ''}${e.inventoryApplied ? `<span class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">已应用库存</span>` : ''}</div>`}
+            ${isDaily ? `<div class="text-[10px] text-amber-700 font-bold">每日奖励实录：球类奖励会自动增加当前库存，并显示在库存曲线中。${e.inventoryApplied ? '（已应用到库存）' : '（旧记录未自动改库存）'}</div>` : (isShopPurchase ? `<div class="text-[10px] text-emerald-700 font-bold">商店实际购买：已自动加库存、扣睡眠点数、扣商店剩余，并显示在库存曲线中。${e.inventoryApplied && e.shopApplied ? '（已应用）' : '（旧记录未自动应用）'}</div>` : `<div class="flex flex-wrap gap-1.5">${e.status !== 'planned' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','planned')" class="px-2 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-100 text-[10px] font-black">${plannedBtnText}</button>` : ''}${e.status !== 'received' && e.status !== 'purchased' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','${e.sourceType === 'bundle' ? 'purchased' : 'received'}')" class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">${doneBtnText}</button>` : ''}${e.status !== 'skipped' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','skipped')" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-black">跳过</button>` : ''}${e.inventoryApplied ? `<span class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">已应用库存</span>` : ''}</div>`)}
         </div>`;
     }).join('');
 }
