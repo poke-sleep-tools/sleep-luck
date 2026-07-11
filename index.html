@@ -12683,6 +12683,74 @@ function enhanceDrySpellModalControls(modal) {
     row.appendChild(note);
 }
 
+// v42：断档期间的时间、真实捕捉与真实用球统计。
+// 日均捕捉只使用历史捕捉流水，不包含“额外未记录捕捉数”；
+// 用球只使用睡眠研究的 ballUsage，不通过库存差额倒推，因此不会混入手动库存校准。
+function getDrySpellDetailedActivityStats(boundary, rangeLogs = []) {
+    const today = getTodayLocalDateString();
+    const startDate = normalizeSleepResearchDateValue(boundary?.date || '');
+    const startMs = Date.parse(startDate + 'T00:00:00');
+    const todayMs = Date.parse(today + 'T00:00:00');
+    const elapsedDays = Number.isFinite(startMs) && Number.isFinite(todayMs)
+        ? Math.max(0, Math.floor((todayMs - startMs) / 86400000))
+        : 0;
+    const recordedCaptures = Array.isArray(rangeLogs) ? rangeLogs.length : 0;
+    const balls = { poke: 0, great: 0, ultra: 0, bonus: 0 };
+    let researchCount = 0;
+    const ballRecordDates = [];
+
+    const getCoverage = rawDates => {
+        const dates = Array.from(new Set((rawDates || [])
+            .map(date => normalizeSleepResearchDateValue(date || ''))
+            .filter(Boolean)))
+            .sort((a, b) => String(a).localeCompare(String(b)));
+        if (!dates.length) return { startDate: '', endDate: '', dayCount: 0, recordDayCount: 0 };
+        const first = dates[0];
+        const last = dates[dates.length - 1];
+        const firstMs = Date.parse(first + 'T00:00:00');
+        const lastMs = Date.parse(last + 'T00:00:00');
+        const dayCount = Number.isFinite(firstMs) && Number.isFinite(lastMs)
+            ? Math.max(1, Math.floor((lastMs - firstMs) / 86400000) + 1)
+            : 1;
+        return { startDate: first, endDate: last, dayCount, recordDayCount: dates.length };
+    };
+
+    const captureCoverage = getCoverage((rangeLogs || []).map(log => log?.date || ''));
+
+    getVisibleSleepResearchLogs(historyLogs).forEach(research => {
+        if (!research || !research.ballUsage || !isDrySpellLogAfterBoundary(research, boundary)) return;
+        const usage = normalizeResearchBallUsage(research.ballUsage, research.session || '一觉');
+        balls.poke += Math.max(0, Number(usage.poke) || 0);
+        balls.great += Math.max(0, Number(usage.great) || 0);
+        balls.ultra += Math.max(0, Number(usage.ultra) || 0);
+        balls.bonus += Math.max(0, Number(usage.bonus) || 0);
+        researchCount += 1;
+        ballRecordDates.push(research.date || '');
+    });
+
+    // 奖励球单独展示，不计入“实际用球总数”和“日均实际用球”。
+    const totalBalls = balls.poke + balls.great + balls.ultra;
+    const ballCoverage = getCoverage(ballRecordDates);
+    return {
+        startDate,
+        endDate: today,
+        elapsedDays,
+        recordedCaptures,
+        captureCoverage,
+        averageCapturesPerDay: captureCoverage.dayCount > 0 ? recordedCaptures / captureCoverage.dayCount : 0,
+        balls,
+        totalBalls,
+        ballCoverage,
+        averageBallsPerDay: ballCoverage.dayCount > 0 ? totalBalls / ballCoverage.dayCount : 0,
+        researchCount
+    };
+}
+
+function formatDrySpellDailyAverage(value) {
+    const n = Number(value) || 0;
+    return n.toFixed(n >= 10 ? 1 : 2);
+}
+
 function renderDrySpellAnalysisResult(summary) {
     const definitionLabel = summary.definitionLabel || '毕业及以上';
     const warningHTML = summary.recordedGrad > 0
@@ -12696,6 +12764,10 @@ function renderDrySpellAnalysisResult(summary) {
         const stats = summary.typeStats?.[key] || { count: 0, expected: 0 };
         return `<div class="bg-white border border-${color}-100 rounded-2xl p-3"><div class="text-[10px] font-black text-${color}-700">${label}</div><div class="text-lg font-mono font-black text-${color}-700">${stats.count || 0}</div><div class="text-[10px] text-slate-500 font-bold">期望 ${Number(stats.expected || 0).toFixed(2)} 只</div></div>`;
     }).join('');
+    const activity = summary.activityStats || {};
+    const activityBalls = activity.balls || {};
+    const captureCoverage = activity.captureCoverage || {};
+    const ballCoverage = activity.ballCoverage || {};
 
     return `
         <div class="mt-2 bg-slate-50 border border-slate-200 rounded-3xl p-4 flex flex-col gap-4 text-xs">
@@ -12725,6 +12797,19 @@ function renderDrySpellAnalysisResult(summary) {
                 <div class="bg-white border border-amber-100 rounded-2xl p-3"><div class="text-[9px] font-black text-amber-500">理论期望毕业</div><div class="text-xl font-mono font-black text-amber-700">${Number(summary.expectedTotal || 0).toFixed(2)}</div></div>
                 <div class="bg-white border border-rose-100 rounded-2xl p-3"><div class="text-[9px] font-black text-rose-500">连续 0 毕业概率</div><div class="text-xl font-mono font-black text-rose-700">${formatDrySpellPercent(summary.zeroProbTotal || 0)}</div></div>
                 <div class="bg-white border border-sky-100 rounded-2xl p-3"><div class="text-[9px] font-black text-sky-500">至少 1 毕业概率</div><div class="text-xl font-mono font-black text-sky-700">${formatDrySpellPercent(1 - (summary.zeroProbTotal || 0))}</div></div>
+            </div>
+            <div class="bg-cyan-50/70 border border-cyan-100 rounded-2xl p-3 flex flex-col gap-3">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-1">
+                    <div class="font-black text-cyan-950"><i class="fa-solid fa-chart-column text-cyan-600 mr-1"></i>断档期间详细统计</div>
+                    <div class="text-[10px] font-bold text-cyan-700">断档：${escapeHtml(activity.startDate || '')} → ${escapeHtml(activity.endDate || '')}</div>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div class="bg-white border border-cyan-100 rounded-xl p-3"><div class="text-[9px] font-black text-cyan-600">距离上次毕业</div><div class="text-xl font-mono font-black text-cyan-900">${Number(activity.elapsedDays) || 0} 天</div></div>
+                    <div class="bg-white border border-cyan-100 rounded-xl p-3"><div class="text-[9px] font-black text-cyan-600">日均真实捕捉</div><div class="text-xl font-mono font-black text-cyan-900">${formatDrySpellDailyAverage(activity.averageCapturesPerDay)} 只</div><div class="text-[9px] font-bold text-slate-400">共 ${Number(activity.recordedCaptures) || 0} 只 / 覆盖 ${Number(captureCoverage.dayCount) || 0} 天</div></div>
+                    <div class="bg-white border border-cyan-100 rounded-xl p-3"><div class="text-[9px] font-black text-cyan-600">期间实际用球</div><div class="text-xl font-mono font-black text-cyan-900">${fmtBallNum(activity.totalBalls || 0)} 个</div><div class="text-[9px] font-bold text-slate-400">${Number(activity.researchCount) || 0} 次研究</div></div>
+                    <div class="bg-white border border-cyan-100 rounded-xl p-3"><div class="text-[9px] font-black text-cyan-600">日均实际用球</div><div class="text-xl font-mono font-black text-cyan-900">${formatDrySpellDailyAverage(activity.averageBallsPerDay)} 个</div><div class="text-[9px] font-bold text-slate-400">覆盖 ${Number(ballCoverage.dayCount) || 0} 天</div></div>
+                </div>
+                <div class="text-[10px] font-bold text-cyan-800">捕捉历史覆盖：${captureCoverage.startDate ? `${escapeHtml(captureCoverage.startDate)} → ${escapeHtml(captureCoverage.endDate)}，共 ${Number(captureCoverage.dayCount) || 0} 个自然日` : '暂无记录'}；用球记录覆盖：${ballCoverage.startDate ? `${escapeHtml(ballCoverage.startDate)} → ${escapeHtml(ballCoverage.endDate)}，共 ${Number(ballCoverage.dayCount) || 0} 个自然日` : '暂无记录'}。球种明细：红白 ${fmtBallNum(activityBalls.poke || 0)} / 蓝 ${fmtBallNum(activityBalls.great || 0)} / 黑黄 ${fmtBallNum(activityBalls.ultra || 0)}；奖励球另计 ${fmtBallNum(activityBalls.bonus || 0)}。日均捕捉不含人工补正未毕业数；实际用球总数和日均均不含奖励球及手动库存校准。</div>
             </div>
             <div class="bg-white border border-slate-200 rounded-2xl p-3 leading-relaxed text-slate-600">解释：以这段已记录捕捉结构加上人工补正样本估算，理论上应该出现约 <strong>${Number(summary.expectedTotal || 0).toFixed(2)}</strong> 只「${escapeHtml(definitionLabel)}」。连续没有出现的概率约为 <strong>${formatDrySpellPercent(summary.zeroProbTotal || 0)}</strong>；也就是理论上至少出 1 只的概率约为 <strong>${formatDrySpellPercent(1 - (summary.zeroProbTotal || 0))}</strong>。断档评分采用 <strong>-10 × log10(连续 0 毕业概率)</strong>，分数越高，代表这段断档越非、越罕见。</div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-2">${typeCards}</div>
@@ -12763,7 +12848,7 @@ function downloadDrySpellAnalysisSummaryImage() {
     }
     const canvas = document.createElement('canvas');
     canvas.width = 1080;
-    canvas.height = 1440;
+    canvas.height = 1600;
     const ctx = canvas.getContext('2d');
     const fillRoundRect = (x, y, w, h, r, fill, stroke) => {
         ctx.beginPath();
@@ -12818,7 +12903,7 @@ function downloadDrySpellAnalysisSummaryImage() {
 
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    fillRoundRect(36, 36, 1008, 1368, 28, '#ffffff', '#e2e8f0');
+    fillRoundRect(36, 36, 1008, 1528, 28, '#ffffff', '#e2e8f0');
     ctx.fillStyle = '#e11d48';
     setCanvasFont(46, '900');
     ctx.fillText('📉 毕业断档分析总结', 72, 110);
@@ -12844,7 +12929,16 @@ function downloadDrySpellAnalysisSummaryImage() {
         if ((i % 3) === 2) { cx = 72; cy += 144; }
     });
 
+    const activity = summary.activityStats || {};
+    const activityBalls = activity.balls || {};
+    const captureCoverage = activity.captureCoverage || {};
+    const ballCoverage = activity.ballCoverage || {};
     let y = 640;
+    fillRoundRect(72, y, 936, 150, 20, '#ecfeff', '#a5f3fc');
+    drawText(`断档已过 ${Number(activity.elapsedDays) || 0} 天 · 真实捕捉 ${Number(activity.recordedCaptures) || 0} 只 · 日均 ${formatDrySpellDailyAverage(activity.averageCapturesPerDay)} 只（历史覆盖 ${Number(captureCoverage.dayCount) || 0} 天）`, 92, y + 42, { size: 22, color: '#164e63', weight: '800', maxWidth: 896 });
+    drawText(`实际用球 ${fmtBallNum(activity.totalBalls || 0)} 个 · 日均 ${formatDrySpellDailyAverage(activity.averageBallsPerDay)} 个（用球记录覆盖 ${Number(ballCoverage.dayCount) || 0} 天）`, 92, y + 82, { size: 22, color: '#155e75', weight: '800', maxWidth: 896 });
+    drawText(`红白 ${fmtBallNum(activityBalls.poke || 0)} / 蓝 ${fmtBallNum(activityBalls.great || 0)} / 黑黄 ${fmtBallNum(activityBalls.ultra || 0)}；奖励球另计 ${fmtBallNum(activityBalls.bonus || 0)}（总数和日均不含奖励球）`, 92, y + 120, { size: 18, color: '#0e7490', weight: '700', maxWidth: 896 });
+    y += 180;
     fillRoundRect(72, y, 936, 140, 20, '#fff7ed', '#fdba74');
     drawText(`解释：理论上这段已记录捕捉加上补正样本，应该出现约 ${Number(summary.expectedTotal || 0).toFixed(2)} 只「${summary.definitionLabel || '毕业及以上'}」。连续没有出现的概率约为 ${formatDrySpellPercent(summary.zeroProbTotal || 0)}。`, 92, y + 40, { size: 22, color: '#7c2d12', weight: '700', maxWidth: 896, lineHeight: 34 });
     y += 170;
@@ -12927,6 +13021,7 @@ function runGraduationDrySpellAnalysis() {
 
     const topSpeciesByCount = Array.from(speciesStats.values()).sort((a, b) => b.count - a.count || b.expected - a.expected).slice(0, 8);
     const topSpeciesByExpected = Array.from(speciesStats.values()).sort((a, b) => b.expected - a.expected || b.count - a.count).slice(0, 8);
+    const activityStats = getDrySpellDetailedActivityStats(boundary, rangeLogs);
     const definitionLabel = getDrySpellDefinitionMeta(definition).label;
     const extraModeLabel = extraMode === 'streak'
         ? '按本段已记录捕捉结构估算'
@@ -12952,6 +13047,7 @@ function runGraduationDrySpellAnalysis() {
         extraModeLabel,
         extraAvgProb,
         unknownCount: unknownItems.length,
+        activityStats,
         generatedAt: new Date().toISOString(),
         generatedAtLabel: formatDateTimeForDisplay(new Date())
     };
