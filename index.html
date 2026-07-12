@@ -1316,7 +1316,8 @@ function getBallUsageInlineText(usage) {
     const parts = [];
     if (u.bonus) parts.push(`奖励×${u.bonus}`);
     BALL_KEYS.forEach(k => { if (u[k]) parts.push(`${BALL_LABELS[k]}×${u[k]}`); });
-    return parts.length ? parts.join(' / ') : '未记录用球';
+    // ballUsage 对象存在就表示玩家已经填写过；全 0 是“明确未用球”，不是“未记录”。
+    return parts.length ? parts.join(' / ') : '已记录：未用球';
 }
 
 function renderBallUsageEditorHtml(context, session, usage = null) {
