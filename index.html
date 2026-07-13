@@ -4773,6 +4773,9 @@ function normalizePlayerBox() {
             '梦梦蚀': { standard: '梦梦蚀', type: 'berry', defaultLock: 'two' }, '夢夢蝕': { standard: '梦梦蚀', type: 'berry', defaultLock: 'two' },
             '宝宝暴龙': { standard: '宝宝暴龙', type: 'berry', defaultLock: 'two' }, '寶寶暴龍': { standard: '宝宝暴龙', type: 'berry', defaultLock: 'two' },
             '怪颚龙': { standard: '怪颚龙', type: 'berry', defaultLock: 'two' }, '怪顎龍': { standard: '怪颚龙', type: 'berry', defaultLock: 'two' },
+            '波加曼': { standard: '波加曼', type: 'berry', defaultLock: 'two' },
+            '波皇子': { standard: '波皇子', type: 'berry', defaultLock: 'two' },
+            '帝王拿波': { standard: '帝王拿波', type: 'berry', defaultLock: 'two' },
 
             '妙蛙种子': { standard: '妙蛙种子', type: 'food', defaultLock: 'none' }, '妙蛙種子': { standard: '妙蛙种子', type: 'food', defaultLock: 'none' },
             '妙蛙草': { standard: '妙蛙草', type: 'food', defaultLock: 'none' }, '妙蛙花': { standard: '妙蛙花', type: 'food', defaultLock: 'none' },
@@ -4867,10 +4870,16 @@ function normalizePlayerBox() {
             '卡蒂狗': { standard: '卡蒂狗', type: 'special_skill', defaultLock: 'none' },
             '呆呆兽': { standard: '呆呆兽', type: 'skill', defaultLock: 'none' },
             '呆壳兽': { standard: '呆壳兽', type: 'skill', defaultLock: 'none' },
+            '草苗龟': { standard: '草苗龟', type: 'skill', defaultLock: 'none' }, '草苗龜': { standard: '草苗龟', type: 'skill', defaultLock: 'none' },
+            '树林龟': { standard: '树林龟', type: 'skill', defaultLock: 'none' }, '樹林龜': { standard: '树林龟', type: 'skill', defaultLock: 'none' },
+            '土台龟': { standard: '土台龟', type: 'skill', defaultLock: 'none' }, '土台龜': { standard: '土台龟', type: 'skill', defaultLock: 'none' },
 
             '木守宫': { standard: '木守宫', type: 'special_skill', defaultLock: 'none' }, '木守宮': { standard: '木守宫', type: 'special_skill', defaultLock: 'none' },
             '森林蜥蜴': { standard: '森林蜥蜴', type: 'special_skill', defaultLock: 'none' },
             '蜥蜴王': { standard: '蜥蜴王', type: 'special_skill', defaultLock: 'none' },
+            '小火焰猴': { standard: '小火焰猴', type: 'special_skill', defaultLock: 'none' },
+            '猛火猴': { standard: '猛火猴', type: 'special_skill', defaultLock: 'none' },
+            '烈焰猴': { standard: '烈焰猴', type: 'special_skill', defaultLock: 'none' },
             '飘飘球': { standard: '飘飘球', type: 'special_skill', defaultLock: 'none' }, '飄飄球': { standard: '飘飘球', type: 'special_skill', defaultLock: 'none' },
             '随风球': { standard: '随风球', type: 'special_skill', defaultLock: 'none' }, '隨風球': { standard: '随风球', type: 'special_skill', defaultLock: 'none' },
             '嗡蝠': { standard: '嗡蝠', type: 'special_skill', defaultLock: 'none' },
@@ -5719,6 +5728,51 @@ const EVOLUTION_STAGE_META = {
     },
     "蜥蜴王": {
         "line": "木守宫",
+        "stage": 2,
+        "familySize": 3
+    },
+    "波加曼": {
+        "line": "波加曼",
+        "stage": 0,
+        "familySize": 3
+    },
+    "波皇子": {
+        "line": "波加曼",
+        "stage": 1,
+        "familySize": 3
+    },
+    "帝王拿波": {
+        "line": "波加曼",
+        "stage": 2,
+        "familySize": 3
+    },
+    "草苗龟": {
+        "line": "草苗龟",
+        "stage": 0,
+        "familySize": 3
+    },
+    "树林龟": {
+        "line": "草苗龟",
+        "stage": 1,
+        "familySize": 3
+    },
+    "土台龟": {
+        "line": "草苗龟",
+        "stage": 2,
+        "familySize": 3
+    },
+    "小火焰猴": {
+        "line": "小火焰猴",
+        "stage": 0,
+        "familySize": 3
+    },
+    "猛火猴": {
+        "line": "小火焰猴",
+        "stage": 1,
+        "familySize": 3
+    },
+    "烈焰猴": {
+        "line": "小火焰猴",
         "stage": 2,
         "familySize": 3
     },
