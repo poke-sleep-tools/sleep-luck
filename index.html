@@ -11653,7 +11653,7 @@ let trainingPlannerState = {
     selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
     universalCandyS: 0, universalCandyM: 0, universalCandyL: 0,
     weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true,
-    sleepBonusCountById: {}, napIslandWeeksById: {}
+    priorityById: {}
 };
 
 function formatTrainingNumber(value) {
@@ -11672,11 +11672,8 @@ function normalizeTrainingPlannerState(raw = {}) {
     const cleanCounts = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
         String(key), Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)))
     ]));
-    const cleanSleepBonusCounts = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
-        String(key), Math.max(0, Math.min(5, Math.floor(Number(value) || 0)))
-    ]));
-    const cleanNapWeeks = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
-        String(key), Math.max(0, Math.min(260, Math.floor(Number(value) || 0)))
+    const cleanPriorities = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
+        String(key), Math.max(1, Math.min(5, Math.floor(Number(value) || 3)))
     ]));
     return {
         selectedIds: Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : [],
@@ -11690,8 +11687,7 @@ function normalizeTrainingPlannerState(raw = {}) {
             ? 6
             : Math.max(0, Math.min(999, Math.floor(Number(raw.weeklyUniversalCandyS) || 0))),
         includeWeeklyUniversalCandy: raw.includeWeeklyUniversalCandy !== false,
-        sleepBonusCountById: cleanSleepBonusCounts(raw.sleepBonusCountById),
-        napIslandWeeksById: cleanNapWeeks(raw.napIslandWeeksById),
+        priorityById: cleanPriorities(raw.priorityById),
         updatedAt: raw.updatedAt || ''
     };
 }
@@ -11777,7 +11773,6 @@ function getSleepExpBonusUnlockLevel(subskills = {}) {
 }
 
 function getTrainingSleepBonusCountForRow(row, totalExp = row.totalExp) {
-    if (row.sleepBonusOverride != null) return Math.max(0, Math.min(5, Number(row.sleepBonusOverride) || 0));
     if (!row.sleepBonusUnlockLevel) return 0;
     return getTrainingLevelAtTotalExp(totalExp, row.expFactor) >= row.sleepBonusUnlockLevel ? 1 : 0;
 }
@@ -11808,6 +11803,178 @@ function calculateTrainingSleepOutcome(row) {
         startPerNight: getTrainingSleepExp(row.nature, startBonusCount),
         endPerNight: getTrainingSleepExp(row.nature, endBonusCount)
     };
+}
+
+function getTrainingPriorityWeight(row) {
+    const priority = Math.max(1, Math.min(5, Math.floor(Number(row?.priority) || 3)));
+    return 2 ** (priority - 1);
+}
+
+function getAutomaticTrainingSleepTeam(targets, supportOnlyCount) {
+    let best = { targets: [], supportCount: 0, bonusCount: 0, usefulExp: 0, weightedUsefulExp: 0, urgency: 0 };
+    const maxSupports = Math.min(5, Math.max(0, Math.floor(Number(supportOnlyCount) || 0)));
+    for (let supportCount = 0; supportCount <= maxSupports; supportCount++) {
+        const targetSlots = 5 - supportCount;
+        const chosen = [];
+        while (chosen.length < targetSlots && chosen.length < targets.length) {
+            let bestCandidate = null;
+            let bestCandidateScore = -Infinity;
+            targets.forEach(candidate => {
+                if (chosen.includes(candidate)) return;
+                const trial = chosen.concat(candidate);
+                const bonusCount = supportCount + trial.reduce((sum, row) => sum + getTrainingSleepBonusCountForRow(row), 0);
+                const usefulExp = trial.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)), 0);
+                const weightedUsefulExp = trial.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
+                const urgency = trial.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
+                const score = weightedUsefulExp * 100000000 + usefulExp * 100000 + urgency;
+                if (score > bestCandidateScore) {
+                    bestCandidateScore = score;
+                    bestCandidate = candidate;
+                }
+            });
+            if (!bestCandidate) break;
+            chosen.push(bestCandidate);
+        }
+        const bonusCount = supportCount + chosen.reduce((sum, row) => sum + getTrainingSleepBonusCountForRow(row), 0);
+        const usefulExp = chosen.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)), 0);
+        const weightedUsefulExp = chosen.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
+        const urgency = chosen.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
+        if (weightedUsefulExp > best.weightedUsefulExp
+            || (weightedUsefulExp === best.weightedUsefulExp && usefulExp > best.usefulExp)
+            || (weightedUsefulExp === best.weightedUsefulExp && usefulExp === best.usefulExp && urgency > best.urgency)) {
+            best = { targets: chosen, supportCount, bonusCount, usefulExp, weightedUsefulExp, urgency };
+        }
+    }
+    return best;
+}
+
+function chooseAutomaticNapIslandRow(rows, supportOnlyCount = 0) {
+    const unfinished = rows.filter(row => row.remaining > 0);
+    let best = null;
+    unfinished.forEach(row => {
+        const ownBonus = getTrainingSleepBonusCountForRow(row);
+        const activeOtherTargets = unfinished.filter(other => other !== row && getTrainingSleepBonusCountForRow(other)).length;
+        const estimatedTeamBonus = ownBonus + Math.min(4, Math.max(0, Number(supportOnlyCount) || 0) + activeOtherTargets);
+        const normalWeekExp = getTrainingSleepExp(row.nature, estimatedTeamBonus) * 7;
+        const napUseful = Math.min(row.remaining, row.napExpPerWeek);
+        const sleepUseful = Math.min(row.remaining, normalWeekExp);
+        const otherTargets = Math.min(4, Math.max(0, unfinished.length - 1));
+        const teamAuraCost = ownBonus ? Math.round(otherTargets * 100 * 0.14 * 7) : 0;
+        const score = napUseful - sleepUseful - teamAuraCost;
+        // 七天内普通睡眠本就能更早完成时，不为了多拿经验反而把它锁满一周。
+        const estimatedSleepNights = Math.ceil(row.remaining / Math.max(1, getTrainingSleepExp(row.nature, estimatedTeamBonus)));
+        if (score <= 0 || estimatedSleepNights < 7) return;
+        const priorityScore = score * getTrainingPriorityWeight(row);
+        if (!best || priorityScore > best.priorityScore || (priorityScore === best.priorityScore && row.remaining > best.row.remaining)) best = { row, score, priorityScore };
+    });
+    return best?.row || null;
+}
+
+function buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports = 0) {
+    rows.forEach(row => {
+        row.napWeeks = 0;
+        row.napExp = 0;
+        row.napPotentialExp = 0;
+        row.napOverflowExp = 0;
+        row.sleepExp = 0;
+        row.sleepNights = 0;
+        row.sleepActualExp = 0;
+        row.sleepPerNight = null;
+        row.sleepPerNightEnd = null;
+        row.sleepBonusCountStart = null;
+        row.sleepBonusCountEnd = null;
+        row.completionDay = row.remaining <= 0 ? 0 : null;
+    });
+
+    let day = 0;
+    let activeNap = null;
+    let supportSlotNights = 0;
+    let bonusAssistedNights = 0;
+    const events = [];
+    const maxDays = 10000;
+    while ((rows.some(row => row.remaining > 0) || activeNap) && day < maxDays) {
+        if (!activeNap && day % 7 === 0) {
+            const completedSelectedSupports = rows.filter(row => row.remaining <= 0 && getTrainingSleepBonusCountForRow(row)).length;
+            const napRow = chooseAutomaticNapIslandRow(rows, externalSleepBonusSupports + completedSelectedSupports);
+            if (napRow) activeNap = { row: napRow, daysLeft: 7 };
+        }
+
+        const availableTargets = rows.filter(row => row.remaining > 0 && row !== activeNap?.row);
+        const completedSelectedSupports = rows.filter(row => row.remaining <= 0 && row !== activeNap?.row && getTrainingSleepBonusCountForRow(row)).length;
+        const team = getAutomaticTrainingSleepTeam(availableTargets, externalSleepBonusSupports + completedSelectedSupports);
+        events.push({
+            day: day + 1,
+            napId: activeNap?.row?.id || '',
+            sleepIds: team.targets.map(row => row.id),
+            supportCount: team.supportCount,
+            bonusCount: team.bonusCount
+        });
+        supportSlotNights += team.supportCount;
+        if (team.bonusCount > 0 && team.targets.length) bonusAssistedNights += 1;
+        team.targets.forEach(row => {
+            const perNight = getTrainingSleepExp(row.nature, team.bonusCount);
+            const useful = Math.min(row.remaining, perNight);
+            if (row.sleepPerNight == null) {
+                row.sleepPerNight = perNight;
+                row.sleepBonusCountStart = team.bonusCount;
+            }
+            row.sleepPerNightEnd = perNight;
+            row.sleepBonusCountEnd = team.bonusCount;
+            row.sleepNights += 1;
+            row.sleepExp += useful;
+            row.sleepActualExp += perNight;
+            row.remaining = Math.max(0, row.remaining - perNight);
+            row.totalExp += perNight;
+            if (row.remaining <= 0 && row.completionDay == null) row.completionDay = day + 1;
+        });
+
+        day += 1;
+        if (activeNap) {
+            activeNap.daysLeft -= 1;
+            if (activeNap.daysLeft <= 0) {
+                const row = activeNap.row;
+                const useful = Math.min(row.remaining, row.napExpPerWeek);
+                row.napWeeks += 1;
+                row.napExp += useful;
+                row.napPotentialExp += row.napExpPerWeek;
+                row.napOverflowExp += Math.max(0, row.napExpPerWeek - useful);
+                row.remaining = Math.max(0, row.remaining - row.napExpPerWeek);
+                row.totalExp += row.napExpPerWeek;
+                if (row.remaining <= 0 && row.completionDay == null) row.completionDay = day;
+                activeNap = null;
+            }
+        }
+    }
+
+    rows.forEach(row => {
+        if (row.sleepPerNight == null) {
+            const ownBonus = getTrainingSleepBonusCountForRow(row);
+            row.sleepPerNight = getTrainingSleepExp(row.nature, ownBonus);
+            row.sleepPerNightEnd = row.sleepPerNight;
+            row.sleepBonusCountStart = ownBonus;
+            row.sleepBonusCountEnd = ownBonus;
+        }
+    });
+    return { days: day, supportSlotNights, bonusAssistedNights, events };
+}
+
+function compressTrainingScheduleEvents(events = []) {
+    const segments = [];
+    events.forEach(event => {
+        const signature = JSON.stringify({
+            napId: event.napId || '',
+            sleepIds: event.sleepIds || [],
+            supportCount: event.supportCount || 0,
+            bonusCount: event.bonusCount || 0
+        });
+        const last = segments[segments.length - 1];
+        if (last && last.signature === signature && last.endDay + 1 === event.day) {
+            last.endDay = event.day;
+        } else {
+            segments.push(Object.assign({}, event, { startDay: event.day, endDay: event.day, signature }));
+        }
+    });
+    return segments;
 }
 
 function getTrainingLevelNeed(level, expFactor = 1) {
@@ -11982,7 +12149,7 @@ function renderTrainingPlannerModal() {
     modal.innerHTML = `
     <div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
         <div class="px-5 py-4 bg-gradient-to-r from-indigo-700 via-violet-700 to-sky-600 text-white flex items-start justify-between gap-3">
-            <div><h3 class="text-lg font-black"><i class="fa-solid fa-chart-line"></i> 多宝可梦联合培养计算</h3><p class="text-[10px] text-white/75 font-bold mt-1">任意多选；糖果按进化链共享。系统只计算每只需要承担的睡眠经验与席位晚，不安排具体睡眠队伍。</p></div>
+            <div><h3 class="text-lg font-black"><i class="fa-solid fa-chart-line"></i> 多宝可梦联合培养计算</h3><p class="text-[10px] text-white/75 font-bold mt-1">任意多选；糖果按进化链共享。系统会自动读取睡眠EXP奖励，并推荐午睡岛分配方案。</p></div>
             <button type="button" onclick="closeTrainingPlannerModal()" aria-label="关闭联合培养计算" class="text-white/70 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="overflow-y-auto p-4 md:p-5 space-y-4">
@@ -11997,25 +12164,13 @@ function renderTrainingPlannerModal() {
                         const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
                         const target = Math.max(level || 1, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : 50));
                         const sleepBonusUnlock = getSleepExpBonusUnlockLevel(cur.subskills || cap.subskills);
-                        const hasSleepBonusOverride = Object.prototype.hasOwnProperty.call(trainingPlannerState.sleepBonusCountById || {}, itemId);
-                        const sleepBonusValue = hasSleepBonusOverride ? trainingPlannerState.sleepBonusCountById[itemId] : 'auto';
-                        const napWeeks = trainingPlannerState.napIslandWeeksById?.[itemId] || 0;
+                        const priority = Math.max(1, Math.min(5, Number(trainingPlannerState.priorityById?.[itemId]) || 3));
                         return `<div class="rounded-xl border ${checked ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'} p-2.5 flex items-start gap-2">
                             <input type="checkbox" ${checked ? 'checked' : ''} ${hasProgress ? '' : 'disabled'} onchange='toggleTrainingPlannerSelection(${JSON.stringify(itemId)}, this.checked)' class="mt-1 accent-indigo-600">
                             <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-1"><span class="text-xs font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))}</span><span class="text-[9px] font-black px-1.5 py-0.5 rounded-md ${isWorkerGraduationEntry(item) ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'}">${getGraduationDexEntryResultName(item, cur)}</span></div>
                             <div class="text-[9px] text-slate-400 font-bold mt-1">${hasProgress ? `Lv.${level} · 距下级 ${formatTrainingNumber(cur.trainingExpToNext)} · 经验×${expFactor} · ${getTrainingNatureLabel(cur.nature)}` : '先录入等级经验后才能选择'}</div>
-                            <div class="mt-1.5 flex items-center gap-1"><span class="text-[9px] text-slate-400 font-bold">目标</span><input type="number" min="${level || 1}" max="70" value="${target}" onchange='updateTrainingPlannerTarget(${JSON.stringify(itemId)}, this.value)' class="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black"><button type="button" onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="text-[9px] font-black text-indigo-600 hover:text-indigo-800 px-1">编辑进度</button></div>
-                            <div class="mt-2 grid grid-cols-2 gap-1.5">
-                                <label class="text-[8px] font-black text-amber-700">睡眠EXP词条数
-                                    <select onchange='updateTrainingPlannerSleepBonus(${JSON.stringify(itemId)}, this.value)' class="mt-0.5 w-full bg-white border border-amber-200 rounded-lg px-1.5 py-1 text-[9px] font-black">
-                                        <option value="auto" ${sleepBonusValue === 'auto' ? 'selected' : ''}>自动（自身${sleepBonusUnlock ? `Lv.${sleepBonusUnlock}` : '无'}）</option>
-                                        ${Array.from({ length: 6 }, (_, n) => `<option value="${n}" ${sleepBonusValue === n ? 'selected' : ''}>${n}个（+${n * 14}%）</option>`).join('')}
-                                    </select>
-                                </label>
-                                <label class="text-[8px] font-black text-sky-700">分配午睡岛周数
-                                    <input type="number" min="0" max="260" value="${napWeeks}" onchange='updateTrainingPlannerNapWeeks(${JSON.stringify(itemId)}, this.value)' class="mt-0.5 w-full bg-white border border-sky-200 rounded-lg px-1.5 py-1 text-[9px] font-black">
-                                </label>
-                            </div></div>
+                            <div class="mt-1.5 flex flex-wrap items-center gap-1"><span class="text-[9px] text-slate-400 font-bold">目标</span><input type="number" min="${level || 1}" max="70" value="${target}" onchange='updateTrainingPlannerTarget(${JSON.stringify(itemId)}, this.value)' class="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black"><span class="ml-1 text-[9px] text-rose-500 font-bold">优先级</span><input type="number" min="1" max="5" value="${priority}" onchange='updateTrainingPlannerPriority(${JSON.stringify(itemId)}, this.value)' title="1最低，5最高，默认3" class="w-12 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1 text-[10px] font-black text-rose-700"><button type="button" onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="text-[9px] font-black text-indigo-600 hover:text-indigo-800 px-1">编辑进度</button></div>
+                            <div class="mt-2 flex flex-wrap gap-1.5 text-[8px] font-black"><span class="px-2 py-1 rounded-lg ${sleepBonusUnlock ? (level >= sleepBonusUnlock ? 'bg-amber-100 text-amber-800' : 'bg-white border border-amber-200 text-amber-600') : 'bg-slate-100 text-slate-400'}">${sleepBonusUnlock ? `睡眠EXP奖励 Lv.${sleepBonusUnlock}${level >= sleepBonusUnlock ? '已生效' : '待解锁'}` : '无睡眠EXP奖励'}</span><span class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700">午睡岛由系统自动分配</span></div></div>
                         </div>`;
                     }).join('') : '<div class="text-xs font-bold text-slate-400 py-5 text-center col-span-full">出货库还是空的，请先补录出货或打工个体。</div>'}
                 </div>
@@ -12086,17 +12241,11 @@ function updateTrainingPlannerTarget(id, value) {
     renderTrainingPlannerModal();
 }
 
-function updateTrainingPlannerSleepBonus(id, value) {
-    trainingPlannerState.sleepBonusCountById ||= {};
-    if (value === 'auto') delete trainingPlannerState.sleepBonusCountById[String(id)];
-    else trainingPlannerState.sleepBonusCountById[String(id)] = Math.max(0, Math.min(5, Math.floor(Number(value) || 0)));
-    calculateAndRenderTrainingPlanner();
-}
-
-function updateTrainingPlannerNapWeeks(id, value) {
-    trainingPlannerState.napIslandWeeksById ||= {};
-    trainingPlannerState.napIslandWeeksById[String(id)] = Math.max(0, Math.min(260, Math.floor(Number(value) || 0)));
-    calculateAndRenderTrainingPlanner();
+function updateTrainingPlannerPriority(id, value) {
+    trainingPlannerState.priorityById ||= {};
+    trainingPlannerState.priorityById[String(id)] = Math.max(1, Math.min(5, Math.floor(Number(value) || 3)));
+    saveTrainingPlannerState();
+    calculateAndRenderTrainingPlanner(false);
 }
 
 function updateTrainingPlannerBoostWeeks(value) {
@@ -12184,34 +12333,35 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         const targetLevel = Math.max(currentLevel || 1, Math.min(70, Number(cur.trainingTargetLevel) || currentLevel || 1));
         const missing = currentLevel ? getTrainingMissingExp(cur, targetLevel) : 0;
         const id = String(item.id);
-        const hasSleepBonusOverride = Object.prototype.hasOwnProperty.call(trainingPlannerState.sleepBonusCountById || {}, id);
         const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
         return {
             id, item, cap, cur,
             name: getGraduationDexNickname(item), currentLevel, targetLevel,
+            priority: Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.priorityById?.[id]) || 3))),
             group: cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name),
             nature: cur.nature || 'blank',
             expFactor,
             sleepBonusUnlockLevel: getSleepExpBonusUnlockLevel(cur.subskills || cap.subskills),
-            sleepBonusOverride: hasSleepBonusOverride ? trainingPlannerState.sleepBonusCountById[id] : null,
-            requestedNapWeeks: Math.max(0, Math.min(260, Math.floor(Number(trainingPlannerState.napIslandWeeksById?.[id]) || 0))),
             initialMissing: missing, remaining: missing,
             totalExp: getTrainingCurrentTotalExp(cur),
-            candyNormal: 0, candyBoosted: 0, universalSpeciesCandy: 0, candyExp: 0, shards: 0
+            candyNormal: 0, candyBoosted: 0, universalSpeciesCandy: 0, futureUniversalSpeciesCandy: 0, candyExp: 0, shards: 0
         };
     }).filter(row => row.currentLevel > 0 && row.targetLevel >= row.currentLevel);
 
     rows.forEach(row => {
         row.napExpPerDay = getTrainingNapIslandExpPerDay(row.nature);
         row.napExpPerWeek = row.napExpPerDay * 7;
-        const maxUsefulNapWeeks = row.initialMissing > 0 ? Math.ceil(row.initialMissing / row.napExpPerWeek) : 0;
-        row.napWeeks = Math.min(row.requestedNapWeeks, maxUsefulNapWeeks);
-        row.napPotentialExp = row.napWeeks * row.napExpPerWeek;
-        row.napExp = Math.min(row.remaining, row.napPotentialExp);
-        row.napOverflowExp = Math.max(0, row.napPotentialExp - row.napExp);
-        row.remaining = Math.max(0, row.remaining - row.napPotentialExp);
-        row.totalExp += row.napPotentialExp;
     });
+
+    const externalSleepBonusSupportItems = (graduationDex || []).filter(item => {
+        if (selected.has(String(item.id))) return false;
+        const cap = getGraduationCapture(item);
+        const cur = getGraduationCurrent(item);
+        const unlockLevel = getSleepExpBonusUnlockLevel(cur.subskills || cap.subskills);
+        return unlockLevel > 0 && Number(cur.trainingLevel) >= unlockLevel;
+    });
+    const externalSleepBonusSupports = externalSleepBonusSupportItems.length;
+    const externalSleepBonusSupportNames = externalSleepBonusSupportItems.map(item => getGraduationDexNickname(item));
 
     const groupStock = {};
     rows.forEach(row => {
@@ -12233,6 +12383,9 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         universalCandyOverride == null || override.l == null ? trainingPlannerState.universalCandyL : override.l
     ) || 0));
     let universalSpeciesStock = universalCandySAvailable * 3 + universalCandyMAvailable * 20 + universalCandyLAvailable * 100;
+    const currentUniversalSpeciesCapacity = Math.max(0, Math.floor(Number(
+        override.currentSpeciesCapacity == null ? universalSpeciesStock : override.currentSpeciesCapacity
+    ) || 0));
     let universalSpeciesUsed = 0;
     let boostRemaining = trainingPlannerState.boostWeeks * 350;
     let safety = Math.min(300000, Object.values(groupStock).reduce((sum, n) => sum + n, 0) + universalSpeciesStock);
@@ -12242,7 +12395,7 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         candidates.sort((a, b) => {
             const aPressure = a.remaining / getTrainingSleepExp(a.nature, getTrainingSleepBonusCountForRow(a));
             const bPressure = b.remaining / getTrainingSleepExp(b.nature, getTrainingSleepBonusCountForRow(b));
-            return bPressure - aPressure || b.remaining - a.remaining;
+            return b.priority - a.priority || bPressure - aPressure || b.remaining - a.remaining;
         });
         const row = candidates[0];
         const boosted = boostRemaining > 0;
@@ -12260,19 +12413,12 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
             universalSpeciesStock -= 1;
             universalSpeciesUsed += 1;
             row.universalSpeciesCandy += 1;
+            if (universalSpeciesUsed > currentUniversalSpeciesCapacity) row.futureUniversalSpeciesCandy += 1;
         }
     }
 
-    rows.forEach(row => {
-        const sleep = calculateTrainingSleepOutcome(row);
-        row.sleepExp = sleep.requiredExp;
-        row.sleepNights = sleep.nights;
-        row.sleepActualExp = sleep.actualExp;
-        row.sleepBonusCountStart = sleep.startBonusCount;
-        row.sleepBonusCountEnd = sleep.endBonusCount;
-        row.sleepPerNight = sleep.startPerNight;
-        row.sleepPerNightEnd = sleep.endPerNight;
-    });
+    const schedule = buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports);
+    rows.forEach(row => { row.recommendedCompletionDay = Number(row.completionDay) || 0; });
     const totals = rows.reduce((out, row) => {
         out.missing += row.initialMissing;
         out.napExp += row.napExp;
@@ -12287,11 +12433,18 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         out.shards += row.shards;
         return out;
     }, { missing: 0, napExp: 0, napPotentialExp: 0, napWeeks: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
+    totals.sleepSupportSlotNights = schedule.supportSlotNights;
+    totals.allSleepSlotNights = totals.sleepSlotNights + schedule.supportSlotNights;
     const universalConversion = getUniversalCandyConversion(
         universalSpeciesUsed, universalCandySAvailable, universalCandyMAvailable, universalCandyLAvailable
     );
     return {
         rows, totals, unusedBoostQuota: boostRemaining, groupStock,
+        scheduleDays: schedule.days,
+        scheduleEvents: schedule.events,
+        externalSleepBonusSupports,
+        externalSleepBonusSupportNames,
+        bonusAssistedNights: schedule.bonusAssistedNights,
         universalCandySAvailable, universalCandyMAvailable, universalCandyLAvailable,
         universalCandySUsed: universalConversion.s,
         universalCandyMUsed: universalConversion.m,
@@ -12307,6 +12460,7 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
 
 function getTrainingPlanTheoreticalNights(plan) {
     if (!plan?.rows?.length) return 0;
+    if (Number.isFinite(Number(plan.scheduleDays))) return Math.max(0, Number(plan.scheduleDays));
     const longestIndividual = Math.max(0, ...plan.rows.map(row => (Number(row.sleepNights) || 0) + (Number(row.napWeeks) || 0) * 7));
     const fiveSlotCapacity = Math.ceil((Number(plan.totals?.sleepSlotNights) || 0) / 5);
     const napIslandCalendar = (Number(plan.totals?.napWeeks) || 0) * 7;
@@ -12317,15 +12471,17 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
     const currentUniversal = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyS) || 0));
     const currentUniversalM = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyM) || 0));
     const currentUniversalL = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyL) || 0));
+    const currentUniversalSpeciesCapacity = currentUniversal * 3 + currentUniversalM * 20 + currentUniversalL * 100;
     const weeklyIncome = Math.max(0, Math.floor(Number(trainingPlannerState.weeklyUniversalCandyS) || 0));
     const useWeekly = trainingPlannerState.includeWeeklyUniversalCandy && weeklyIncome > 0;
 
     if (!useWeekly) {
-        const plan = buildTrainingPlan(includeExtra, { s: currentUniversal, m: currentUniversalM, l: currentUniversalL });
+        const plan = buildTrainingPlan(includeExtra, { s: currentUniversal, m: currentUniversalM, l: currentUniversalL, currentSpeciesCapacity: currentUniversalSpeciesCapacity });
         plan.projectedUniversalWeeks = 0;
         plan.projectedUniversalCandyS = 0;
         plan.theoreticalSleepNights = getTrainingPlanTheoreticalNights(plan);
         plan.completionNights = plan.theoreticalSleepNights;
+        plan.rows.forEach(row => { row.recommendedCompletionDay = Number(row.completionDay) || 0; });
         return plan;
     }
 
@@ -12336,7 +12492,8 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
         const plan = buildTrainingPlan(includeExtra, {
             s: currentUniversal + earnedUniversal,
             m: currentUniversalM,
-            l: currentUniversalL
+            l: currentUniversalL,
+            currentSpeciesCapacity: currentUniversalSpeciesCapacity
         });
         const rawSleepNights = getTrainingPlanTheoreticalNights(plan);
         // 使用第 N 周获得的糖，完成时间不可能早于第 N 个七天节点。
@@ -12347,6 +12504,12 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
             theoreticalSleepNights: rawSleepNights,
             completionNights
         });
+        candidate.rows.forEach(row => {
+            row.recommendedCompletionDay = Math.max(
+                Number(row.completionDay) || 0,
+                row.futureUniversalSpeciesCandy > 0 ? weeks * 7 : 0
+            );
+        });
         if (!best
             || completionNights < best.completionNights
             || (completionNights === best.completionNights && weeks < best.projectedUniversalWeeks)
@@ -12355,7 +12518,7 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
         }
         if (best && weeks * 7 > best.completionNights + 28) break;
     }
-    return best || buildTrainingPlan(includeExtra, { s: currentUniversal, m: currentUniversalM, l: currentUniversalL });
+    return best || buildTrainingPlan(includeExtra, { s: currentUniversal, m: currentUniversalM, l: currentUniversalL, currentSpeciesCapacity: currentUniversalSpeciesCapacity });
 }
 
 function calculateAndRenderTrainingPlanner(persist = true) {
@@ -12372,14 +12535,17 @@ function calculateAndRenderTrainingPlanner(persist = true) {
     const extraCandy = Object.entries(trainingPlannerState.groupExtra || {})
         .filter(([group]) => activeGroups.has(group))
         .reduce((sum, [, n]) => sum + (Number(n) || 0), 0);
-    const savedNights = Math.max(0, baseline.totals.sleepSlotNights - plan.totals.sleepSlotNights);
+    const savedNights = Math.max(0, baseline.totals.allSleepSlotNights - plan.totals.allSleepSlotNights);
     const savedCalendarNights = Math.max(0, baseline.completionNights - plan.completionNights);
     const extraShards = Math.max(0, plan.totals.shards - baseline.totals.shards);
-    const fullTeamEquivalent = plan.totals.sleepSlotNights / 5;
+    const fullTeamEquivalent = plan.totals.allSleepSlotNights / 5;
     const hasUniversalCandy = plan.universalCandySAvailable > 0
         || plan.universalCandyMAvailable > 0
         || plan.universalCandyLAvailable > 0
         || plan.projectedUniversalCandyS > 0;
+    const scheduleSegments = compressTrainingScheduleEvents(plan.scheduleEvents || []);
+    const rowNameById = Object.fromEntries(plan.rows.map(row => [String(row.id), row.name]));
+    const visibleScheduleSegments = scheduleSegments.slice(0, 120);
 
     box.innerHTML = `
     <section class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -12389,8 +12555,9 @@ function calculateAndRenderTrainingPlanner(persist = true) {
             ['午睡岛承担', `${formatTrainingNumber(plan.totals.napExp)} EXP`, 'text-teal-700'],
             ['睡眠承担', `${formatTrainingNumber(plan.totals.sleepExp)} EXP`, 'text-sky-700'],
             ['睡眠席位晚', formatTrainingNumber(plan.totals.sleepSlotNights), 'text-indigo-700'],
+            ['词条辅助席位', formatTrainingNumber(plan.totals.sleepSupportSlotNights), 'text-amber-700'],
             ['午睡岛占用', `${formatTrainingNumber(plan.totals.napWeeks)} 周`, 'text-teal-700'],
-            ['理论最快完成', `${formatTrainingNumber(plan.completionNights)} 晚`, 'text-violet-700'],
+            ['推荐完成时间', `${formatTrainingNumber(plan.completionNights)} 天`, 'text-violet-700'],
             ['约合满5席', `${fullTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
             ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
             ['梦碎估算', formatTrainingNumber(plan.totals.shards), 'text-rose-700']
@@ -12400,14 +12567,27 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         本方案预计使用万能糖 <strong>S ${formatTrainingNumber(plan.universalCandySUsed)}</strong> 个、<strong>M ${formatTrainingNumber(plan.universalCandyMUsed)}</strong> 个、<strong>L ${formatTrainingNumber(plan.universalCandyLUsed)}</strong> 个，共换出 ${formatTrainingNumber(plan.universalConvertedSpecies)} 颗宝可梦糖果，其中本次培养使用 ${formatTrainingNumber(plan.universalSpeciesUsed)} 颗${plan.universalConvertedLeftover ? `，兑换后余下 ${formatTrainingNumber(plan.universalConvertedLeftover)} 颗` : ''}。
         ${trainingPlannerState.includeWeeklyUniversalCandy ? `理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 个完整周，预计另获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个。` : ''}
     </div>` : ''}
+    ${plan.bonusAssistedNights > 0 ? `<div class="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs font-bold text-amber-800"><i class="fa-solid fa-star"></i> 系统已从出货库面板自动识别睡眠EXP奖励：选中的培养个体会在达到解锁等级后加入词条安排，另有 <strong>${formatTrainingNumber(plan.externalSleepBonusSupports)}</strong> 只未选中但已解锁的出货库个体可作为辅助队员${plan.externalSleepBonusSupportNames?.length ? `（${plan.externalSleepBonusSupportNames.map(escapeHtml).join('、')}）` : ''}。推荐方案中共有 ${formatTrainingNumber(plan.bonusAssistedNights)} 晚使用了至少1个生效词条。</div>` : ''}
     ${plan.totals.napWeeks > 0 ? `<div class="bg-teal-50 border border-teal-200 rounded-2xl px-4 py-3 text-xs font-bold text-teal-800"><i class="fa-solid fa-umbrella-beach"></i> 午睡岛共分配 <strong>${formatTrainingNumber(plan.totals.napWeeks)}</strong> 周；由于每周只能送1只，这些周数依次占用午睡岛。每日基础150 EXP经性格修正后，普通／EXP＋／EXP－性格每周分别一次性获得1050／1239／861 EXP；不受睡眠EXP奖励词条影响。在岛期间该宝可梦不再参加普通睡眠培养。</div>` : ''}
-    ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，理论完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 晚，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
+    ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，推荐完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 天，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
+    <section class="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3 space-y-2">
+        <div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calendar-days"></i> 推荐睡眠与午睡岛方案</h4><p class="text-[9px] text-indigo-600 font-bold mt-0.5">已按优先级和连续相同安排合并日期；高优先级会更早获得糖果、睡眠席位和午睡岛机会。</p></div>
+        <div class="grid md:grid-cols-2 gap-2">
+            ${visibleScheduleSegments.length ? visibleScheduleSegments.map(segment => {
+                const range = segment.startDay === segment.endDay ? `第${segment.startDay}天` : `第${segment.startDay}～${segment.endDay}天`;
+                const napName = segment.napId ? escapeHtml(rowNameById[String(segment.napId)] || segment.napId) : '不使用';
+                const sleepers = (segment.sleepIds || []).map(id => escapeHtml(rowNameById[String(id)] || id));
+                return `<div class="bg-white border border-indigo-100 rounded-xl px-3 py-2 text-[9px] font-bold text-slate-600"><div class="font-black text-indigo-700">${range}</div><div class="mt-1"><span class="text-teal-700">午睡岛：</span>${napName}</div><div><span class="text-sky-700">普通睡眠：</span>${sleepers.length ? sleepers.join('、') : '无培养对象'}${segment.supportCount ? ` · 另带${segment.supportCount}只词条辅助` : ''}</div><div><span class="text-amber-700">当晚生效睡眠EXP词条：</span>${segment.bonusCount || 0}个</div></div>`;
+            }).join('') : '<div class="bg-white border border-indigo-100 rounded-xl px-3 py-4 text-[10px] font-bold text-slate-400 md:col-span-2">当前资源已能直接完成所有目标，无需额外睡眠或午睡岛安排。</div>'}
+        </div>
+        ${scheduleSegments.length > visibleScheduleSegments.length ? `<div class="text-[9px] font-bold text-indigo-500">方案较长，当前展示前${visibleScheduleSegments.length}个连续阶段，每只的最终完成时间以下表为准。</div>` : ''}
+    </section>
     <section class="overflow-x-auto border border-slate-200 rounded-2xl">
-        <table class="w-full text-[10px] min-w-[1180px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">午睡岛</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">每晚EXP/词条</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
-        <tbody>${plan.rows.map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
+        <table class="w-full text-[10px] min-w-[1280px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">优先级</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">预计完成</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">午睡岛</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">每晚EXP/词条</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
+        <tbody>${plan.rows.slice().sort((a, b) => b.priority - a.priority || (a.recommendedCompletionDay ?? Infinity) - (b.recommendedCompletionDay ?? Infinity)).map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 text-rose-700 font-black">${row.priority}</td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-center px-2 py-2 text-emerald-700 font-black">${row.recommendedCompletionDay > 0 ? `第${formatTrainingNumber(row.recommendedCompletionDay)}天<br><span class="text-[8px]">约${formatTrainingNumber(Math.ceil(row.recommendedCompletionDay / 7))}周</span>${row.futureUniversalSpeciesCandy ? `<br><span class="text-[8px] text-violet-600">含未来万能糖</span>` : ''}` : '立即完成'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加；“自动”只跟踪该宝可梦自身词条，它在培养中达到解锁等级后会从下一晚开始生效；若有其他同队词条，请手动选择当晚生效数。手动填入的外部词条只修正该宝可梦的每晚EXP，不额外生成辅助宝可梦的席位排班。睡眠席位晚＝每只宝可梦需要上队的晚数相加；理论最快完成同时受“每天5席”、“同一只每天最多睡1次”及“午睡岛每周1只”约束，但不生成具体排班。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟最多5个席位，直接读取出货库的副技能与当前等级；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛也由系统在每个七天节点自动选择净收益最高的培养对象；如果普通睡眠反而能更早完成，该周会主动留空。“推荐完成时间”由上述自动调度模拟得出，不要求玩家手动填写词条数或午睡岛周数。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
