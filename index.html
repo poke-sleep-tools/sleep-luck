@@ -11649,7 +11649,8 @@ const TRAINING_CANDY_GROUP_OVERRIDES = {
 
 let trainingPlannerState = {
     selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
-    universalCandyS: 0, weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true
+    universalCandyS: 0, universalCandyM: 0, universalCandyL: 0,
+    weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true
 };
 
 function formatTrainingNumber(value) {
@@ -11674,6 +11675,8 @@ function normalizeTrainingPlannerState(raw = {}) {
         groupExtra: cleanCounts(raw.groupExtra),
         boostWeeks: Math.max(0, Math.min(12, Math.floor(Number(raw.boostWeeks) || 0))),
         universalCandyS: Math.max(0, Math.min(99999, Math.floor(Number(raw.universalCandyS) || 0))),
+        universalCandyM: Math.max(0, Math.min(99999, Math.floor(Number(raw.universalCandyM) || 0))),
+        universalCandyL: Math.max(0, Math.min(99999, Math.floor(Number(raw.universalCandyL) || 0))),
         weeklyUniversalCandyS: raw.weeklyUniversalCandyS == null
             ? 6
             : Math.max(0, Math.min(999, Math.floor(Number(raw.weeklyUniversalCandyS) || 0))),
@@ -11921,17 +11924,25 @@ function renderTrainingPlannerModal() {
 
             <section class="bg-amber-50/70 border border-amber-200 rounded-2xl p-3 space-y-3">
                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                    <div><h4 class="text-xs font-black text-amber-900"><i class="fa-solid fa-candy-cane"></i> 共享糖果池、万能糖与增强周</h4><p class="text-[9px] text-amber-700/70 font-bold mt-0.5">万能糖S每个可换任意糖果3颗；“额外糖果”只用于收益情景，不写进当前库存。</p></div>
+                    <div><h4 class="text-xs font-black text-amber-900"><i class="fa-solid fa-candy-cane"></i> 共享糖果池、万能糖与增强周</h4><p class="text-[9px] text-amber-700/70 font-bold mt-0.5">万能糖 S/M/L 分别可换3/20/100颗任意糖果；“额外糖果”只用于收益情景，不写进当前库存。</p></div>
                     <label class="text-[10px] font-black text-amber-800 flex items-center gap-2">预计糖果增强周
                         <select onchange="updateTrainingPlannerBoostWeeks(this.value)" class="bg-white border border-amber-200 rounded-xl px-3 py-2 text-xs font-black">
                             ${Array.from({ length: 13 }, (_, n) => `<option value="${n}" ${trainingPlannerState.boostWeeks === n ? 'selected' : ''}>${n} 周${n ? `（最多 ${n * 350} 颗）` : ''}</option>`).join('')}
                         </select>
                     </label>
                 </div>
-                <div class="bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-xl p-3 grid sm:grid-cols-3 gap-2 items-end">
+                <div class="bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-xl p-3 grid sm:grid-cols-2 xl:grid-cols-5 gap-2 items-end">
                     <label class="text-[9px] font-black text-violet-700">现有万能糖S
-                        <input type="number" min="0" max="99999" value="${trainingPlannerState.universalCandyS || 0}" onchange='updateTrainingPlannerUniversalSetting("inventory", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
+                        <input type="number" min="0" max="99999" value="${trainingPlannerState.universalCandyS || 0}" onchange='updateTrainingPlannerUniversalSetting("s", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
                         <span class="block mt-1 text-[8px] text-violet-500">可换 ${formatTrainingNumber((trainingPlannerState.universalCandyS || 0) * 3)} 颗任意糖果</span>
+                    </label>
+                    <label class="text-[9px] font-black text-violet-700">现有万能糖M
+                        <input type="number" min="0" max="99999" value="${trainingPlannerState.universalCandyM || 0}" onchange='updateTrainingPlannerUniversalSetting("m", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
+                        <span class="block mt-1 text-[8px] text-violet-500">可换 ${formatTrainingNumber((trainingPlannerState.universalCandyM || 0) * 20)} 颗任意糖果</span>
+                    </label>
+                    <label class="text-[9px] font-black text-violet-700">现有万能糖L
+                        <input type="number" min="0" max="99999" value="${trainingPlannerState.universalCandyL || 0}" onchange='updateTrainingPlannerUniversalSetting("l", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
+                        <span class="block mt-1 text-[8px] text-violet-500">可换 ${formatTrainingNumber((trainingPlannerState.universalCandyL || 0) * 100)} 颗任意糖果</span>
                     </label>
                     <label class="text-[9px] font-black text-violet-700">每周获得万能糖S
                         <input type="number" min="0" max="999" value="${trainingPlannerState.weeklyUniversalCandyS ?? 6}" onchange='updateTrainingPlannerUniversalSetting("weekly", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
@@ -11988,13 +11999,71 @@ function updateTrainingPlannerGroupValue(group, field, value) {
 }
 
 function updateTrainingPlannerUniversalSetting(field, value) {
-    if (field === 'inventory') trainingPlannerState.universalCandyS = Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)));
+    if (field === 'inventory' || field === 's') trainingPlannerState.universalCandyS = Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)));
+    if (field === 'm') trainingPlannerState.universalCandyM = Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)));
+    if (field === 'l') trainingPlannerState.universalCandyL = Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)));
     if (field === 'weekly') trainingPlannerState.weeklyUniversalCandyS = Math.max(0, Math.min(999, Math.floor(Number(value) || 0)));
     if (field === 'includeWeekly') trainingPlannerState.includeWeeklyUniversalCandy = !!value;
     calculateAndRenderTrainingPlanner();
 }
 
-function buildTrainingPlan(includeExtra = true, universalCandySOverride = null) {
+function getUniversalCandyConversion(speciesCandyNeeded, availableS, availableM, availableL) {
+    const stocks = {
+        s: Math.max(0, Math.floor(Number(availableS) || 0)),
+        m: Math.max(0, Math.floor(Number(availableM) || 0)),
+        l: Math.max(0, Math.floor(Number(availableL) || 0))
+    };
+    const capacity = stocks.s * 3 + stocks.m * 20 + stocks.l * 100;
+    const needed = Math.max(0, Math.min(capacity, Math.floor(Number(speciesCandyNeeded) || 0)));
+    if (!needed) return { s: 0, m: 0, l: 0, converted: 0, used: 0, leftover: 0 };
+
+    // 20个 S 与 3个 M 都是60颗糖果，因此只需要检查 S 数量的模20代表和边界附近。
+    // 目标依次为：兑换溢出最少、消耗的万能糖个数最少。
+    const sCandidates = new Set();
+    const addSRange = center => {
+        const base = Math.max(0, Math.min(stocks.s, Math.floor(Number(center) || 0)));
+        for (let delta = -20; delta <= 20; delta++) {
+            const value = base + delta;
+            if (value >= 0 && value <= stocks.s) sCandidates.add(value);
+        }
+    };
+    addSRange(0);
+    addSRange(stocks.s);
+    addSRange(Math.ceil(needed / 3));
+    addSRange(Math.ceil((needed - stocks.m * 20 - stocks.l * 100) / 3));
+
+    let best = null;
+    sCandidates.forEach(sUsed => {
+        const residual = Math.max(0, needed - sUsed * 3);
+        const requiredTwentyUnits = Math.ceil(residual / 20);
+        for (let extraUnits = 0; extraUnits <= 4; extraUnits++) {
+            const twentyUnits = requiredTwentyUnits + extraUnits;
+            const minL = Math.max(0, Math.ceil((twentyUnits - stocks.m) / 5));
+            const maxL = Math.min(stocks.l, Math.floor(twentyUnits / 5));
+            if (minL > maxL) continue;
+            const lUsed = maxL;
+            const mUsed = twentyUnits - lUsed * 5;
+            if (mUsed < 0 || mUsed > stocks.m) continue;
+            const converted = sUsed * 3 + mUsed * 20 + lUsed * 100;
+            if (converted < needed) continue;
+            const candidate = {
+                s: sUsed, m: mUsed, l: lUsed,
+                converted, used: needed, leftover: converted - needed
+            };
+            const itemCount = sUsed + mUsed + lUsed;
+            const bestItemCount = best ? best.s + best.m + best.l : Infinity;
+            if (!best || converted < best.converted || (converted === best.converted && itemCount < bestItemCount)) best = candidate;
+            break;
+        }
+    });
+
+    return best || {
+        s: stocks.s, m: stocks.m, l: stocks.l,
+        converted: capacity, used: needed, leftover: Math.max(0, capacity - needed)
+    };
+}
+
+function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
     const selected = new Set(trainingPlannerState.selectedIds.map(String));
     const rows = (graduationDex || []).filter(item => selected.has(String(item.id))).map(item => {
         const cap = getGraduationCapture(item);
@@ -12020,10 +12089,19 @@ function buildTrainingPlan(includeExtra = true, universalCandySOverride = null) 
                 + (includeExtra ? Math.max(0, Math.floor(Number(trainingPlannerState.groupExtra[row.group]) || 0)) : 0);
         }
     });
+    const override = typeof universalCandyOverride === 'number'
+        ? { s: universalCandyOverride }
+        : (universalCandyOverride || {});
     const universalCandySAvailable = Math.max(0, Math.floor(Number(
-        universalCandySOverride == null ? trainingPlannerState.universalCandyS : universalCandySOverride
+        universalCandyOverride == null || override.s == null ? trainingPlannerState.universalCandyS : override.s
     ) || 0));
-    let universalSpeciesStock = universalCandySAvailable * 3;
+    const universalCandyMAvailable = Math.max(0, Math.floor(Number(
+        universalCandyOverride == null || override.m == null ? trainingPlannerState.universalCandyM : override.m
+    ) || 0));
+    const universalCandyLAvailable = Math.max(0, Math.floor(Number(
+        universalCandyOverride == null || override.l == null ? trainingPlannerState.universalCandyL : override.l
+    ) || 0));
+    let universalSpeciesStock = universalCandySAvailable * 3 + universalCandyMAvailable * 20 + universalCandyLAvailable * 100;
     let universalSpeciesUsed = 0;
     let boostRemaining = trainingPlannerState.boostWeeks * 350;
     let safety = Math.min(300000, Object.values(groupStock).reduce((sum, n) => sum + n, 0) + universalSpeciesStock);
@@ -12071,13 +12149,21 @@ function buildTrainingPlan(includeExtra = true, universalCandySOverride = null) 
         out.shards += row.shards;
         return out;
     }, { missing: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
+    const universalConversion = getUniversalCandyConversion(
+        universalSpeciesUsed, universalCandySAvailable, universalCandyMAvailable, universalCandyLAvailable
+    );
     return {
         rows, totals, unusedBoostQuota: boostRemaining, groupStock,
-        universalCandySAvailable,
-        universalCandySUsed: Math.ceil(universalSpeciesUsed / 3),
+        universalCandySAvailable, universalCandyMAvailable, universalCandyLAvailable,
+        universalCandySUsed: universalConversion.s,
+        universalCandyMUsed: universalConversion.m,
+        universalCandyLUsed: universalConversion.l,
         universalSpeciesUsed,
-        universalConvertedLeftover: Math.max(0, Math.ceil(universalSpeciesUsed / 3) * 3 - universalSpeciesUsed),
-        unusedUniversalCandyS: Math.max(0, universalCandySAvailable - Math.ceil(universalSpeciesUsed / 3))
+        universalConvertedSpecies: universalConversion.converted,
+        universalConvertedLeftover: universalConversion.leftover,
+        unusedUniversalCandyS: Math.max(0, universalCandySAvailable - universalConversion.s),
+        unusedUniversalCandyM: Math.max(0, universalCandyMAvailable - universalConversion.m),
+        unusedUniversalCandyL: Math.max(0, universalCandyLAvailable - universalConversion.l)
     };
 }
 
@@ -12090,11 +12176,13 @@ function getTrainingPlanTheoreticalNights(plan) {
 
 function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
     const currentUniversal = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyS) || 0));
+    const currentUniversalM = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyM) || 0));
+    const currentUniversalL = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyL) || 0));
     const weeklyIncome = Math.max(0, Math.floor(Number(trainingPlannerState.weeklyUniversalCandyS) || 0));
     const useWeekly = trainingPlannerState.includeWeeklyUniversalCandy && weeklyIncome > 0;
 
     if (!useWeekly) {
-        const plan = buildTrainingPlan(includeExtra, currentUniversal);
+        const plan = buildTrainingPlan(includeExtra, { s: currentUniversal, m: currentUniversalM, l: currentUniversalL });
         plan.projectedUniversalWeeks = 0;
         plan.projectedUniversalCandyS = 0;
         plan.theoreticalSleepNights = getTrainingPlanTheoreticalNights(plan);
@@ -12106,7 +12194,11 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
     // Lv.1→70 即使是减经验性格，也远低于 260 周；此上限同时防止异常输入拖慢页面。
     for (let weeks = 0; weeks <= 260; weeks++) {
         const earnedUniversal = weeks * weeklyIncome;
-        const plan = buildTrainingPlan(includeExtra, currentUniversal + earnedUniversal);
+        const plan = buildTrainingPlan(includeExtra, {
+            s: currentUniversal + earnedUniversal,
+            m: currentUniversalM,
+            l: currentUniversalL
+        });
         const rawSleepNights = getTrainingPlanTheoreticalNights(plan);
         // 使用第 N 周获得的糖，完成时间不可能早于第 N 个七天节点。
         const completionNights = Math.max(rawSleepNights, weeks * 7);
@@ -12124,7 +12216,7 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
         }
         if (best && weeks * 7 > best.completionNights + 28) break;
     }
-    return best || buildTrainingPlan(includeExtra, currentUniversal);
+    return best || buildTrainingPlan(includeExtra, { s: currentUniversal, m: currentUniversalM, l: currentUniversalL });
 }
 
 function calculateAndRenderTrainingPlanner(persist = true) {
@@ -12145,6 +12237,10 @@ function calculateAndRenderTrainingPlanner(persist = true) {
     const savedCalendarNights = Math.max(0, baseline.completionNights - plan.completionNights);
     const extraShards = Math.max(0, plan.totals.shards - baseline.totals.shards);
     const fullTeamEquivalent = plan.totals.sleepSlotNights / 5;
+    const hasUniversalCandy = plan.universalCandySAvailable > 0
+        || plan.universalCandyMAvailable > 0
+        || plan.universalCandyLAvailable > 0
+        || plan.projectedUniversalCandyS > 0;
 
     box.innerHTML = `
     <section class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -12155,18 +12251,21 @@ function calculateAndRenderTrainingPlanner(persist = true) {
             ['睡眠席位晚', formatTrainingNumber(plan.totals.sleepSlotNights), 'text-indigo-700'],
             ['理论最快完成', `${formatTrainingNumber(plan.completionNights)} 晚`, 'text-violet-700'],
             ['约合满5席', `${fullTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
-            ['万能糖S使用', `${formatTrainingNumber(plan.universalCandySUsed)} 个`, 'text-violet-700'],
+            ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
             ['梦碎估算', formatTrainingNumber(plan.totals.shards), 'text-rose-700']
         ].map(([label, value, color]) => `<div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">${label}</div><div class="text-sm font-black ${color} mt-1">${value}</div></div>`).join('')}
     </section>
-    ${trainingPlannerState.includeWeeklyUniversalCandy ? `<div class="bg-violet-50 border border-violet-200 rounded-2xl px-4 py-3 text-xs font-bold text-violet-800"><i class="fa-solid fa-gift"></i> 理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 周，预计获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个（可换 ${formatTrainingNumber(plan.projectedUniversalCandyS * 3)} 颗任意糖果）；加上现有库存后，本方案实际使用万能糖S ${formatTrainingNumber(plan.universalCandySUsed)} 个。</div>` : ''}
+    ${hasUniversalCandy ? `<div class="bg-violet-50 border border-violet-200 rounded-2xl px-4 py-3 text-xs font-bold text-violet-800"><i class="fa-solid fa-gift"></i>
+        本方案预计使用万能糖 <strong>S ${formatTrainingNumber(plan.universalCandySUsed)}</strong> 个、<strong>M ${formatTrainingNumber(plan.universalCandyMUsed)}</strong> 个、<strong>L ${formatTrainingNumber(plan.universalCandyLUsed)}</strong> 个，共换出 ${formatTrainingNumber(plan.universalConvertedSpecies)} 颗宝可梦糖果，其中本次培养使用 ${formatTrainingNumber(plan.universalSpeciesUsed)} 颗${plan.universalConvertedLeftover ? `，兑换后余下 ${formatTrainingNumber(plan.universalConvertedLeftover)} 颗` : ''}。
+        ${trainingPlannerState.includeWeeklyUniversalCandy ? `理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 个完整周，预计另获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个。` : ''}
+    </div>` : ''}
     ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，理论完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 晚，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
     <section class="overflow-x-auto border border-slate-200 rounded-2xl">
         <table class="w-full text-[10px] min-w-[940px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
         <tbody>${plan.rows.map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · ${getTrainingNatureLabel(row.nature)}</div></td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        睡眠席位晚＝每只宝可梦需要上队的晚数相加；理论最快完成同时受“每天5席”和“同一只每天最多睡1次”约束，但不生成具体排班。每周万能糖收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        睡眠席位晚＝每只宝可梦需要上队的晚数相加；理论最快完成同时受“每天5席”和“同一只每天最多睡1次”约束，但不生成具体排班。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
