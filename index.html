@@ -1317,7 +1317,7 @@ function isBallPlannerStateLog(log) {
 }
 
 function isHistorySystemLog(log) {
-    return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log);
+    return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) || isTrainingPlannerStateLog(log);
 }
 
 function isBallPlannerEnabled() {
@@ -3513,6 +3513,9 @@ function getGraduationDexStorageKey() {
 }
 
 function cloneGraduationPanelState(payload = {}) {
+    const rawLevel = Number(payload.trainingLevel);
+    const rawExpToNext = Number(payload.trainingExpToNext);
+    const rawTargetLevel = Number(payload.trainingTargetLevel);
     return {
         date: payload.date || getTodayLocalDateString(),
         session: payload.session || '',
@@ -3530,7 +3533,13 @@ function cloneGraduationPanelState(payload = {}) {
         ))),
         nature: payload.nature || 'blank',
         foodCombo: payload.foodCombo || 'ABB',
-        isShiny: !!payload.isShiny
+        isShiny: !!payload.isShiny,
+
+        // v44：当前培养进度。空值表示玩家尚未录入，不能擅自假定为 1 级。
+        trainingLevel: Number.isFinite(rawLevel) && rawLevel >= 1 ? Math.min(70, Math.floor(rawLevel)) : null,
+        trainingExpToNext: Number.isFinite(rawExpToNext) && rawExpToNext >= 0 ? Math.floor(rawExpToNext) : null,
+        trainingTargetLevel: Number.isFinite(rawTargetLevel) && rawTargetLevel >= 1 ? Math.min(70, Math.floor(rawTargetLevel)) : null,
+        candyGroup: String(payload.candyGroup || '').trim()
     };
 }
 
@@ -3556,6 +3565,8 @@ function buildGraduationDexEntry(payload = {}) {
         sourceId: payload.sourceId || null,
         createdAt: payload.createdAt || new Date().toISOString(),
         excludeFromLuck: !!payload.excludeFromLuck,
+        // 打工档案仍保持 result=none，不进入任何和解/毕业/断档统计。
+        isWorker: !!payload.isWorker,
 
         // nickname：出货库大标题显示的爱称；为空时默认当前宝可梦名
         nickname: displayNickname,
@@ -3598,6 +3609,7 @@ function normalizeGraduationDexEntry(item) {
             sourceId: item.sourceId || null,
             createdAt: item.createdAt || new Date().toISOString(),
             excludeFromLuck: !!item.excludeFromLuck,
+            isWorker: !!item.isWorker,
             nickname: displayNickname,
             capture: captureState,
             current: currentState
@@ -3607,6 +3619,7 @@ function normalizeGraduationDexEntry(item) {
     return buildGraduationDexEntry({
         id: item.id,
         excludeFromLuck: !!item.excludeFromLuck,
+        isWorker: !!item.isWorker,
         source: item.source || 'manual',
         sourceId: item.sourceId || null,
         createdAt: item.createdAt,
@@ -3695,15 +3708,24 @@ function setGraduationDexNickname(item, nickname) {
 function mergeGraduationDex(cloudDex = [], localDex = []) {
     const mergedMap = new Map();
 
+    const chooseNewer = (existing, candidate) => {
+        if (!existing) return candidate;
+        const existingTime = Date.parse(existing.current?.updatedAt || existing.updatedAt || existing.createdAt || '') || 0;
+        const candidateTime = Date.parse(candidate.current?.updatedAt || candidate.updatedAt || candidate.createdAt || '') || 0;
+        if (candidateTime > existingTime) return candidate;
+        if (candidateTime < existingTime) return existing;
+        return candidate;
+    };
+
     cloudDex.forEach(item => {
         const normalized = normalizeGraduationDexEntry(item);
-        if (normalized) mergedMap.set(String(normalized.id), normalized);
+        if (normalized) mergedMap.set(String(normalized.id), chooseNewer(mergedMap.get(String(normalized.id)), normalized));
     });
 
-    // 本地同 id 覆盖云端，避免刚编辑但尚未同步时被旧云端冲掉
+    // 同 ID 按当前档案 updatedAt 判断，兼顾本机未同步编辑与另一台设备的新进度。
     localDex.forEach(item => {
         const normalized = normalizeGraduationDexEntry(item);
-        if (normalized) mergedMap.set(String(normalized.id), normalized);
+        if (normalized) mergedMap.set(String(normalized.id), chooseNewer(mergedMap.get(String(normalized.id)), normalized));
     });
 
     return Array.from(mergedMap.values()).sort((a, b) => {
@@ -3785,13 +3807,29 @@ function isGraduationResult(result) {
     return ['tied', 'grad', 'bigGrad', 'goldGrad'].includes(result);
 }
 
+function isWorkerGraduationEntry(item) {
+    return !!(item && item.isWorker);
+}
+
+function isGraduationDexEligible(payload = {}) {
+    const result = payload.result || payload.capture?.result || payload.current?.result;
+    return isGraduationResult(result) || !!payload.isWorker;
+}
+
+function getGraduationDexEntryResultName(item, state = null) {
+    if (isWorkerGraduationEntry(item)) return '打工';
+    const cur = state || getGraduationCurrent(item);
+    return getGraduationResultName(cur?.result);
+}
+
 function getGraduationResultName(result) {
     return {
+        none: '没货',
         tied: '和解',
         grad: '毕业',
         bigGrad: '大毕业',
         goldGrad: '金帮毕业'
-    }[result] || '毕业';
+    }[result] || '未标记';
 }
 
 function getSubskillDisplayName(key) {
@@ -3918,7 +3956,7 @@ function getGraduationDexAuditHTML(p) {
 }
 
 function addGraduationDexEntry(payload) {
-    if (!isGraduationResult(payload.result || payload.capture?.result || payload.current?.result)) return;
+    if (!isGraduationDexEligible(payload)) return;
 
     if (payload.sourceId) {
         const exists = graduationDex.some(x => String(x.sourceId) === String(payload.sourceId));
@@ -3993,7 +4031,7 @@ function deleteGraduationDexEntry(id, e) {
     const cur = getGraduationCurrent(item);
     const displayName = getGraduationDexNickname(item);
 
-    const ok = confirm(`确定从毕业库删除【${displayName} · ${getGraduationResultName(cur.result || cap.result)}】吗？\n\n这只会删除毕业库档案，不会扣大仓，也不会影响历史抽卡库。`);
+    const ok = confirm(`确定从出货库删除【${displayName} · ${getGraduationDexEntryResultName(item, cur)}】吗？\n\n这只会删除出货库档案，不会扣大仓，也不会影响历史抽卡库。`);
     if (!ok) return;
 
     graduationDex.splice(idx, 1);
@@ -11575,6 +11613,563 @@ async function deleteHistoryLog(logId, e) {
 // 🏆 出货宝可梦个体库：查看 / 检索 / 补录 / 编辑孪生档案
 // ==========================================
 
+// ==========================================
+// 📈 v44 多宝可梦联合培养计算器
+// ==========================================
+
+const TRAINING_PLANNER_STATE_LOG_ID = 'training_planner_state_v1';
+const TRAINING_LEVEL_TOTAL_EXP = [
+    0, 0, 54, 125, 233, 361, 525, 727, 971, 1245,
+    1560, 1905, 2281, 2688, 3107, 3536, 3976, 4430, 4899, 5382,
+    5879, 6394, 6931, 7489, 8068, 8668, 9290, 9933, 10598, 11284,
+    11992, 12721, 13469, 14235, 15020, 15823, 16644, 17483, 18340, 19215,
+    20108, 21018, 21946, 22891, 23854, 24834, 25831, 26846, 27878, 28927,
+    29993, 31355, 32917, 34664, 36610, 38805, 41084, 43488, 46021, 48687,
+    51493, 54358, 57280, 60257, 63286, 66363, 69458, 72574, 75718, 78907,
+    82162
+];
+const TRAINING_LEVEL_TOTAL_SHARDS = [
+    0, 0, 28, 64, 108, 216, 336, 506, 740, 1048,
+    1384, 1834, 2354, 2884, 3444, 4093, 4775, 5501, 6317, 7169,
+    8057, 9071, 10205, 11395, 12627, 14007, 15717, 17517, 19512, 21732,
+    24072, 27610, 31390, 35420, 39636, 44212, 49195, 54635, 60313, 66403,
+    73027, 79939, 87376, 95394, 103792, 112872, 122312, 132312, 143136, 154854,
+    167539, 184225, 204574, 228234, 256002, 288366, 324338, 366290, 415376, 472942,
+    539358, 614223, 695191, 785191, 882475, 988993, 1104561, 1229057, 1365641, 1515785,
+    1681145
+];
+const TRAINING_EXP_UP_NATURES = new Set(['timid', 'hasty', 'jolly', 'naive']);
+const TRAINING_EXP_DOWN_NATURES = new Set(['brave', 'quiet', 'sassy', 'relaxed']);
+const TRAINING_CANDY_GROUP_OVERRIDES = {
+    '乌波(帕底亚的样子)': '乌波', '土王': '乌波',
+    '六尾(阿罗拉的样子)': '六尾', '九尾(阿罗拉的样子)': '六尾',
+    '皮卡丘(万圣节)': '皮丘', '皮卡丘(佳节)': '皮丘',
+    '伊布(佳节)': '伊布', '伊布(万圣节)': '伊布'
+};
+
+let trainingPlannerState = {
+    selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
+    universalCandyS: 0, weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true
+};
+
+function formatTrainingNumber(value) {
+    return Math.max(0, Math.round(Number(value) || 0)).toLocaleString('zh-CN');
+}
+
+function isTrainingPlannerStateLog(log) {
+    return !!(log && log.type === 'training_planner_state');
+}
+
+function getTrainingPlannerStorageKey() {
+    return currentCloudUser ? `sleep_training_planner_${currentCloudUser.id}` : 'sleep_training_planner_guest';
+}
+
+function normalizeTrainingPlannerState(raw = {}) {
+    const cleanCounts = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
+        String(key), Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)))
+    ]));
+    return {
+        selectedIds: Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : [],
+        groupInventory: cleanCounts(raw.groupInventory),
+        groupExtra: cleanCounts(raw.groupExtra),
+        boostWeeks: Math.max(0, Math.min(12, Math.floor(Number(raw.boostWeeks) || 0))),
+        universalCandyS: Math.max(0, Math.min(99999, Math.floor(Number(raw.universalCandyS) || 0))),
+        weeklyUniversalCandyS: raw.weeklyUniversalCandyS == null
+            ? 6
+            : Math.max(0, Math.min(999, Math.floor(Number(raw.weeklyUniversalCandyS) || 0))),
+        includeWeeklyUniversalCandy: raw.includeWeeklyUniversalCandy !== false,
+        updatedAt: raw.updatedAt || ''
+    };
+}
+
+function loadTrainingPlannerState() {
+    let local = {};
+    try { local = JSON.parse(localStorage.getItem(getTrainingPlannerStorageKey())) || {}; } catch (_) {}
+    const cloudLog = (Array.isArray(historyLogs) ? historyLogs : [])
+        .filter(isTrainingPlannerStateLog)
+        .reduce((best, item) => chooseNewerHistoryLog(best, item), null);
+    trainingPlannerState = normalizeTrainingPlannerState(cloudLog?.state || local);
+    return trainingPlannerState;
+}
+
+function saveTrainingPlannerState(options = {}) {
+    trainingPlannerState = normalizeTrainingPlannerState(Object.assign({}, trainingPlannerState, { updatedAt: new Date().toISOString() }));
+    try { localStorage.setItem(getTrainingPlannerStorageKey(), JSON.stringify(trainingPlannerState)); } catch (_) {}
+    if (currentCloudUser) {
+        const existing = (Array.isArray(historyLogs) ? historyLogs : []).find(isTrainingPlannerStateLog);
+        const now = new Date().toISOString();
+        historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !isTrainingPlannerStateLog(item));
+        historyLogs.push({
+            id: TRAINING_PLANNER_STATE_LOG_ID,
+            type: 'training_planner_state',
+            state: trainingPlannerState,
+            createdAt: existing?.createdAt || now,
+            updatedAt: now
+        });
+        historyLogs = mergeHistoryLogs([], historyLogs);
+        saveHistoryToLocal();
+        if (options.saveCloudNow) saveHistoryToCloudNow();
+    }
+}
+
+function getDefaultCandyGroup(name) {
+    const standard = pokemonDictionary?.[name]?.standard || name || '未分组';
+    return TRAINING_CANDY_GROUP_OVERRIDES[standard] || EVOLUTION_STAGE_META?.[standard]?.line || standard;
+}
+
+function getTrainingNatureMode(natureKey) {
+    if (TRAINING_EXP_UP_NATURES.has(natureKey)) return 'up';
+    if (TRAINING_EXP_DOWN_NATURES.has(natureKey)) return 'down';
+    return 'normal';
+}
+
+function getTrainingNatureLabel(natureKey) {
+    const mode = getTrainingNatureMode(natureKey);
+    return mode === 'up' ? 'EXP＋18%' : (mode === 'down' ? 'EXP－18%' : 'EXP无修正');
+}
+
+function getTrainingCandyExp(natureKey, boosted = false) {
+    const normal = getTrainingNatureMode(natureKey) === 'up' ? 30 : (getTrainingNatureMode(natureKey) === 'down' ? 21 : 25);
+    return boosted ? normal * 2 : normal;
+}
+
+function getTrainingSleepExp(natureKey) {
+    return getTrainingNatureMode(natureKey) === 'up' ? 118 : (getTrainingNatureMode(natureKey) === 'down' ? 82 : 100);
+}
+
+function getTrainingLevelNeed(level) {
+    const lv = Math.max(1, Math.min(69, Math.floor(Number(level) || 1)));
+    return TRAINING_LEVEL_TOTAL_EXP[lv + 1] - TRAINING_LEVEL_TOTAL_EXP[lv];
+}
+
+function getTrainingCurrentTotalExp(current = {}) {
+    const level = Math.max(1, Math.min(70, Math.floor(Number(current.trainingLevel) || 1)));
+    if (level >= 70) return TRAINING_LEVEL_TOTAL_EXP[70];
+    const fullNeed = getTrainingLevelNeed(level);
+    const remaining = Math.max(0, Math.min(fullNeed, Math.floor(Number(current.trainingExpToNext) || 0)));
+    return TRAINING_LEVEL_TOTAL_EXP[level + 1] - remaining;
+}
+
+function getTrainingMissingExp(current = {}, targetLevel = null) {
+    const currentLevel = Math.max(1, Math.min(70, Math.floor(Number(current.trainingLevel) || 1)));
+    const target = Math.max(currentLevel, Math.min(70, Math.floor(Number(targetLevel ?? current.trainingTargetLevel) || currentLevel)));
+    return Math.max(0, TRAINING_LEVEL_TOTAL_EXP[target] - getTrainingCurrentTotalExp(current));
+}
+
+function getTrainingLevelAtTotalExp(totalExp) {
+    const exp = Math.max(0, Number(totalExp) || 0);
+    for (let level = 69; level >= 1; level--) {
+        if (exp >= TRAINING_LEVEL_TOTAL_EXP[level]) return level;
+    }
+    return 1;
+}
+
+// 目前用户提供的是“累计梦碎”表。第一版据相邻等级的累计增量折算当前等级单颗糖成本；
+// 后续若提供官方逐级单颗价格表，只需替换本函数，规划器其余部分无需改动。
+function getTrainingShardCostPerCandy(totalExp) {
+    const level = Math.min(69, getTrainingLevelAtTotalExp(totalExp));
+    const expDelta = Math.max(1, TRAINING_LEVEL_TOTAL_EXP[level + 1] - TRAINING_LEVEL_TOTAL_EXP[level]);
+    const shardDelta = Math.max(0, TRAINING_LEVEL_TOTAL_SHARDS[level + 1] - TRAINING_LEVEL_TOTAL_SHARDS[level]);
+    return Math.max(1, Math.round((shardDelta / expDelta) * 25));
+}
+
+function openTrainingProgressModal(id) {
+    normalizeGraduationDex();
+    const item = graduationDex.find(x => String(x.id) === String(id));
+    if (!item) return;
+    const cap = getGraduationCapture(item);
+    const cur = getGraduationCurrent(item);
+    const level = Number(cur.trainingLevel) || 1;
+    const fullNeed = level < 70 ? getTrainingLevelNeed(level) : 0;
+    const remaining = cur.trainingExpToNext == null ? fullNeed : Number(cur.trainingExpToNext);
+    const target = Math.max(level, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : Math.min(70, Math.max(30, level))));
+    const group = cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name);
+
+    document.getElementById('training-progress-modal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'training-progress-modal';
+    modal.className = 'fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn';
+    modal.style.zIndex = '80';
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-md w-full shadow-2xl space-y-4" onclick="event.stopPropagation()">
+        <div class="flex items-start justify-between gap-3">
+            <div><h3 class="text-base font-black text-slate-800"><i class="fa-solid fa-arrow-trend-up text-indigo-500"></i> ${escapeHtml(getGraduationDexNickname(item))}</h3><p class="text-[10px] text-slate-400 font-bold mt-1">记录游戏中当前显示的等级，以及“距离下一级”经验。</p></div>
+            <button onclick="document.getElementById('training-progress-modal').remove()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+            <label class="text-[10px] font-black text-slate-500">当前等级
+                <input id="training-progress-level" type="number" min="1" max="70" value="${level}" oninput="refreshTrainingProgressLimit()" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-indigo-400">
+            </label>
+            <label class="text-[10px] font-black text-slate-500">距离下一级 EXP
+                <input id="training-progress-exp" type="number" min="0" max="${fullNeed}" value="${Math.max(0, remaining)}" class="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-indigo-400">
+            </label>
+            <label class="text-[10px] font-black text-slate-500">默认目标等级
+                <input id="training-progress-target" type="number" min="1" max="70" value="${target}" class="mt-1 w-full bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-emerald-400">
+            </label>
+            <label class="text-[10px] font-black text-slate-500">共享糖果组
+                <input id="training-progress-group" value="${escapeHtmlAttr(group)}" class="mt-1 w-full bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-sky-400">
+            </label>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5 text-[9px] font-black text-slate-400">
+            <span>快捷目标</span>
+            ${[30, 50, 60, 70].map(lv => `<button onclick="document.getElementById('training-progress-target').value='${lv}'" class="px-2 py-1 rounded-lg bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600">Lv.${lv}</button>`).join('')}
+        </div>
+        <div id="training-progress-limit-note" class="text-[10px] text-indigo-700 font-bold bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">Lv.${level}→${Math.min(70, level + 1)} 完整需要 ${formatTrainingNumber(fullNeed)} EXP</div>
+        <p class="text-[9px] text-slate-400 font-bold leading-relaxed">同一进化链会自动使用相同糖果组；地区形态也已合并。若遇到特殊个体，可手动把糖果组改成同一个名字。</p>
+        <button onclick='saveTrainingProgress(${JSON.stringify(item.id)})' class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs py-3 rounded-xl shadow-sm"><i class="fa-solid fa-floppy-disk"></i> 保存等级经验</button>
+    </div>`;
+    document.body.appendChild(modal);
+}
+
+function refreshTrainingProgressLimit() {
+    const levelEl = document.getElementById('training-progress-level');
+    const expEl = document.getElementById('training-progress-exp');
+    const targetEl = document.getElementById('training-progress-target');
+    const note = document.getElementById('training-progress-limit-note');
+    const level = Math.max(1, Math.min(70, Math.floor(Number(levelEl?.value) || 1)));
+    const fullNeed = level < 70 ? getTrainingLevelNeed(level) : 0;
+    if (expEl) {
+        expEl.max = String(fullNeed);
+        expEl.disabled = level >= 70;
+        if (level >= 70) expEl.value = '0';
+        else if (Number(expEl.value) > fullNeed) expEl.value = String(fullNeed);
+    }
+    if (targetEl) {
+        targetEl.min = String(level);
+        if (Number(targetEl.value) < level) targetEl.value = String(level);
+    }
+    if (note) note.textContent = level >= 70 ? '已达到当前经验表上限 Lv.70' : `Lv.${level}→${level + 1} 完整需要 ${formatTrainingNumber(fullNeed)} EXP`;
+}
+
+function saveTrainingProgress(id) {
+    const item = graduationDex.find(x => String(x.id) === String(id));
+    if (!item) return;
+    const level = Math.max(1, Math.min(70, Math.floor(Number(document.getElementById('training-progress-level')?.value) || 1)));
+    const fullNeed = level < 70 ? getTrainingLevelNeed(level) : 0;
+    const rawRemaining = Math.floor(Number(document.getElementById('training-progress-exp')?.value));
+    if (level < 70 && (!Number.isFinite(rawRemaining) || rawRemaining < 0 || rawRemaining > fullNeed)) {
+        alert(`Lv.${level} 距离下一级经验应填写 0～${formatTrainingNumber(fullNeed)}。`);
+        return;
+    }
+    const target = Math.max(level, Math.min(70, Math.floor(Number(document.getElementById('training-progress-target')?.value) || level)));
+    const group = String(document.getElementById('training-progress-group')?.value || '').trim() || getDefaultCandyGroup(getGraduationCurrent(item).name);
+    item.current = Object.assign({}, getGraduationCurrent(item), {
+        trainingLevel: level,
+        trainingExpToNext: level >= 70 ? 0 : rawRemaining,
+        trainingTargetLevel: target,
+        candyGroup: group,
+        updatedAt: new Date().toISOString()
+    });
+    saveGraduationDexToLocal();
+    document.getElementById('training-progress-modal')?.remove();
+    renderGraduationDexList();
+    if (document.getElementById('training-planner-modal')) renderTrainingPlannerModal();
+    showToast(`已保存【${getGraduationDexNickname(item)}】Lv.${level} 的培养进度`);
+}
+
+function openTrainingPlannerModal() {
+    normalizeGraduationDex();
+    loadTrainingPlannerState();
+    document.getElementById('training-planner-modal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'training-planner-modal';
+    modal.className = 'fixed inset-0 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 animate-fadeIn';
+    modal.style.zIndex = '70';
+    // 手机上滚动、缩放或松手时容易把边缘误判为遮罩层点击。
+    // 联合培养可能已填写较多数据，因此不再允许点背景关闭，只能使用右上角关闭按钮。
+    modal.onclick = event => event.stopPropagation();
+    document.body.appendChild(modal);
+    renderTrainingPlannerModal();
+}
+
+function closeTrainingPlannerModal() {
+    document.getElementById('training-planner-modal')?.remove();
+}
+
+function renderTrainingPlannerModal() {
+    const modal = document.getElementById('training-planner-modal');
+    if (!modal) return;
+    const selected = new Set(trainingPlannerState.selectedIds.map(String));
+    const items = (graduationDex || []).map(item => ({ item, cap: getGraduationCapture(item), cur: getGraduationCurrent(item) }));
+    const selectedRows = items.filter(row => selected.has(String(row.item.id)));
+    const groups = Array.from(new Set(selectedRows.map(row => row.cur.candyGroup || getDefaultCandyGroup(row.cur.name || row.cap.name))));
+
+    modal.innerHTML = `
+    <div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+        <div class="px-5 py-4 bg-gradient-to-r from-indigo-700 via-violet-700 to-sky-600 text-white flex items-start justify-between gap-3">
+            <div><h3 class="text-lg font-black"><i class="fa-solid fa-chart-line"></i> 多宝可梦联合培养计算</h3><p class="text-[10px] text-white/75 font-bold mt-1">任意多选；糖果按进化链共享。系统只计算每只需要承担的睡眠经验与席位晚，不安排具体睡眠队伍。</p></div>
+            <button type="button" onclick="closeTrainingPlannerModal()" aria-label="关闭联合培养计算" class="text-white/70 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="overflow-y-auto p-4 md:p-5 space-y-4">
+            <section class="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <div class="flex items-center justify-between gap-2 mb-2"><h4 class="text-xs font-black text-slate-700"><i class="fa-solid fa-list-check text-indigo-500"></i> 选择培养个体</h4><span class="text-[10px] font-bold text-slate-400">已选 ${selectedRows.length}/${items.length}</span></div>
+                <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-2">
+                    ${items.length ? items.map(({ item, cap, cur }) => {
+                        const hasProgress = Number(cur.trainingLevel) >= 1;
+                        const checked = selected.has(String(item.id));
+                        const level = Number(cur.trainingLevel) || 0;
+                        const target = Math.max(level || 1, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : 50));
+                        return `<div class="rounded-xl border ${checked ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'} p-2.5 flex items-start gap-2">
+                            <input type="checkbox" ${checked ? 'checked' : ''} ${hasProgress ? '' : 'disabled'} onchange='toggleTrainingPlannerSelection(${JSON.stringify(String(item.id))}, this.checked)' class="mt-1 accent-indigo-600">
+                            <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-1"><span class="text-xs font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))}</span><span class="text-[9px] font-black px-1.5 py-0.5 rounded-md ${isWorkerGraduationEntry(item) ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'}">${getGraduationDexEntryResultName(item, cur)}</span></div>
+                            <div class="text-[9px] text-slate-400 font-bold mt-1">${hasProgress ? `Lv.${level} · 距下级 ${formatTrainingNumber(cur.trainingExpToNext)} · ${getTrainingNatureLabel(cur.nature)}` : '先录入等级经验后才能选择'}</div>
+                            <div class="mt-1.5 flex items-center gap-1"><span class="text-[9px] text-slate-400 font-bold">目标</span><input type="number" min="${level || 1}" max="70" value="${target}" onchange='updateTrainingPlannerTarget(${JSON.stringify(String(item.id))}, this.value)' class="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black"><button onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="text-[9px] font-black text-indigo-600 hover:text-indigo-800 px-1">编辑进度</button></div></div>
+                        </div>`;
+                    }).join('') : '<div class="text-xs font-bold text-slate-400 py-5 text-center col-span-full">出货库还是空的，请先补录出货或打工个体。</div>'}
+                </div>
+            </section>
+
+            <section class="bg-amber-50/70 border border-amber-200 rounded-2xl p-3 space-y-3">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                    <div><h4 class="text-xs font-black text-amber-900"><i class="fa-solid fa-candy-cane"></i> 共享糖果池、万能糖与增强周</h4><p class="text-[9px] text-amber-700/70 font-bold mt-0.5">万能糖S每个可换任意糖果3颗；“额外糖果”只用于收益情景，不写进当前库存。</p></div>
+                    <label class="text-[10px] font-black text-amber-800 flex items-center gap-2">预计糖果增强周
+                        <select onchange="updateTrainingPlannerBoostWeeks(this.value)" class="bg-white border border-amber-200 rounded-xl px-3 py-2 text-xs font-black">
+                            ${Array.from({ length: 13 }, (_, n) => `<option value="${n}" ${trainingPlannerState.boostWeeks === n ? 'selected' : ''}>${n} 周${n ? `（最多 ${n * 350} 颗）` : ''}</option>`).join('')}
+                        </select>
+                    </label>
+                </div>
+                <div class="bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-xl p-3 grid sm:grid-cols-3 gap-2 items-end">
+                    <label class="text-[9px] font-black text-violet-700">现有万能糖S
+                        <input type="number" min="0" max="99999" value="${trainingPlannerState.universalCandyS || 0}" onchange='updateTrainingPlannerUniversalSetting("inventory", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
+                        <span class="block mt-1 text-[8px] text-violet-500">可换 ${formatTrainingNumber((trainingPlannerState.universalCandyS || 0) * 3)} 颗任意糖果</span>
+                    </label>
+                    <label class="text-[9px] font-black text-violet-700">每周获得万能糖S
+                        <input type="number" min="0" max="999" value="${trainingPlannerState.weeklyUniversalCandyS ?? 6}" onchange='updateTrainingPlannerUniversalSetting("weekly", this.value)' class="mt-1 w-full bg-white border border-violet-200 rounded-lg px-2 py-1.5 text-xs font-black text-violet-800">
+                        <span class="block mt-1 text-[8px] text-violet-500">默认6个＝每周18颗任意糖果</span>
+                    </label>
+                    <label class="bg-white border border-violet-200 rounded-xl px-3 py-2 flex items-center gap-2 text-[10px] font-black text-violet-800 cursor-pointer">
+                        <input type="checkbox" ${trainingPlannerState.includeWeeklyUniversalCandy ? 'checked' : ''} onchange='updateTrainingPlannerUniversalSetting("includeWeekly", this.checked)' class="accent-violet-600">
+                        培养时间计入每周收益
+                    </label>
+                </div>
+                <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-2">
+                    ${groups.length ? groups.map(group => `<div class="bg-white border border-amber-200 rounded-xl p-2.5"><div class="text-xs font-black text-slate-700 mb-2">${escapeHtml(group)}糖果</div><div class="grid grid-cols-2 gap-2"><label class="text-[9px] font-bold text-slate-400">当前库存<input type="number" min="0" max="99999" value="${trainingPlannerState.groupInventory[group] || 0}" onchange='updateTrainingPlannerGroupValue(${JSON.stringify(group)}, "inventory", this.value)' class="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-black text-slate-700"></label><label class="text-[9px] font-bold text-slate-400">额外情景<input type="number" min="0" max="99999" value="${trainingPlannerState.groupExtra[group] || 0}" onchange='updateTrainingPlannerGroupValue(${JSON.stringify(group)}, "extra", this.value)' class="mt-1 w-full border border-sky-200 bg-sky-50 rounded-lg px-2 py-1.5 text-xs font-black text-sky-700"></label></div></div>`).join('') : '<div class="text-[10px] font-bold text-amber-700/70 col-span-full">选择个体后，这里会按共享糖果组出现库存输入框。</div>'}
+                </div>
+            </section>
+
+            <div class="flex flex-col sm:flex-row gap-2">
+                <button type="button" onclick="calculateAndRenderTrainingPlanner()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs py-3 rounded-xl shadow-sm"><i class="fa-solid fa-calculator"></i> 计算当前方案与额外糖果收益</button>
+                <button type="button" onclick="saveTrainingPlannerState({saveCloudNow:true}); showToast('培养方案已保存并同步')" class="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-5 py-3 rounded-xl"><i class="fa-solid fa-cloud-arrow-up"></i> 保存方案</button>
+            </div>
+            <div id="training-planner-results" class="space-y-3"></div>
+        </div>
+    </div>`;
+    if (selectedRows.length) calculateAndRenderTrainingPlanner(false);
+}
+
+function toggleTrainingPlannerSelection(id, checked) {
+    const set = new Set(trainingPlannerState.selectedIds.map(String));
+    checked ? set.add(String(id)) : set.delete(String(id));
+    trainingPlannerState.selectedIds = Array.from(set);
+    saveTrainingPlannerState();
+    renderTrainingPlannerModal();
+}
+
+function updateTrainingPlannerTarget(id, value) {
+    const item = graduationDex.find(x => String(x.id) === String(id));
+    if (!item) return;
+    const cur = getGraduationCurrent(item);
+    const level = Math.max(1, Number(cur.trainingLevel) || 1);
+    cur.trainingTargetLevel = Math.max(level, Math.min(70, Math.floor(Number(value) || level)));
+    cur.updatedAt = new Date().toISOString();
+    saveGraduationDexToLocal();
+    renderTrainingPlannerModal();
+}
+
+function updateTrainingPlannerBoostWeeks(value) {
+    trainingPlannerState.boostWeeks = Math.max(0, Math.min(12, Math.floor(Number(value) || 0)));
+    calculateAndRenderTrainingPlanner();
+}
+
+function updateTrainingPlannerGroupValue(group, field, value) {
+    const target = field === 'extra' ? trainingPlannerState.groupExtra : trainingPlannerState.groupInventory;
+    target[group] = Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)));
+    calculateAndRenderTrainingPlanner();
+}
+
+function updateTrainingPlannerUniversalSetting(field, value) {
+    if (field === 'inventory') trainingPlannerState.universalCandyS = Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)));
+    if (field === 'weekly') trainingPlannerState.weeklyUniversalCandyS = Math.max(0, Math.min(999, Math.floor(Number(value) || 0)));
+    if (field === 'includeWeekly') trainingPlannerState.includeWeeklyUniversalCandy = !!value;
+    calculateAndRenderTrainingPlanner();
+}
+
+function buildTrainingPlan(includeExtra = true, universalCandySOverride = null) {
+    const selected = new Set(trainingPlannerState.selectedIds.map(String));
+    const rows = (graduationDex || []).filter(item => selected.has(String(item.id))).map(item => {
+        const cap = getGraduationCapture(item);
+        const cur = getGraduationCurrent(item);
+        const currentLevel = Number(cur.trainingLevel) || 0;
+        const targetLevel = Math.max(currentLevel || 1, Math.min(70, Number(cur.trainingTargetLevel) || currentLevel || 1));
+        const missing = currentLevel ? getTrainingMissingExp(cur, targetLevel) : 0;
+        return {
+            id: String(item.id), item, cap, cur,
+            name: getGraduationDexNickname(item), currentLevel, targetLevel,
+            group: cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name),
+            nature: cur.nature || 'blank',
+            initialMissing: missing, remaining: missing,
+            totalExp: getTrainingCurrentTotalExp(cur),
+            candyNormal: 0, candyBoosted: 0, universalSpeciesCandy: 0, candyExp: 0, shards: 0
+        };
+    }).filter(row => row.currentLevel > 0 && row.targetLevel >= row.currentLevel);
+
+    const groupStock = {};
+    rows.forEach(row => {
+        if (groupStock[row.group] == null) {
+            groupStock[row.group] = Math.max(0, Math.floor(Number(trainingPlannerState.groupInventory[row.group]) || 0))
+                + (includeExtra ? Math.max(0, Math.floor(Number(trainingPlannerState.groupExtra[row.group]) || 0)) : 0);
+        }
+    });
+    const universalCandySAvailable = Math.max(0, Math.floor(Number(
+        universalCandySOverride == null ? trainingPlannerState.universalCandyS : universalCandySOverride
+    ) || 0));
+    let universalSpeciesStock = universalCandySAvailable * 3;
+    let universalSpeciesUsed = 0;
+    let boostRemaining = trainingPlannerState.boostWeeks * 350;
+    let safety = Math.min(300000, Object.values(groupStock).reduce((sum, n) => sum + n, 0) + universalSpeciesStock);
+    while (safety-- > 0) {
+        const candidates = rows.filter(row => row.remaining > 0 && (groupStock[row.group] > 0 || universalSpeciesStock > 0));
+        if (!candidates.length) break;
+        candidates.sort((a, b) => {
+            const aPressure = a.remaining / getTrainingSleepExp(a.nature);
+            const bPressure = b.remaining / getTrainingSleepExp(b.nature);
+            return bPressure - aPressure || b.remaining - a.remaining;
+        });
+        const row = candidates[0];
+        const boosted = boostRemaining > 0;
+        const candyExp = getTrainingCandyExp(row.nature, boosted);
+        const baseShard = getTrainingShardCostPerCandy(row.totalExp);
+        row.shards += baseShard * (boosted ? 4 : 1);
+        row.candyExp += Math.min(candyExp, row.remaining);
+        row.remaining = Math.max(0, row.remaining - candyExp);
+        row.totalExp += candyExp;
+        if (boosted) { row.candyBoosted += 1; boostRemaining -= 1; }
+        else row.candyNormal += 1;
+        if (groupStock[row.group] > 0) {
+            groupStock[row.group] -= 1;
+        } else {
+            universalSpeciesStock -= 1;
+            universalSpeciesUsed += 1;
+            row.universalSpeciesCandy += 1;
+        }
+    }
+
+    rows.forEach(row => {
+        row.sleepPerNight = getTrainingSleepExp(row.nature);
+        row.sleepExp = Math.max(0, row.remaining);
+        row.sleepNights = row.sleepExp > 0 ? Math.ceil(row.sleepExp / row.sleepPerNight) : 0;
+        row.sleepActualExp = row.sleepNights * row.sleepPerNight;
+    });
+    const totals = rows.reduce((out, row) => {
+        out.missing += row.initialMissing;
+        out.normalCandy += row.candyNormal;
+        out.boostedCandy += row.candyBoosted;
+        out.universalSpeciesCandy += row.universalSpeciesCandy;
+        out.candyExp += row.candyExp;
+        out.sleepExp += row.sleepExp;
+        out.sleepSlotNights += row.sleepNights;
+        out.shards += row.shards;
+        return out;
+    }, { missing: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
+    return {
+        rows, totals, unusedBoostQuota: boostRemaining, groupStock,
+        universalCandySAvailable,
+        universalCandySUsed: Math.ceil(universalSpeciesUsed / 3),
+        universalSpeciesUsed,
+        universalConvertedLeftover: Math.max(0, Math.ceil(universalSpeciesUsed / 3) * 3 - universalSpeciesUsed),
+        unusedUniversalCandyS: Math.max(0, universalCandySAvailable - Math.ceil(universalSpeciesUsed / 3))
+    };
+}
+
+function getTrainingPlanTheoreticalNights(plan) {
+    if (!plan?.rows?.length) return 0;
+    const longestIndividual = Math.max(0, ...plan.rows.map(row => Number(row.sleepNights) || 0));
+    const fiveSlotCapacity = Math.ceil((Number(plan.totals?.sleepSlotNights) || 0) / 5);
+    return Math.max(longestIndividual, fiveSlotCapacity);
+}
+
+function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
+    const currentUniversal = Math.max(0, Math.floor(Number(trainingPlannerState.universalCandyS) || 0));
+    const weeklyIncome = Math.max(0, Math.floor(Number(trainingPlannerState.weeklyUniversalCandyS) || 0));
+    const useWeekly = trainingPlannerState.includeWeeklyUniversalCandy && weeklyIncome > 0;
+
+    if (!useWeekly) {
+        const plan = buildTrainingPlan(includeExtra, currentUniversal);
+        plan.projectedUniversalWeeks = 0;
+        plan.projectedUniversalCandyS = 0;
+        plan.theoreticalSleepNights = getTrainingPlanTheoreticalNights(plan);
+        plan.completionNights = plan.theoreticalSleepNights;
+        return plan;
+    }
+
+    let best = null;
+    // Lv.1→70 即使是减经验性格，也远低于 260 周；此上限同时防止异常输入拖慢页面。
+    for (let weeks = 0; weeks <= 260; weeks++) {
+        const earnedUniversal = weeks * weeklyIncome;
+        const plan = buildTrainingPlan(includeExtra, currentUniversal + earnedUniversal);
+        const rawSleepNights = getTrainingPlanTheoreticalNights(plan);
+        // 使用第 N 周获得的糖，完成时间不可能早于第 N 个七天节点。
+        const completionNights = Math.max(rawSleepNights, weeks * 7);
+        const candidate = Object.assign(plan, {
+            projectedUniversalWeeks: weeks,
+            projectedUniversalCandyS: earnedUniversal,
+            theoreticalSleepNights: rawSleepNights,
+            completionNights
+        });
+        if (!best
+            || completionNights < best.completionNights
+            || (completionNights === best.completionNights && weeks < best.projectedUniversalWeeks)
+            || (completionNights === best.completionNights && weeks === best.projectedUniversalWeeks && plan.totals.shards < best.totals.shards)) {
+            best = candidate;
+        }
+        if (best && weeks * 7 > best.completionNights + 28) break;
+    }
+    return best || buildTrainingPlan(includeExtra, currentUniversal);
+}
+
+function calculateAndRenderTrainingPlanner(persist = true) {
+    const box = document.getElementById('training-planner-results');
+    if (!box) return;
+    const plan = buildTrainingPlanWithWeeklyUniversal(true);
+    const baseline = buildTrainingPlanWithWeeklyUniversal(false);
+    if (!plan.rows.length) {
+        box.innerHTML = '<div class="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-8 text-center text-xs font-bold text-slate-400">请先选择至少一只已经录入等级经验的宝可梦。</div>';
+        return;
+    }
+    if (persist) saveTrainingPlannerState();
+    const activeGroups = new Set(plan.rows.map(row => row.group));
+    const extraCandy = Object.entries(trainingPlannerState.groupExtra || {})
+        .filter(([group]) => activeGroups.has(group))
+        .reduce((sum, [, n]) => sum + (Number(n) || 0), 0);
+    const savedNights = Math.max(0, baseline.totals.sleepSlotNights - plan.totals.sleepSlotNights);
+    const savedCalendarNights = Math.max(0, baseline.completionNights - plan.completionNights);
+    const extraShards = Math.max(0, plan.totals.shards - baseline.totals.shards);
+    const fullTeamEquivalent = plan.totals.sleepSlotNights / 5;
+
+    box.innerHTML = `
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-2">
+        ${[
+            ['总经验缺口', `${formatTrainingNumber(plan.totals.missing)} EXP`, 'text-slate-800'],
+            ['糖果承担', `${formatTrainingNumber(plan.totals.candyExp)} EXP`, 'text-amber-700'],
+            ['睡眠承担', `${formatTrainingNumber(plan.totals.sleepExp)} EXP`, 'text-sky-700'],
+            ['睡眠席位晚', formatTrainingNumber(plan.totals.sleepSlotNights), 'text-indigo-700'],
+            ['理论最快完成', `${formatTrainingNumber(plan.completionNights)} 晚`, 'text-violet-700'],
+            ['约合满5席', `${fullTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
+            ['万能糖S使用', `${formatTrainingNumber(plan.universalCandySUsed)} 个`, 'text-violet-700'],
+            ['梦碎估算', formatTrainingNumber(plan.totals.shards), 'text-rose-700']
+        ].map(([label, value, color]) => `<div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">${label}</div><div class="text-sm font-black ${color} mt-1">${value}</div></div>`).join('')}
+    </section>
+    ${trainingPlannerState.includeWeeklyUniversalCandy ? `<div class="bg-violet-50 border border-violet-200 rounded-2xl px-4 py-3 text-xs font-bold text-violet-800"><i class="fa-solid fa-gift"></i> 理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 周，预计获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个（可换 ${formatTrainingNumber(plan.projectedUniversalCandyS * 3)} 颗任意糖果）；加上现有库存后，本方案实际使用万能糖S ${formatTrainingNumber(plan.universalCandySUsed)} 个。</div>` : ''}
+    ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，理论完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 晚，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
+    <section class="overflow-x-auto border border-slate-200 rounded-2xl">
+        <table class="w-full text-[10px] min-w-[940px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
+        <tbody>${plan.rows.map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · ${getTrainingNatureLabel(row.nature)}</div></td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
+    </section>
+    <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
+        睡眠席位晚＝每只宝可梦需要上队的晚数相加；理论最快完成同时受“每天5席”和“同一只每天最多睡1次”约束，但不生成具体排班。每周万能糖收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+    </div>`;
+}
+
 function openGraduationDexModal() {
     if (currentCloudUser) {
         loadGraduationDexFromCloud().then(() => {
@@ -11606,13 +12201,21 @@ function renderGraduationDexModalShell() {
                     <i class="fa-solid fa-trophy text-amber-500"></i> 出货宝可梦个体库
                 </h3>
                 <p class="text-[10px] text-slate-400 font-medium mt-0.5">
-                    每只个体拥有「捕捉时状态」和「当前养成状态」两套孪生档案。列表优先展示当前状态；捕捉时状态用于追溯当初如何进入大仓。
+                    和解及以上自动收录；达不到和解但准备临时培养的个体可作为「打工」补录。等级经验可随时更新，并用于联合培养计算。
                 </p>
             </div>
 
-            <button onclick="openGraduationBackfillModal()" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
-                <i class="fa-solid fa-plus"></i> 补录出货面板
-            </button>
+            <div class="flex flex-wrap gap-2">
+                <button onclick="openTrainingPlannerModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
+                    <i class="fa-solid fa-chart-line"></i> 联合培养计算
+                </button>
+                <button onclick="openWorkerBackfillModal()" class="bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
+                    <i class="fa-solid fa-helmet-safety"></i> 补录打工
+                </button>
+                <button onclick="openGraduationBackfillModal()" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
+                    <i class="fa-solid fa-plus"></i> 补录出货
+                </button>
+            </div>
         </div>
 
         <div class="flex flex-col md:flex-row gap-2">
@@ -11623,6 +12226,7 @@ function renderGraduationDexModalShell() {
                 <option value="grad">毕业</option>
                 <option value="bigGrad">大毕业</option>
                 <option value="goldGrad">金帮毕业</option>
+                <option value="worker">打工</option>
             </select>
         </div>
 
@@ -11646,7 +12250,8 @@ function renderGraduationDexList() {
         const cap = getGraduationCapture(item);
         const cur = getGraduationCurrent(item);
 
-        if (filter !== 'all' && cur.result !== filter) return false;
+        if (filter === 'worker' && !isWorkerGraduationEntry(item)) return false;
+        if (filter !== 'all' && filter !== 'worker' && (isWorkerGraduationEntry(item) || cur.result !== filter)) return false;
 
         const displayNickname = getGraduationDexNickname(item);
         const curNatureName = ALL_AUDIT_NATURES[cur.nature]?.name || '无性格修正';
@@ -11664,7 +12269,7 @@ function renderGraduationDexList() {
             displayNickname,
             cur.name,
             cap.name,
-            getGraduationResultName(cur.result),
+            getGraduationDexEntryResultName(item, cur),
             getGraduationResultName(cap.result),
             cur.foodCombo,
             cap.foodCombo,
@@ -11676,7 +12281,8 @@ function renderGraduationDexList() {
             capSkillText,
             cap.date,
             cap.session,
-            item.source === 'daily' ? '每日打卡' : '手动补录',
+            item.source === 'daily' ? '每日打卡' : (item.source === 'worker' ? '打工补录' : '手动补录'),
+            isWorkerGraduationEntry(item) ? '打工 临时培养' : '',
             (cur.isShiny || cap.isShiny) ? '闪光 shiny 色违' : ''
         ].join(' ').toLowerCase();
 
@@ -11700,7 +12306,7 @@ function renderGraduationDexList() {
             grad: 'bg-emerald-50 text-emerald-700 border-emerald-200',
             bigGrad: 'bg-purple-50 text-purple-700 border-purple-200',
             goldGrad: 'bg-red-50 text-red-700 border-red-200'
-        }[cur.result] || 'bg-slate-50 text-slate-600 border-slate-200';
+        }[cur.result] || (isWorkerGraduationEntry(item) ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-50 text-slate-600 border-slate-200');
 
         const capResultClass = {
             tied: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -11714,7 +12320,14 @@ function renderGraduationDexList() {
         const capNatureName = ALL_AUDIT_NATURES[cap.nature]?.name || '无性格修正';
         const curFoodBadge = getFoodBadgeText(cur.foodCombo, cur.track);
         const capFoodBadge = getFoodBadgeText(cap.foodCombo, cap.track);
-        const sourceText = item.source === 'daily' ? '每日打卡自动归档' : '手动补录';
+        const sourceText = item.source === 'daily' ? '每日打卡自动归档' : (item.source === 'worker' ? '打工个体补录' : '手动补录');
+        const trainingLevel = Number(cur.trainingLevel) || 0;
+        const targetLevel = Number(cur.trainingTargetLevel) || 0;
+        const expToNext = cur.trainingExpToNext;
+        const candyGroup = cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name);
+        const progressText = trainingLevel > 0
+            ? (trainingLevel >= 70 ? `Lv.${trainingLevel} · 当前表格上限` : `Lv.${trainingLevel} · 距下一级 ${formatTrainingNumber(expToNext || 0)} EXP`)
+            : '尚未录入等级经验';
 
         const skillChips = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'].map((slot, idx) => {
             const lv = [10, 25, 50, 75, 100][idx];
@@ -11738,7 +12351,7 @@ function renderGraduationDexList() {
                     <div class="flex flex-wrap items-center gap-2">
                         <span class="text-sm font-black text-slate-800">${displayNickname}</span>
                         <span class="px-2 py-0.5 rounded-lg border text-[10px] font-black ${resultClass}">
-                            ${getGraduationResultName(cur.result)}
+                            ${getGraduationDexEntryResultName(item, cur)}
                         </span>
                         ${(cur.isShiny || cap.isShiny) ? `<span class="px-2 py-0.5 rounded-lg bg-yellow-50 border border-yellow-200 text-[10px] font-black text-yellow-700"><i class="fa-solid fa-sparkles"></i> 闪光</span>` : ''}
                         ${item.excludeFromLuck ? `<span class="px-2 py-0.5 rounded-lg bg-sky-50 border border-sky-200 text-[10px] font-black text-sky-700"><i class="fa-solid fa-filter-circle-xmark"></i> 不计评分</span>` : ''}
@@ -11752,6 +12365,9 @@ function renderGraduationDexList() {
                 </div>
 
                 <div class="flex flex-wrap gap-1.5 justify-start md:justify-end">
+                    <button onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-600 text-[10px] font-black transition">
+                        <i class="fa-solid fa-arrow-trend-up"></i> 等级经验
+                    </button>
                     <button onclick='openEditGraduationDexModal(${JSON.stringify(item.id)}, "current")' class="px-2 py-1 rounded-lg bg-white hover:bg-amber-500 hover:text-slate-950 text-slate-500 border border-slate-200 text-[10px] font-black transition">
                         <i class="fa-solid fa-pen"></i> 编辑当前
                     </button>
@@ -11771,6 +12387,9 @@ function renderGraduationDexList() {
                 <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-600">
                     <span class="text-slate-400 font-black">当前状态</span>
                     <span>性格：${curNatureName}</span>
+                    <span class="px-2 py-0.5 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-700 font-black">${progressText}</span>
+                    ${targetLevel > 0 ? `<span class="px-2 py-0.5 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-700 font-black">目标 Lv.${targetLevel}</span>` : ''}
+                    <span class="px-2 py-0.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-500">${escapeHtml(candyGroup)}糖果组</span>
                     ${cur.note ? `<span class="text-slate-400">备注：${escapeHtml(cur.note)}</span>` : ''}
                 </div>
                 <div class="flex flex-wrap gap-1.5">${skillChips}</div>
@@ -11779,7 +12398,7 @@ function renderGraduationDexList() {
             <details class="bg-white/70 border border-slate-200 rounded-xl p-3">
                 <summary class="cursor-pointer text-[10px] font-black text-slate-500 flex flex-wrap gap-2 items-center">
                     <span>捕捉时原始档案</span>
-                    <span class="px-2 py-0.5 rounded-md border ${capResultClass}">${getGraduationResultName(cap.result)}</span>
+                    <span class="px-2 py-0.5 rounded-md border ${capResultClass}">${getGraduationDexEntryResultName(item, cap)}</span>
                     ${cap.isShiny ? `<span class="px-2 py-0.5 rounded-md bg-yellow-50 border border-yellow-200 text-yellow-700"><i class="fa-solid fa-sparkles"></i> 闪光</span>` : ''}
                     ${capFoodBadge ? `<span class="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-500">${capFoodBadge}</span>` : ''}
                     <span>性格：${capNatureName}</span>
@@ -11859,10 +12478,37 @@ function openGraduationBackfillModal(prefill = null) {
     if (submitBtn) {
         submitBtn.setAttribute('onclick', 'submitGraduationDexBackfill()');
         submitBtn.className = 'w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md';
-        submitBtn.innerHTML = `<i class="fa-solid fa-box-archive"></i> 只补录进毕业库`;
+        submitBtn.innerHTML = `<i class="fa-solid fa-box-archive"></i> 只补录进出货库`;
     }
 
     toggleCheckInFoodTrack();
+}
+
+function openWorkerBackfillModal() {
+    openGraduationBackfillModal({ result: 'none' });
+    const modal = document.getElementById('daily-checkin-modal');
+    if (!modal) return;
+    modal.dataset.workerBackfill = '1';
+
+    const title = modal.querySelector('h3');
+    if (title) title.innerHTML = `<i class="fa-solid fa-helmet-safety text-sky-500"></i> 补录打工宝可梦`;
+    const desc = title ? title.closest('.text-center')?.querySelector('p') : null;
+    if (desc) desc.textContent = '打工档案保持“没货”评分，只为了保存个体面板与等级经验，不计入和解、毕业、出货率或断档统计。';
+
+    window.userManuallyOverrodeResult = true;
+    window.currentSystemRecommendValue = 'none';
+    const resultEl = document.getElementById('checkin-result');
+    if (resultEl) {
+        resultEl.value = 'none';
+        resultEl.disabled = true;
+        resultEl.classList.add('opacity-60', 'cursor-not-allowed');
+    }
+
+    const submitBtn = modal.querySelector('[data-submit-daily-checkin="1"]') || modal.querySelector('button[onclick^="submitGraduationDexBackfill"]');
+    if (submitBtn) {
+        submitBtn.className = 'w-full bg-sky-600 hover:bg-sky-500 text-white font-black text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md';
+        submitBtn.innerHTML = `<i class="fa-solid fa-helmet-safety"></i> 收入出货库 · 标记为打工`;
+    }
 }
 
 function readCurrentCheckInPanelState() {
@@ -12206,6 +12852,10 @@ function reconcileCurrentStateWithCapture(captureState, proposedCurrent = {}) {
         result: proposedCurrent.result || cap.result,
         subskills: reconcileCurrentSubskillsWithCapture(cap.subskills, proposedCurrent.subskills),
         note: proposedCurrent.note || '',
+        trainingLevel: proposedCurrent.trainingLevel ?? null,
+        trainingExpToNext: proposedCurrent.trainingExpToNext ?? null,
+        trainingTargetLevel: proposedCurrent.trainingTargetLevel ?? null,
+        candyGroup: String(proposedCurrent.candyGroup || '').trim(),
         updatedAt: proposedCurrent.updatedAt || new Date().toISOString()
     });
 }
@@ -12249,10 +12899,11 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
         return;
     }
 
-    if (!isGraduationResult(state.result)) {
+    if (!isWorkerGraduationEntry(item) && !isGraduationResult(state.result)) {
         alert("出货库可收录【和解 / 毕业 / 大毕业 / 金帮毕业】个体。");
         return;
     }
+    if (isWorkerGraduationEntry(item)) state.result = 'none';
 
     if (mode === 'capture') {
         const ok = confirm("你正在修改【捕捉时状态】。这不会自动重算历史抽卡库或 Box，只会修改出货库中的原始档案。确定保存吗？");
@@ -12264,7 +12915,7 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
     } else {
         const cap = getGraduationCapture(item);
         const finalNickname = state.nickname || item.nickname || state.name || cap.name;
-        item.current = reconcileCurrentStateWithCapture(cap, Object.assign({}, state, {
+        item.current = reconcileCurrentStateWithCapture(cap, Object.assign({}, item.current || {}, state, {
             nickname: finalNickname,
             note: item.current?.note || '',
             updatedAt: new Date().toISOString()
@@ -15222,6 +15873,8 @@ window.submitDailyCheckIn = async function submitDailyCheckInV22(event) {
 
 window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
     if (graduationBackfillSubmitting) return;
+    const modal = document.getElementById('daily-checkin-modal');
+    const isWorker = modal?.dataset?.workerBackfill === '1';
     let state;
     try {
         state = readCurrentCheckInPanelState();
@@ -15235,25 +15888,29 @@ window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
         alert('请输入要补录的宝可梦名字！');
         return;
     }
-    if (!isGraduationResult(state.result)) {
+    if (!isWorker && !isGraduationResult(state.result)) {
         alert('出货库可收录【和解 / 毕业 / 大毕业 / 金帮毕业】个体，不能选择没货。');
         return;
     }
+    if (isWorker) state.result = 'none';
 
     graduationBackfillSubmitting = true;
-    const modal = document.getElementById('daily-checkin-modal');
     if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
     if (typeof hideBlockingProgress === 'function') hideBlockingProgress();
     if (typeof hideBlockingProcessOverlay === 'function') hideBlockingProcessOverlay();
 
     try {
         addGraduationDexEntry({
-            source: 'manual',
+            source: isWorker ? 'worker' : 'manual',
+            isWorker,
             nickname: state.nickname || state.name,
             capture: state,
-            current: Object.assign({}, state, { nickname: state.nickname || state.name })
+            current: Object.assign({}, state, {
+                nickname: state.nickname || state.name,
+                trainingTargetLevel: isWorker ? 30 : null
+            })
         });
-        maybeSyncBackfilledGraduationToBox(state);
+        if (!isWorker) maybeSyncBackfilledGraduationToBox(state);
         saveGraduationDexToLocal();
         if (currentCloudUser) scheduleSaveGraduationDexToCloud();
         const dexModal = document.getElementById('graduation-dex-modal');
@@ -15261,7 +15918,9 @@ window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
         setTimeout(() => {
             try { updateBoxUI(false); } catch (err) { console.warn('补录后刷新大仓失败：', err); }
         }, 80);
-        showToast(`已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
+        showToast(isWorker
+            ? `已把【${state.name}】作为打工个体收入出货库，不影响任何评分统计`
+            : `已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
     } catch (err) {
         console.error('补录出货库失败：', err);
         alert('补录失败：' + (err && err.message ? err.message : '未知错误'));
