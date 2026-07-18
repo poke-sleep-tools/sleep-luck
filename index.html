@@ -3539,6 +3539,7 @@ function cloneGraduationPanelState(payload = {}) {
         trainingLevel: Number.isFinite(rawLevel) && rawLevel >= 1 ? Math.min(70, Math.floor(rawLevel)) : null,
         trainingExpToNext: Number.isFinite(rawExpToNext) && rawExpToNext >= 0 ? Math.floor(rawExpToNext) : null,
         trainingTargetLevel: Number.isFinite(rawTargetLevel) && rawTargetLevel >= 1 ? Math.min(70, Math.floor(rawTargetLevel)) : null,
+        trainingExpFactor: normalizeTrainingExpFactor(payload.trainingExpFactor),
         candyGroup: String(payload.candyGroup || '').trim()
     };
 }
@@ -11640,6 +11641,7 @@ const TRAINING_LEVEL_TOTAL_SHARDS = [
 ];
 const TRAINING_EXP_UP_NATURES = new Set(['timid', 'hasty', 'jolly', 'naive']);
 const TRAINING_EXP_DOWN_NATURES = new Set(['brave', 'quiet', 'sassy', 'relaxed']);
+const TRAINING_EXP_FACTORS = [1, 1.5, 1.8, 2.2];
 const TRAINING_CANDY_GROUP_OVERRIDES = {
     '乌波(帕底亚的样子)': '乌波', '土王': '乌波',
     '六尾(阿罗拉的样子)': '六尾', '九尾(阿罗拉的样子)': '六尾',
@@ -11650,7 +11652,8 @@ const TRAINING_CANDY_GROUP_OVERRIDES = {
 let trainingPlannerState = {
     selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
     universalCandyS: 0, universalCandyM: 0, universalCandyL: 0,
-    weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true
+    weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true,
+    sleepBonusCountById: {}, napIslandWeeksById: {}
 };
 
 function formatTrainingNumber(value) {
@@ -11669,6 +11672,12 @@ function normalizeTrainingPlannerState(raw = {}) {
     const cleanCounts = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
         String(key), Math.max(0, Math.min(99999, Math.floor(Number(value) || 0)))
     ]));
+    const cleanSleepBonusCounts = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
+        String(key), Math.max(0, Math.min(5, Math.floor(Number(value) || 0)))
+    ]));
+    const cleanNapWeeks = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
+        String(key), Math.max(0, Math.min(260, Math.floor(Number(value) || 0)))
+    ]));
     return {
         selectedIds: Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : [],
         groupInventory: cleanCounts(raw.groupInventory),
@@ -11681,6 +11690,8 @@ function normalizeTrainingPlannerState(raw = {}) {
             ? 6
             : Math.max(0, Math.min(999, Math.floor(Number(raw.weeklyUniversalCandyS) || 0))),
         includeWeeklyUniversalCandy: raw.includeWeeklyUniversalCandy !== false,
+        sleepBonusCountById: cleanSleepBonusCounts(raw.sleepBonusCountById),
+        napIslandWeeksById: cleanNapWeeks(raw.napIslandWeeksById),
         updatedAt: raw.updatedAt || ''
     };
 }
@@ -11736,41 +11747,102 @@ function getTrainingCandyExp(natureKey, boosted = false) {
     return boosted ? normal * 2 : normal;
 }
 
-function getTrainingSleepExp(natureKey) {
-    return getTrainingNatureMode(natureKey) === 'up' ? 118 : (getTrainingNatureMode(natureKey) === 'down' ? 82 : 100);
+function normalizeTrainingExpFactor(value) {
+    const parsed = Number(value);
+    return TRAINING_EXP_FACTORS.includes(parsed) ? parsed : 1;
 }
 
-function getTrainingLevelNeed(level) {
+function getTrainingScaledTotalExp(level, expFactor = 1) {
+    const lv = Math.max(1, Math.min(70, Math.floor(Number(level) || 1)));
+    return Math.round(TRAINING_LEVEL_TOTAL_EXP[lv] * normalizeTrainingExpFactor(expFactor));
+}
+
+function getTrainingSleepExp(natureKey, sleepExpBonusCount = 0) {
+    const natureAdjusted = getTrainingNatureMode(natureKey) === 'up' ? 118 : (getTrainingNatureMode(natureKey) === 'down' ? 82 : 100);
+    const bonusCount = Math.max(0, Math.min(5, Math.floor(Number(sleepExpBonusCount) || 0)));
+    return Math.round(natureAdjusted * (1 + bonusCount * 0.14));
+}
+
+function getTrainingNapIslandExpPerDay(natureKey) {
+    return getTrainingNatureMode(natureKey) === 'up' ? 177 : (getTrainingNatureMode(natureKey) === 'down' ? 123 : 150);
+}
+
+const TRAINING_SUBSKILL_UNLOCK_LEVELS = { sub1: 10, sub2: 25, sub3: 50, sub4: 75, sub5: 100 };
+
+function getSleepExpBonusUnlockLevel(subskills = {}) {
+    for (const slot of ['sub1', 'sub2', 'sub3', 'sub4', 'sub5']) {
+        if (subskills?.[slot] === 'sexp') return TRAINING_SUBSKILL_UNLOCK_LEVELS[slot];
+    }
+    return 0;
+}
+
+function getTrainingSleepBonusCountForRow(row, totalExp = row.totalExp) {
+    if (row.sleepBonusOverride != null) return Math.max(0, Math.min(5, Number(row.sleepBonusOverride) || 0));
+    if (!row.sleepBonusUnlockLevel) return 0;
+    return getTrainingLevelAtTotalExp(totalExp, row.expFactor) >= row.sleepBonusUnlockLevel ? 1 : 0;
+}
+
+function calculateTrainingSleepOutcome(row) {
+    const requiredExp = Math.max(0, Number(row.remaining) || 0);
+    let remaining = requiredExp;
+    let totalExp = Math.max(0, Number(row.totalExp) || 0);
+    let nights = 0;
+    let actualExp = 0;
+    let startBonusCount = getTrainingSleepBonusCountForRow(row, totalExp);
+    let endBonusCount = startBonusCount;
+    while (remaining > 0 && nights < 10000) {
+        const bonusCount = getTrainingSleepBonusCountForRow(row, totalExp);
+        const perNight = getTrainingSleepExp(row.nature, bonusCount);
+        remaining = Math.max(0, remaining - perNight);
+        totalExp += perNight;
+        actualExp += perNight;
+        nights += 1;
+        endBonusCount = getTrainingSleepBonusCountForRow(row, totalExp);
+    }
+    return {
+        requiredExp,
+        nights,
+        actualExp,
+        startBonusCount,
+        endBonusCount,
+        startPerNight: getTrainingSleepExp(row.nature, startBonusCount),
+        endPerNight: getTrainingSleepExp(row.nature, endBonusCount)
+    };
+}
+
+function getTrainingLevelNeed(level, expFactor = 1) {
     const lv = Math.max(1, Math.min(69, Math.floor(Number(level) || 1)));
-    return TRAINING_LEVEL_TOTAL_EXP[lv + 1] - TRAINING_LEVEL_TOTAL_EXP[lv];
+    return getTrainingScaledTotalExp(lv + 1, expFactor) - getTrainingScaledTotalExp(lv, expFactor);
 }
 
 function getTrainingCurrentTotalExp(current = {}) {
     const level = Math.max(1, Math.min(70, Math.floor(Number(current.trainingLevel) || 1)));
-    if (level >= 70) return TRAINING_LEVEL_TOTAL_EXP[70];
-    const fullNeed = getTrainingLevelNeed(level);
+    const expFactor = normalizeTrainingExpFactor(current.trainingExpFactor);
+    if (level >= 70) return getTrainingScaledTotalExp(70, expFactor);
+    const fullNeed = getTrainingLevelNeed(level, expFactor);
     const remaining = Math.max(0, Math.min(fullNeed, Math.floor(Number(current.trainingExpToNext) || 0)));
-    return TRAINING_LEVEL_TOTAL_EXP[level + 1] - remaining;
+    return getTrainingScaledTotalExp(level + 1, expFactor) - remaining;
 }
 
 function getTrainingMissingExp(current = {}, targetLevel = null) {
     const currentLevel = Math.max(1, Math.min(70, Math.floor(Number(current.trainingLevel) || 1)));
     const target = Math.max(currentLevel, Math.min(70, Math.floor(Number(targetLevel ?? current.trainingTargetLevel) || currentLevel)));
-    return Math.max(0, TRAINING_LEVEL_TOTAL_EXP[target] - getTrainingCurrentTotalExp(current));
+    const expFactor = normalizeTrainingExpFactor(current.trainingExpFactor);
+    return Math.max(0, getTrainingScaledTotalExp(target, expFactor) - getTrainingCurrentTotalExp(current));
 }
 
-function getTrainingLevelAtTotalExp(totalExp) {
+function getTrainingLevelAtTotalExp(totalExp, expFactor = 1) {
     const exp = Math.max(0, Number(totalExp) || 0);
     for (let level = 69; level >= 1; level--) {
-        if (exp >= TRAINING_LEVEL_TOTAL_EXP[level]) return level;
+        if (exp >= getTrainingScaledTotalExp(level, expFactor)) return level;
     }
     return 1;
 }
 
 // 目前用户提供的是“累计梦碎”表。第一版据相邻等级的累计增量折算当前等级单颗糖成本；
 // 后续若提供官方逐级单颗价格表，只需替换本函数，规划器其余部分无需改动。
-function getTrainingShardCostPerCandy(totalExp) {
-    const level = Math.min(69, getTrainingLevelAtTotalExp(totalExp));
+function getTrainingShardCostPerCandy(totalExp, expFactor = 1) {
+    const level = Math.min(69, getTrainingLevelAtTotalExp(totalExp, expFactor));
     const expDelta = Math.max(1, TRAINING_LEVEL_TOTAL_EXP[level + 1] - TRAINING_LEVEL_TOTAL_EXP[level]);
     const shardDelta = Math.max(0, TRAINING_LEVEL_TOTAL_SHARDS[level + 1] - TRAINING_LEVEL_TOTAL_SHARDS[level]);
     return Math.max(1, Math.round((shardDelta / expDelta) * 25));
@@ -11783,7 +11855,8 @@ function openTrainingProgressModal(id) {
     const cap = getGraduationCapture(item);
     const cur = getGraduationCurrent(item);
     const level = Number(cur.trainingLevel) || 1;
-    const fullNeed = level < 70 ? getTrainingLevelNeed(level) : 0;
+    const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
+    const fullNeed = level < 70 ? getTrainingLevelNeed(level, expFactor) : 0;
     const remaining = cur.trainingExpToNext == null ? fullNeed : Number(cur.trainingExpToNext);
     const target = Math.max(level, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : Math.min(70, Math.max(30, level))));
     const group = cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name);
@@ -11809,6 +11882,11 @@ function openTrainingProgressModal(id) {
             <label class="text-[10px] font-black text-slate-500">默认目标等级
                 <input id="training-progress-target" type="number" min="1" max="70" value="${target}" class="mt-1 w-full bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-emerald-400">
             </label>
+            <label class="text-[10px] font-black text-slate-500">升级经验倍率
+                <select id="training-progress-exp-factor" onchange="refreshTrainingProgressLimit()" class="mt-1 w-full bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-violet-400">
+                    ${TRAINING_EXP_FACTORS.map(value => `<option value="${value}" ${expFactor === value ? 'selected' : ''}>普通×${value}</option>`).join('')}
+                </select>
+            </label>
             <label class="text-[10px] font-black text-slate-500">共享糖果组
                 <input id="training-progress-group" value="${escapeHtmlAttr(group)}" class="mt-1 w-full bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 text-sm font-black focus:outline-none focus:border-sky-400">
             </label>
@@ -11817,7 +11895,7 @@ function openTrainingProgressModal(id) {
             <span>快捷目标</span>
             ${[30, 50, 60, 70].map(lv => `<button onclick="document.getElementById('training-progress-target').value='${lv}'" class="px-2 py-1 rounded-lg bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600">Lv.${lv}</button>`).join('')}
         </div>
-        <div id="training-progress-limit-note" class="text-[10px] text-indigo-700 font-bold bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">Lv.${level}→${Math.min(70, level + 1)} 完整需要 ${formatTrainingNumber(fullNeed)} EXP</div>
+        <div id="training-progress-limit-note" class="text-[10px] text-indigo-700 font-bold bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">Lv.${level}→${Math.min(70, level + 1)} 完整需要 ${formatTrainingNumber(fullNeed)} EXP（×${expFactor}）</div>
         <p class="text-[9px] text-slate-400 font-bold leading-relaxed">同一进化链会自动使用相同糖果组；地区形态也已合并。若遇到特殊个体，可手动把糖果组改成同一个名字。</p>
         <button onclick='saveTrainingProgress(${JSON.stringify(item.id)})' class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs py-3 rounded-xl shadow-sm"><i class="fa-solid fa-floppy-disk"></i> 保存等级经验</button>
     </div>`;
@@ -11828,9 +11906,11 @@ function refreshTrainingProgressLimit() {
     const levelEl = document.getElementById('training-progress-level');
     const expEl = document.getElementById('training-progress-exp');
     const targetEl = document.getElementById('training-progress-target');
+    const factorEl = document.getElementById('training-progress-exp-factor');
     const note = document.getElementById('training-progress-limit-note');
     const level = Math.max(1, Math.min(70, Math.floor(Number(levelEl?.value) || 1)));
-    const fullNeed = level < 70 ? getTrainingLevelNeed(level) : 0;
+    const expFactor = normalizeTrainingExpFactor(factorEl?.value);
+    const fullNeed = level < 70 ? getTrainingLevelNeed(level, expFactor) : 0;
     if (expEl) {
         expEl.max = String(fullNeed);
         expEl.disabled = level >= 70;
@@ -11841,14 +11921,15 @@ function refreshTrainingProgressLimit() {
         targetEl.min = String(level);
         if (Number(targetEl.value) < level) targetEl.value = String(level);
     }
-    if (note) note.textContent = level >= 70 ? '已达到当前经验表上限 Lv.70' : `Lv.${level}→${level + 1} 完整需要 ${formatTrainingNumber(fullNeed)} EXP`;
+    if (note) note.textContent = level >= 70 ? '已达到当前经验表上限 Lv.70' : `Lv.${level}→${level + 1} 完整需要 ${formatTrainingNumber(fullNeed)} EXP（×${expFactor}）`;
 }
 
 function saveTrainingProgress(id) {
     const item = graduationDex.find(x => String(x.id) === String(id));
     if (!item) return;
     const level = Math.max(1, Math.min(70, Math.floor(Number(document.getElementById('training-progress-level')?.value) || 1)));
-    const fullNeed = level < 70 ? getTrainingLevelNeed(level) : 0;
+    const expFactor = normalizeTrainingExpFactor(document.getElementById('training-progress-exp-factor')?.value);
+    const fullNeed = level < 70 ? getTrainingLevelNeed(level, expFactor) : 0;
     const rawRemaining = Math.floor(Number(document.getElementById('training-progress-exp')?.value));
     if (level < 70 && (!Number.isFinite(rawRemaining) || rawRemaining < 0 || rawRemaining > fullNeed)) {
         alert(`Lv.${level} 距离下一级经验应填写 0～${formatTrainingNumber(fullNeed)}。`);
@@ -11860,6 +11941,7 @@ function saveTrainingProgress(id) {
         trainingLevel: level,
         trainingExpToNext: level >= 70 ? 0 : rawRemaining,
         trainingTargetLevel: target,
+        trainingExpFactor: expFactor,
         candyGroup: group,
         updatedAt: new Date().toISOString()
     });
@@ -11909,14 +11991,31 @@ function renderTrainingPlannerModal() {
                 <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-2">
                     ${items.length ? items.map(({ item, cap, cur }) => {
                         const hasProgress = Number(cur.trainingLevel) >= 1;
-                        const checked = selected.has(String(item.id));
+                        const itemId = String(item.id);
+                        const checked = selected.has(itemId);
                         const level = Number(cur.trainingLevel) || 0;
+                        const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
                         const target = Math.max(level || 1, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : 50));
+                        const sleepBonusUnlock = getSleepExpBonusUnlockLevel(cur.subskills || cap.subskills);
+                        const hasSleepBonusOverride = Object.prototype.hasOwnProperty.call(trainingPlannerState.sleepBonusCountById || {}, itemId);
+                        const sleepBonusValue = hasSleepBonusOverride ? trainingPlannerState.sleepBonusCountById[itemId] : 'auto';
+                        const napWeeks = trainingPlannerState.napIslandWeeksById?.[itemId] || 0;
                         return `<div class="rounded-xl border ${checked ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'} p-2.5 flex items-start gap-2">
-                            <input type="checkbox" ${checked ? 'checked' : ''} ${hasProgress ? '' : 'disabled'} onchange='toggleTrainingPlannerSelection(${JSON.stringify(String(item.id))}, this.checked)' class="mt-1 accent-indigo-600">
+                            <input type="checkbox" ${checked ? 'checked' : ''} ${hasProgress ? '' : 'disabled'} onchange='toggleTrainingPlannerSelection(${JSON.stringify(itemId)}, this.checked)' class="mt-1 accent-indigo-600">
                             <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-1"><span class="text-xs font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))}</span><span class="text-[9px] font-black px-1.5 py-0.5 rounded-md ${isWorkerGraduationEntry(item) ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'}">${getGraduationDexEntryResultName(item, cur)}</span></div>
-                            <div class="text-[9px] text-slate-400 font-bold mt-1">${hasProgress ? `Lv.${level} · 距下级 ${formatTrainingNumber(cur.trainingExpToNext)} · ${getTrainingNatureLabel(cur.nature)}` : '先录入等级经验后才能选择'}</div>
-                            <div class="mt-1.5 flex items-center gap-1"><span class="text-[9px] text-slate-400 font-bold">目标</span><input type="number" min="${level || 1}" max="70" value="${target}" onchange='updateTrainingPlannerTarget(${JSON.stringify(String(item.id))}, this.value)' class="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black"><button onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="text-[9px] font-black text-indigo-600 hover:text-indigo-800 px-1">编辑进度</button></div></div>
+                            <div class="text-[9px] text-slate-400 font-bold mt-1">${hasProgress ? `Lv.${level} · 距下级 ${formatTrainingNumber(cur.trainingExpToNext)} · 经验×${expFactor} · ${getTrainingNatureLabel(cur.nature)}` : '先录入等级经验后才能选择'}</div>
+                            <div class="mt-1.5 flex items-center gap-1"><span class="text-[9px] text-slate-400 font-bold">目标</span><input type="number" min="${level || 1}" max="70" value="${target}" onchange='updateTrainingPlannerTarget(${JSON.stringify(itemId)}, this.value)' class="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black"><button type="button" onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="text-[9px] font-black text-indigo-600 hover:text-indigo-800 px-1">编辑进度</button></div>
+                            <div class="mt-2 grid grid-cols-2 gap-1.5">
+                                <label class="text-[8px] font-black text-amber-700">睡眠EXP词条数
+                                    <select onchange='updateTrainingPlannerSleepBonus(${JSON.stringify(itemId)}, this.value)' class="mt-0.5 w-full bg-white border border-amber-200 rounded-lg px-1.5 py-1 text-[9px] font-black">
+                                        <option value="auto" ${sleepBonusValue === 'auto' ? 'selected' : ''}>自动（自身${sleepBonusUnlock ? `Lv.${sleepBonusUnlock}` : '无'}）</option>
+                                        ${Array.from({ length: 6 }, (_, n) => `<option value="${n}" ${sleepBonusValue === n ? 'selected' : ''}>${n}个（+${n * 14}%）</option>`).join('')}
+                                    </select>
+                                </label>
+                                <label class="text-[8px] font-black text-sky-700">分配午睡岛周数
+                                    <input type="number" min="0" max="260" value="${napWeeks}" onchange='updateTrainingPlannerNapWeeks(${JSON.stringify(itemId)}, this.value)' class="mt-0.5 w-full bg-white border border-sky-200 rounded-lg px-1.5 py-1 text-[9px] font-black">
+                                </label>
+                            </div></div>
                         </div>`;
                     }).join('') : '<div class="text-xs font-bold text-slate-400 py-5 text-center col-span-full">出货库还是空的，请先补录出货或打工个体。</div>'}
                 </div>
@@ -11985,6 +12084,19 @@ function updateTrainingPlannerTarget(id, value) {
     cur.updatedAt = new Date().toISOString();
     saveGraduationDexToLocal();
     renderTrainingPlannerModal();
+}
+
+function updateTrainingPlannerSleepBonus(id, value) {
+    trainingPlannerState.sleepBonusCountById ||= {};
+    if (value === 'auto') delete trainingPlannerState.sleepBonusCountById[String(id)];
+    else trainingPlannerState.sleepBonusCountById[String(id)] = Math.max(0, Math.min(5, Math.floor(Number(value) || 0)));
+    calculateAndRenderTrainingPlanner();
+}
+
+function updateTrainingPlannerNapWeeks(id, value) {
+    trainingPlannerState.napIslandWeeksById ||= {};
+    trainingPlannerState.napIslandWeeksById[String(id)] = Math.max(0, Math.min(260, Math.floor(Number(value) || 0)));
+    calculateAndRenderTrainingPlanner();
 }
 
 function updateTrainingPlannerBoostWeeks(value) {
@@ -12071,16 +12183,35 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         const currentLevel = Number(cur.trainingLevel) || 0;
         const targetLevel = Math.max(currentLevel || 1, Math.min(70, Number(cur.trainingTargetLevel) || currentLevel || 1));
         const missing = currentLevel ? getTrainingMissingExp(cur, targetLevel) : 0;
+        const id = String(item.id);
+        const hasSleepBonusOverride = Object.prototype.hasOwnProperty.call(trainingPlannerState.sleepBonusCountById || {}, id);
+        const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
         return {
-            id: String(item.id), item, cap, cur,
+            id, item, cap, cur,
             name: getGraduationDexNickname(item), currentLevel, targetLevel,
             group: cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name),
             nature: cur.nature || 'blank',
+            expFactor,
+            sleepBonusUnlockLevel: getSleepExpBonusUnlockLevel(cur.subskills || cap.subskills),
+            sleepBonusOverride: hasSleepBonusOverride ? trainingPlannerState.sleepBonusCountById[id] : null,
+            requestedNapWeeks: Math.max(0, Math.min(260, Math.floor(Number(trainingPlannerState.napIslandWeeksById?.[id]) || 0))),
             initialMissing: missing, remaining: missing,
             totalExp: getTrainingCurrentTotalExp(cur),
             candyNormal: 0, candyBoosted: 0, universalSpeciesCandy: 0, candyExp: 0, shards: 0
         };
     }).filter(row => row.currentLevel > 0 && row.targetLevel >= row.currentLevel);
+
+    rows.forEach(row => {
+        row.napExpPerDay = getTrainingNapIslandExpPerDay(row.nature);
+        row.napExpPerWeek = row.napExpPerDay * 7;
+        const maxUsefulNapWeeks = row.initialMissing > 0 ? Math.ceil(row.initialMissing / row.napExpPerWeek) : 0;
+        row.napWeeks = Math.min(row.requestedNapWeeks, maxUsefulNapWeeks);
+        row.napPotentialExp = row.napWeeks * row.napExpPerWeek;
+        row.napExp = Math.min(row.remaining, row.napPotentialExp);
+        row.napOverflowExp = Math.max(0, row.napPotentialExp - row.napExp);
+        row.remaining = Math.max(0, row.remaining - row.napPotentialExp);
+        row.totalExp += row.napPotentialExp;
+    });
 
     const groupStock = {};
     rows.forEach(row => {
@@ -12109,14 +12240,14 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         const candidates = rows.filter(row => row.remaining > 0 && (groupStock[row.group] > 0 || universalSpeciesStock > 0));
         if (!candidates.length) break;
         candidates.sort((a, b) => {
-            const aPressure = a.remaining / getTrainingSleepExp(a.nature);
-            const bPressure = b.remaining / getTrainingSleepExp(b.nature);
+            const aPressure = a.remaining / getTrainingSleepExp(a.nature, getTrainingSleepBonusCountForRow(a));
+            const bPressure = b.remaining / getTrainingSleepExp(b.nature, getTrainingSleepBonusCountForRow(b));
             return bPressure - aPressure || b.remaining - a.remaining;
         });
         const row = candidates[0];
         const boosted = boostRemaining > 0;
         const candyExp = getTrainingCandyExp(row.nature, boosted);
-        const baseShard = getTrainingShardCostPerCandy(row.totalExp);
+        const baseShard = getTrainingShardCostPerCandy(row.totalExp, row.expFactor);
         row.shards += baseShard * (boosted ? 4 : 1);
         row.candyExp += Math.min(candyExp, row.remaining);
         row.remaining = Math.max(0, row.remaining - candyExp);
@@ -12133,13 +12264,20 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
     }
 
     rows.forEach(row => {
-        row.sleepPerNight = getTrainingSleepExp(row.nature);
-        row.sleepExp = Math.max(0, row.remaining);
-        row.sleepNights = row.sleepExp > 0 ? Math.ceil(row.sleepExp / row.sleepPerNight) : 0;
-        row.sleepActualExp = row.sleepNights * row.sleepPerNight;
+        const sleep = calculateTrainingSleepOutcome(row);
+        row.sleepExp = sleep.requiredExp;
+        row.sleepNights = sleep.nights;
+        row.sleepActualExp = sleep.actualExp;
+        row.sleepBonusCountStart = sleep.startBonusCount;
+        row.sleepBonusCountEnd = sleep.endBonusCount;
+        row.sleepPerNight = sleep.startPerNight;
+        row.sleepPerNightEnd = sleep.endPerNight;
     });
     const totals = rows.reduce((out, row) => {
         out.missing += row.initialMissing;
+        out.napExp += row.napExp;
+        out.napPotentialExp += row.napPotentialExp;
+        out.napWeeks += row.napWeeks;
         out.normalCandy += row.candyNormal;
         out.boostedCandy += row.candyBoosted;
         out.universalSpeciesCandy += row.universalSpeciesCandy;
@@ -12148,7 +12286,7 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         out.sleepSlotNights += row.sleepNights;
         out.shards += row.shards;
         return out;
-    }, { missing: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
+    }, { missing: 0, napExp: 0, napPotentialExp: 0, napWeeks: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
     const universalConversion = getUniversalCandyConversion(
         universalSpeciesUsed, universalCandySAvailable, universalCandyMAvailable, universalCandyLAvailable
     );
@@ -12169,9 +12307,10 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
 
 function getTrainingPlanTheoreticalNights(plan) {
     if (!plan?.rows?.length) return 0;
-    const longestIndividual = Math.max(0, ...plan.rows.map(row => Number(row.sleepNights) || 0));
+    const longestIndividual = Math.max(0, ...plan.rows.map(row => (Number(row.sleepNights) || 0) + (Number(row.napWeeks) || 0) * 7));
     const fiveSlotCapacity = Math.ceil((Number(plan.totals?.sleepSlotNights) || 0) / 5);
-    return Math.max(longestIndividual, fiveSlotCapacity);
+    const napIslandCalendar = (Number(plan.totals?.napWeeks) || 0) * 7;
+    return Math.max(longestIndividual, fiveSlotCapacity, napIslandCalendar);
 }
 
 function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
@@ -12247,8 +12386,10 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         ${[
             ['总经验缺口', `${formatTrainingNumber(plan.totals.missing)} EXP`, 'text-slate-800'],
             ['糖果承担', `${formatTrainingNumber(plan.totals.candyExp)} EXP`, 'text-amber-700'],
+            ['午睡岛承担', `${formatTrainingNumber(plan.totals.napExp)} EXP`, 'text-teal-700'],
             ['睡眠承担', `${formatTrainingNumber(plan.totals.sleepExp)} EXP`, 'text-sky-700'],
             ['睡眠席位晚', formatTrainingNumber(plan.totals.sleepSlotNights), 'text-indigo-700'],
+            ['午睡岛占用', `${formatTrainingNumber(plan.totals.napWeeks)} 周`, 'text-teal-700'],
             ['理论最快完成', `${formatTrainingNumber(plan.completionNights)} 晚`, 'text-violet-700'],
             ['约合满5席', `${fullTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
             ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
@@ -12259,13 +12400,14 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         本方案预计使用万能糖 <strong>S ${formatTrainingNumber(plan.universalCandySUsed)}</strong> 个、<strong>M ${formatTrainingNumber(plan.universalCandyMUsed)}</strong> 个、<strong>L ${formatTrainingNumber(plan.universalCandyLUsed)}</strong> 个，共换出 ${formatTrainingNumber(plan.universalConvertedSpecies)} 颗宝可梦糖果，其中本次培养使用 ${formatTrainingNumber(plan.universalSpeciesUsed)} 颗${plan.universalConvertedLeftover ? `，兑换后余下 ${formatTrainingNumber(plan.universalConvertedLeftover)} 颗` : ''}。
         ${trainingPlannerState.includeWeeklyUniversalCandy ? `理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 个完整周，预计另获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个。` : ''}
     </div>` : ''}
+    ${plan.totals.napWeeks > 0 ? `<div class="bg-teal-50 border border-teal-200 rounded-2xl px-4 py-3 text-xs font-bold text-teal-800"><i class="fa-solid fa-umbrella-beach"></i> 午睡岛共分配 <strong>${formatTrainingNumber(plan.totals.napWeeks)}</strong> 周；由于每周只能送1只，这些周数依次占用午睡岛。每日基础150 EXP经性格修正后，普通／EXP＋／EXP－性格每周分别一次性获得1050／1239／861 EXP；不受睡眠EXP奖励词条影响。在岛期间该宝可梦不再参加普通睡眠培养。</div>` : ''}
     ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，理论完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 晚，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
     <section class="overflow-x-auto border border-slate-200 rounded-2xl">
-        <table class="w-full text-[10px] min-w-[940px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
-        <tbody>${plan.rows.map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · ${getTrainingNatureLabel(row.nature)}</div></td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
+        <table class="w-full text-[10px] min-w-[1180px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">午睡岛</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">每晚EXP/词条</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
+        <tbody>${plan.rows.map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        睡眠席位晚＝每只宝可梦需要上队的晚数相加；理论最快完成同时受“每天5席”和“同一只每天最多睡1次”约束，但不生成具体排班。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加；“自动”只跟踪该宝可梦自身词条，它在培养中达到解锁等级后会从下一晚开始生效；若有其他同队词条，请手动选择当晚生效数。手动填入的外部词条只修正该宝可梦的每晚EXP，不额外生成辅助宝可梦的席位排班。睡眠席位晚＝每只宝可梦需要上队的晚数相加；理论最快完成同时受“每天5席”、“同一只每天最多睡1次”及“午睡岛每周1只”约束，但不生成具体排班。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
@@ -12423,9 +12565,10 @@ function renderGraduationDexList() {
         const trainingLevel = Number(cur.trainingLevel) || 0;
         const targetLevel = Number(cur.trainingTargetLevel) || 0;
         const expToNext = cur.trainingExpToNext;
+        const trainingExpFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
         const candyGroup = cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name);
         const progressText = trainingLevel > 0
-            ? (trainingLevel >= 70 ? `Lv.${trainingLevel} · 当前表格上限` : `Lv.${trainingLevel} · 距下一级 ${formatTrainingNumber(expToNext || 0)} EXP`)
+            ? (trainingLevel >= 70 ? `Lv.${trainingLevel} · 当前表格上限 · 经验×${trainingExpFactor}` : `Lv.${trainingLevel} · 距下一级 ${formatTrainingNumber(expToNext || 0)} EXP · 经验×${trainingExpFactor}`)
             : '尚未录入等级经验';
 
         const skillChips = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'].map((slot, idx) => {
@@ -12954,6 +13097,7 @@ function reconcileCurrentStateWithCapture(captureState, proposedCurrent = {}) {
         trainingLevel: proposedCurrent.trainingLevel ?? null,
         trainingExpToNext: proposedCurrent.trainingExpToNext ?? null,
         trainingTargetLevel: proposedCurrent.trainingTargetLevel ?? null,
+        trainingExpFactor: normalizeTrainingExpFactor(proposedCurrent.trainingExpFactor ?? cap.trainingExpFactor),
         candyGroup: String(proposedCurrent.candyGroup || '').trim(),
         updatedAt: proposedCurrent.updatedAt || new Date().toISOString()
     });
