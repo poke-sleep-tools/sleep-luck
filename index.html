@@ -1025,29 +1025,77 @@ function mergeTodayCheckIns(localLogs = [], historyTodayLogs = []) {
     });
 }
 
+// v43：每日面板记录的是“今天在网站上操作过的捕捉”，不能只看研究归属日期。
+// 新记录使用 recordedAt；旧记录没有该字段时，从毫秒时间戳 id 兼容推断录入日期。
+function getTodayCheckInOperationDate(log) {
+    if (!log) return '';
+    const rawTime = log.recordedAt || log.createdAt || log.timestamp || '';
+    let d = rawTime ? new Date(rawTime) : null;
+    if (!d || Number.isNaN(d.getTime())) {
+        const numericId = Number(String(log.id ?? '').replace(/[^0-9]/g, '').slice(0, 13));
+        if (Number.isFinite(numericId) && numericId >= 946684800000 && numericId <= 4102444800000) {
+            d = new Date(numericId);
+        }
+    }
+    if (!d || Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function toTodayCheckInView(log, fallback = {}) {
+    return {
+        id: log.id,
+        date: normalizeSleepResearchDateValue(log.date || fallback.date || getTodayLocalDateString()),
+        session: normalizeSleepResearchSessionValue(log.session || fallback.session || '一觉'),
+        sleepResearchId: log.sleepResearchId || fallback.sleepResearchId || null,
+        name: log.name || fallback.name || '',
+        result: log.result ?? fallback.result ?? 'none',
+        lockMode: log.lockMode || fallback.lockMode || 'two',
+        track: log.track || null,
+        subskills: log.subskills || fallback.subskills || { sub1: 'none', sub2: 'none', sub3: 'none', sub4: 'none', sub5: 'none' },
+        nature: log.nature || fallback.nature || 'blank',
+        foodCombo: log.foodCombo || fallback.foodCombo || 'ABB',
+        isShiny: !!log.isShiny,
+        recordedAt: log.recordedAt || fallback.recordedAt || log.createdAt || fallback.createdAt || ''
+    };
+}
+
 function rebuildTodayCheckInsFromHistory() {
     // 今日流水是“当天操作看板”，本地仍然保留；
     // 登录账号时，再从云端 historyLogs 里把今天的记录重建出来。
     // 这样手机上打卡后，电脑登录同账号也能看到今日流水。
     const activeDate = getTodayLocalDateString();
 
-    const historyTodayLogs = getVisibleHistoryLogs(historyLogs)
-        .filter(log => log && log.date === activeDate)
-        .map(log => ({
-            id: log.id,
-            date: log.date,
-            session: log.session || '一觉',
-            name: log.name,
-            result: log.result,
-            lockMode: log.lockMode,
-            track: log.track || null,
-            subskills: log.subskills || { sub1: 'none', sub2: 'none', sub3: 'none', sub4: 'none', sub5: 'none' },
-            nature: log.nature || 'blank',
-            foodCombo: log.foodCombo || 'ABB',
-            isShiny: !!log.isShiny
-        }));
+    // 跨日清空必须发生在云端重建之前；旧版在 render 阶段才清空，
+    // 会把刚从云端重建出的新一天记录也一起删掉。
+    const savedDate = localStorage.getItem(getTodayDateStorageKey());
+    if (savedDate !== activeDate) {
+        todayCheckIns = [];
+        localStorage.setItem(getTodayDateStorageKey(), activeDate);
+    }
 
-    todayCheckIns = mergeTodayCheckIns(todayCheckIns, historyTodayLogs);
+    const visibleHistory = getVisibleHistoryLogs(historyLogs);
+    const canonicalById = new Map(visibleHistory.map(log => [String(log.id), log]));
+
+    // 相同 ID 永远以完整历史库为准。即使电脑把记录日期从今天改成昨天，
+    // 手机本地的旧日期也会在刷新时被新版云端记录覆盖。
+    const canonicalLocalLogs = (Array.isArray(todayCheckIns) ? todayCheckIns : []).map(local => {
+        const canonical = canonicalById.get(String(local.id));
+        return canonical ? toTodayCheckInView(canonical, local) : local;
+    });
+
+    const historyTodayLogs = visibleHistory
+        .filter(log => {
+            if (!log) return false;
+            const operationDate = getTodayCheckInOperationDate(log);
+            // 旧记录无法推断录入时间时，继续兼容原先的“记录日期等于今天”口径。
+            return operationDate ? operationDate === activeDate : normalizeSleepResearchDateValue(log.date || '') === activeDate;
+        })
+        .map(log => toTodayCheckInView(log));
+
+    todayCheckIns = mergeTodayCheckIns(canonicalLocalLogs, historyTodayLogs);
     saveTodayCheckInsToLocal();
 }
 
@@ -3316,7 +3364,9 @@ function makeHistoryDeleteMarker(deletedId) {
 
 function getHistoryLogMergeTime(log) {
     if (!log) return 0;
-    const raw = log.updatedAt || log.deletedAt || log.createdAt || log.timestamp || log.date || '';
+    // date 是睡眠研究归属日期，不是数据修改时间。
+    // 把它用于新旧判断会造成“电脑把今天改成昨天后，手机旧的今天记录反而胜出”。
+    const raw = log.updatedAt || log.deletedAt || log.createdAt || log.timestamp || '';
     const parsed = Date.parse(raw);
     return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -3398,7 +3448,9 @@ async function loadHistoryFromCloud() {
     }
 
     if (data && Array.isArray(data.history_logs)) {
-        historyLogs = mergeHistoryLogs(data.history_logs, localSnapshot);
+        // 云端是跨设备已经确认保存的快照。老版本记录没有 updatedAt 时，
+        // 同 ID 无法按时间区分，故让云端处于后合并位置并在平局时覆盖本机旧缓存。
+        historyLogs = mergeHistoryLogs(localSnapshot, data.history_logs);
         const backfilledResearch = ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
         localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
 
@@ -10303,17 +10355,18 @@ function submitDailyCheckInCore() {
     // 🚀 全备份：深拷贝当前网格面板状态
     let subskillsSnapshot = JSON.parse(JSON.stringify(window.checkinSubskills));
 
+    const recordedAt = new Date().toISOString();
     todayCheckIns.unshift({ 
         id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId: sleepResearchId || null,
         name: standardName, result: result, lockMode: lockMode, track: trackMode,
-        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny
+        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny, recordedAt
     });
     saveTodayCheckInsToLocal();
 
     historyLogs.unshift({ 
         id: checkInId, date: stickyCheckInDate, session: stickyCheckInSession, sleepResearchId: sleepResearchId || null,
         name: standardName, result: result, lockMode: lockMode, track: trackMode,
-        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny
+        subskills: subskillsSnapshot, nature: natureKey, foodCombo: foodCombo, isShiny: isShiny, recordedAt
     });
     ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
     saveHistoryToLocal();
@@ -10491,7 +10544,8 @@ function processDailyCheckInSnapshot(data) {
         subskills: data.subskillsSnapshot,
         nature: data.natureKey,
         foodCombo: data.foodCombo,
-        isShiny: data.isShiny
+        isShiny: data.isShiny,
+        recordedAt: new Date().toISOString()
     };
 
     todayCheckIns.unshift(logEntry);
@@ -13361,7 +13415,7 @@ function openEditHistoryLogModal(logId) {
 }
 
 // 2. 覆盖提交：无损回滚老资产 -> 注入新修改 -> 智能联动本地活跃账本与历史时间线
-function submitEditHistoryLog(logId) {
+async function submitEditHistoryLog(logId) {
     const nameInput = document.getElementById('checkin-name');
     const lockInput = document.getElementById('checkin-lock');
     const resultSelect = document.getElementById('checkin-result');
@@ -13394,6 +13448,12 @@ function submitEditHistoryLog(logId) {
     let histIdx = historyLogs.findIndex(h => h && !isHistoryDeleteMarker(h) && String(h.id) === String(logId));
     if (histIdx === -1) return;
     let oldItem = historyLogs[histIdx];
+    const saveBtn = document.querySelector('#daily-checkin-modal [data-edit-history-submit], #daily-checkin-modal #daily-checkin-submit-btn');
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.classList.add('opacity-70', 'cursor-wait');
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在保存并同步…';
+    }
     
     // 【A. 逆向因果因退扣除】
     let oldBoxIdx = playerBox.findIndex(p => p.name === oldItem.name);
@@ -13444,6 +13504,7 @@ function submitEditHistoryLog(logId) {
     oldItem.nature = natureKey;
     oldItem.foodCombo = foodCombo;
     oldItem.isShiny = isShiny;
+    oldItem.updatedAt = new Date().toISOString();
     ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
     saveHistoryToLocal();
     // v33 修正：历史编辑会回滚旧大仓并注入新大仓，必须同步保存 Box，
@@ -13467,12 +13528,18 @@ function submitEditHistoryLog(logId) {
         todayItem.nature = natureKey;
         todayItem.foodCombo = foodCombo;
         todayItem.isShiny = isShiny;
+        todayItem.recordedAt = oldItem.recordedAt || todayItem.recordedAt || '';
         saveTodayCheckInsToLocal();
     }
+    let cloudSaved = true;
     if (currentCloudUser) {
-        saveHistoryToCloudNow();
-        saveBoxToCloudNow();
-        saveGraduationDexToCloudNow();
+        try {
+            // v43：历史、大仓、毕业库一次写入，避免日期已改但另一台设备只读到部分旧状态。
+            await saveCaptureStateBundleToCloudV42();
+        } catch (err) {
+            cloudSaved = false;
+            console.error('历史编辑统一同步失败：', err);
+        }
     }
 
     document.getElementById('daily-checkin-modal').remove();
@@ -13484,9 +13551,11 @@ function submitEditHistoryLog(logId) {
         openHistoryModal(true);
     }
 
-    updateBoxUI(true); 
+    updateBoxUI(false); 
     renderTodayReportUI();
-    showToast(`该笔捕捉记录已完成新版面板精修，大仓资产洗髓成功！`);
+    showToast(cloudSaved
+        ? `该笔捕捉记录已修改，并同步到其他设备`
+        : `修改已保存在本机，但账号同步失败，请检查网络后重试`);
 }
 
     // ========================================================
@@ -15022,7 +15091,8 @@ function stableWriteDailyCheckInV22(state, modalContext) {
         subskills: JSON.parse(JSON.stringify(state.subskills || { sub1: 'none', sub2: 'none', sub3: 'none', sub4: 'none', sub5: 'none' })),
         nature: state.nature || 'blank',
         foodCombo: state.foodCombo || 'ABB',
-        isShiny: !!state.isShiny
+        isShiny: !!state.isShiny,
+        recordedAt: new Date().toISOString()
     };
 
     todayCheckIns.unshift(Object.assign({}, logEntry));
