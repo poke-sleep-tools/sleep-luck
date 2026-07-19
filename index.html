@@ -3506,10 +3506,61 @@ function scheduleSaveHistoryToCloud() {
 // ==========================================
 
 let graduationDex = [];
+let graduationDexDeleted = {};
 let graduationBackfillSubmitting = false;
 
 function getGraduationDexStorageKey() {
     return currentCloudUser ? 'sleep_graduation_dex_' + currentCloudUser.id : 'sleep_graduation_dex_guest';
+}
+
+function getGraduationDexDeletedStorageKey() {
+    return getGraduationDexStorageKey() + '_deleted';
+}
+
+function isGraduationDexTombstone(item) {
+    return !!(item && item.isDeleted && item.id != null);
+}
+
+function normalizeGraduationDexTombstone(item = {}) {
+    if (!isGraduationDexTombstone(item)) return null;
+    return {
+        id: String(item.id),
+        sourceId: item.sourceId == null ? null : String(item.sourceId),
+        isDeleted: true,
+        deleteReason: item.deleteReason || 'manual',
+        deletedAt: item.deletedAt || item.updatedAt || new Date().toISOString()
+    };
+}
+
+function getGraduationDexEntryUpdatedAt(item = {}) {
+    return item.current?.updatedAt || item.updatedAt || item.createdAt || '';
+}
+
+function getGraduationDexCloudPayload() {
+    const tombstones = Object.values(graduationDexDeleted || {})
+        .map(normalizeGraduationDexTombstone)
+        .filter(Boolean)
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    return [...(graduationDex || []), ...tombstones];
+}
+
+function markGraduationDexEntryDeleted(item, deleteReason = 'manual') {
+    if (!item || item.id == null) return;
+    const tombstone = normalizeGraduationDexTombstone({
+        id: item.id,
+        sourceId: item.sourceId,
+        isDeleted: true,
+        deleteReason,
+        deletedAt: new Date().toISOString()
+    });
+    if (tombstone) graduationDexDeleted[String(tombstone.id)] = tombstone;
+}
+
+function isGraduationDexSourceManuallyDeleted(sourceId) {
+    if (sourceId == null) return false;
+    return Object.values(graduationDexDeleted || {}).some(item =>
+        item?.deleteReason === 'manual' && item.sourceId != null && String(item.sourceId) === String(sourceId)
+    );
 }
 
 function cloneGraduationPanelState(payload = {}) {
@@ -3585,7 +3636,7 @@ function buildGraduationDexEntry(payload = {}) {
 }
 
 function normalizeGraduationDexEntry(item) {
-    if (!item) return null;
+    if (!item || isGraduationDexTombstone(item)) return null;
 
     if (item.capture && item.current) {
         const captureState = cloneGraduationPanelState(item.capture);
@@ -3661,17 +3712,21 @@ function normalizeGraduationDex() {
 function loadGraduationDexFromLocal() {
     try {
         graduationDex = JSON.parse(localStorage.getItem(getGraduationDexStorageKey())) || [];
+        const deletedRaw = JSON.parse(localStorage.getItem(getGraduationDexDeletedStorageKey())) || {};
+        graduationDexDeleted = Object.fromEntries(Object.values(deletedRaw).map(normalizeGraduationDexTombstone).filter(Boolean).map(item => [String(item.id), item]));
         normalizeGraduationDex();
         // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
     } catch (e) {
         console.error('毕业库读取失败，已重置：', e);
         graduationDex = [];
+        graduationDexDeleted = {};
     }
 }
 
 function saveGraduationDexToLocal() {
     normalizeGraduationDex();
     localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
+    localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted || {}));
     // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
     scheduleSaveGraduationDexToCloud();
 }
@@ -3706,8 +3761,9 @@ function setGraduationDexNickname(item, nickname) {
     if (item.current) item.current.nickname = finalName;
 }
 
-function mergeGraduationDex(cloudDex = [], localDex = []) {
+function mergeGraduationDex(cloudDex = [], localDex = [], localDeleted = {}) {
     const mergedMap = new Map();
+    const deletedMap = new Map();
 
     const chooseNewer = (existing, candidate) => {
         if (!existing) return candidate;
@@ -3718,7 +3774,19 @@ function mergeGraduationDex(cloudDex = [], localDex = []) {
         return candidate;
     };
 
-    cloudDex.forEach(item => {
+    const acceptTombstone = item => {
+        const tombstone = normalizeGraduationDexTombstone(item);
+        if (!tombstone) return;
+        const existing = deletedMap.get(String(tombstone.id));
+        const existingTime = Date.parse(existing?.deletedAt || '') || 0;
+        const candidateTime = Date.parse(tombstone.deletedAt || '') || 0;
+        if (!existing || candidateTime >= existingTime) deletedMap.set(String(tombstone.id), tombstone);
+    };
+
+    cloudDex.filter(isGraduationDexTombstone).forEach(acceptTombstone);
+    Object.values(localDeleted || {}).forEach(acceptTombstone);
+
+    cloudDex.filter(item => !isGraduationDexTombstone(item)).forEach(item => {
         const normalized = normalizeGraduationDexEntry(item);
         if (normalized) mergedMap.set(String(normalized.id), chooseNewer(mergedMap.get(String(normalized.id)), normalized));
     });
@@ -3729,13 +3797,31 @@ function mergeGraduationDex(cloudDex = [], localDex = []) {
         if (normalized) mergedMap.set(String(normalized.id), chooseNewer(mergedMap.get(String(normalized.id)), normalized));
     });
 
-    return Array.from(mergedMap.values()).sort((a, b) => {
+    // 只要存在同 ID 删除标记，删除始终胜出。否则未及时同步的另一台设备一刷新就会把旧档复活。
+    // 真正重新录入会获得新 ID，不受旧删除标记影响。
+    deletedMap.forEach((tombstone, id) => {
+        if (mergedMap.has(id)) mergedMap.delete(id);
+    });
+
+    // 手动删除过的历史归档同时按 sourceId 屏蔽，避免后续自动对账生成新 ID 再次复活。
+    const manuallyDeletedSources = new Set(Array.from(deletedMap.values())
+        .filter(item => item.deleteReason === 'manual' && item.sourceId != null)
+        .map(item => String(item.sourceId)));
+    mergedMap.forEach((active, id) => {
+        if (active.sourceId != null && manuallyDeletedSources.has(String(active.sourceId))) mergedMap.delete(id);
+    });
+
+    const entries = Array.from(mergedMap.values()).sort((a, b) => {
         const capA = getGraduationCapture(a);
         const capB = getGraduationCapture(b);
         const dateCompare = String(capB.date || '').localeCompare(String(capA.date || ''));
         if (dateCompare !== 0) return dateCompare;
         return Number(b.id || 0) - Number(a.id || 0);
     });
+    return {
+        entries,
+        deleted: Object.fromEntries(Array.from(deletedMap.entries()))
+    };
 }
 
 async function loadGraduationDexFromCloud() {
@@ -3744,6 +3830,7 @@ async function loadGraduationDexFromCloud() {
     if (!currentCloudUser) return;
 
     const localSnapshot = Array.isArray(graduationDex) ? [...graduationDex] : [];
+    const localDeletedSnapshot = Object.assign({}, graduationDexDeleted || {});
 
     const { data, error } = await supabaseClient
         .from('player_boxes')
@@ -3758,10 +3845,13 @@ async function loadGraduationDexFromCloud() {
     }
 
     if (data && Array.isArray(data.graduation_dex)) {
-        graduationDex = mergeGraduationDex(data.graduation_dex, localSnapshot);
+        const merged = mergeGraduationDex(data.graduation_dex, localSnapshot, localDeletedSnapshot);
+        graduationDex = merged.entries;
+        graduationDexDeleted = merged.deleted;
         localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
+        localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted));
 
-        if (graduationDex.length !== data.graduation_dex.length) {
+        if (JSON.stringify(getGraduationDexCloudPayload()) !== JSON.stringify(data.graduation_dex)) {
             await saveGraduationDexToCloudNow();
         }
         // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
@@ -3769,6 +3859,7 @@ async function loadGraduationDexFromCloud() {
     }
 
     graduationDex = localSnapshot;
+    graduationDexDeleted = localDeletedSnapshot;
     normalizeGraduationDex();
     // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
     await saveGraduationDexToCloudNow();
@@ -3783,7 +3874,7 @@ async function saveGraduationDexToCloudNow() {
         .from('player_boxes')
         .upsert({
             user_id: currentCloudUser.id,
-            graduation_dex: graduationDex,
+            graduation_dex: getGraduationDexCloudPayload(),
             updated_at: new Date().toISOString()
         }, {
             onConflict: 'user_id'
@@ -3960,18 +4051,22 @@ function addGraduationDexEntry(payload) {
     if (!isGraduationDexEligible(payload)) return;
 
     if (payload.sourceId) {
+        if (isGraduationDexSourceManuallyDeleted(payload.sourceId)) return;
         const exists = graduationDex.some(x => String(x.sourceId) === String(payload.sourceId));
         if (exists) return;
     }
 
-    graduationDex.unshift(buildGraduationDexEntry(payload));
+    const entry = buildGraduationDexEntry(payload);
+    delete graduationDexDeleted[String(entry.id)];
+    graduationDex.unshift(entry);
     saveGraduationDexToLocal();
 }
 
 function removeGraduationDexBySourceId(sourceId) {
-    const before = graduationDex.length;
+    const removed = graduationDex.filter(x => String(x.sourceId) === String(sourceId));
+    removed.forEach(item => markGraduationDexEntryDeleted(item, 'source_removed'));
     graduationDex = graduationDex.filter(x => String(x.sourceId) !== String(sourceId));
-    return graduationDex.length !== before;
+    return removed.length > 0;
 }
 
 function syncGraduationDexFromHistoryRecord(item) {
@@ -3980,6 +4075,14 @@ function syncGraduationDexFromHistoryRecord(item) {
     const existing = graduationDex.find(x => String(x.sourceId) === String(item.id));
 
     if (isGraduationResult(item.result)) {
+        // 历史记录曾因取消出货资格而自动删除，后来重新成为出货时允许恢复；
+        // 但玩家在出货库主动删除的档案仍然保持删除。
+        Object.entries(graduationDexDeleted || {}).forEach(([key, tombstone]) => {
+            if (tombstone?.deleteReason === 'source_removed' && tombstone.sourceId != null && String(tombstone.sourceId) === String(item.id)) {
+                delete graduationDexDeleted[key];
+            }
+        });
+        if (isGraduationDexSourceManuallyDeleted(item.id)) return;
         const captureState = cloneGraduationPanelState({
             date: item.date,
             session: item.session,
@@ -4035,8 +4138,16 @@ function deleteGraduationDexEntry(id, e) {
     const ok = confirm(`确定从出货库删除【${displayName} · ${getGraduationDexEntryResultName(item, cur)}】吗？\n\n这只会删除出货库档案，不会扣大仓，也不会影响历史抽卡库。`);
     if (!ok) return;
 
+    markGraduationDexEntryDeleted(item, 'manual');
     graduationDex.splice(idx, 1);
     saveGraduationDexToLocal();
+    // 删除比普通编辑更需要及时跨设备生效：本地已经落盘，同时立刻发起云端保存，
+    // 不再单纯等待 500ms 防抖计时器。
+    if (currentCloudUser) {
+        clearTimeout(saveGraduationTimer);
+        saveGraduationTimer = null;
+        saveGraduationDexToCloudNow();
+    }
     renderGraduationDexList();
     updateBoxUI(false);
     showToast("已从毕业库移除该个体档案");
@@ -7407,7 +7518,7 @@ async function saveBoxToCloudNow() {
             user_id: currentCloudUser.id,
             box_data: playerBox,
             history_logs: historyLogs,
-            graduation_dex: graduationDex,
+            graduation_dex: getGraduationDexCloudPayload(),
             updated_at: new Date().toISOString()
         }, {
             onConflict: 'user_id'
@@ -15946,7 +16057,7 @@ async function saveCaptureStateBundleToCloudV42() {
             user_id: currentCloudUser.id,
             box_data: playerBox,
             history_logs: historyLogs,
-            graduation_dex: graduationDex,
+            graduation_dex: getGraduationDexCloudPayload(),
             updated_at: new Date().toISOString()
         }, {
             onConflict: 'user_id'
