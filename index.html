@@ -11783,7 +11783,7 @@ let trainingPlannerState = {
     selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
     universalCandyS: 0, universalCandyM: 0, universalCandyL: 0,
     weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true,
-    priorityById: {}, napStrategyById: {}
+    priorityById: {}, napStrategyById: {}, napOverrideByWeek: {}, sleepSlotCount: 5
 };
 
 function formatTrainingNumber(value) {
@@ -11808,6 +11808,12 @@ function normalizeTrainingPlannerState(raw = {}) {
     const cleanNapStrategies = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
         String(key), ['auto', 'long', 'never'].includes(value) ? value : 'auto'
     ]));
+    const cleanNapOverrides = obj => Object.fromEntries(Object.entries(obj || {}).flatMap(([key, value]) => {
+        const rawWeek = Math.floor(Number(key));
+        if (!Number.isFinite(rawWeek) || rawWeek < 1 || value == null || value === '' || value === 'auto') return [];
+        const week = Math.min(260, rawWeek);
+        return [[String(week), value === 'none' ? 'none' : String(value)]];
+    }));
     return {
         selectedIds: Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : [],
         groupInventory: cleanCounts(raw.groupInventory),
@@ -11822,6 +11828,10 @@ function normalizeTrainingPlannerState(raw = {}) {
         includeWeeklyUniversalCandy: raw.includeWeeklyUniversalCandy !== false,
         priorityById: cleanPriorities(raw.priorityById),
         napStrategyById: cleanNapStrategies(raw.napStrategyById),
+        napOverrideByWeek: cleanNapOverrides(raw.napOverrideByWeek),
+        sleepSlotCount: raw.sleepSlotCount == null
+            ? 5
+            : Math.max(1, Math.min(5, Math.floor(Number(raw.sleepSlotCount) || 1))),
         updatedAt: raw.updatedAt || ''
     };
 }
@@ -11981,11 +11991,12 @@ function applyTrainingNapGiftWeek(row) {
     }
 }
 
-function getAutomaticTrainingSleepTeam(targets, supportOnlyCount) {
+function getAutomaticTrainingSleepTeam(targets, supportOnlyCount, availableSlots = 5) {
     let best = { targets: [], supportCount: 0, bonusCount: 0, usefulExp: 0, weightedUsefulExp: 0, urgency: 0 };
-    const maxSupports = Math.min(5, Math.max(0, Math.floor(Number(supportOnlyCount) || 0)));
+    const slotCount = Math.max(1, Math.min(5, Math.floor(Number(availableSlots) || 1)));
+    const maxSupports = Math.min(slotCount, Math.max(0, Math.floor(Number(supportOnlyCount) || 0)));
     for (let supportCount = 0; supportCount <= maxSupports; supportCount++) {
-        const targetSlots = 5 - supportCount;
+        const targetSlots = slotCount - supportCount;
         const chosen = [];
         while (chosen.length < targetSlots && chosen.length < targets.length) {
             let bestCandidate = null;
@@ -12046,6 +12057,22 @@ function chooseAutomaticNapIslandRow(rows, supportOnlyCount = 0) {
     return best?.row || null;
 }
 
+function chooseTrainingNapIslandAssignment(rows, supportOnlyCount = 0, weekNumber = 1) {
+    const override = trainingPlannerState.napOverrideByWeek?.[String(weekNumber)];
+    if (override === 'none') return { row: null, source: 'override_none' };
+    if (override && override !== 'auto') {
+        const specified = rows.find(row => String(row.id) === String(override) && row.remaining > 0);
+        // 周指定拥有最高优先级，连“禁止上岛”的个体也可在该周被玩家临时点名。
+        if (specified) return { row: specified, source: 'override' };
+    }
+
+    const automatic = chooseAutomaticNapIslandRow(rows, supportOnlyCount);
+    return {
+        row: automatic,
+        source: automatic && normalizeTrainingNapStrategy(automatic.napStrategy) === 'long' ? 'long' : 'auto'
+    };
+}
+
 function buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports = 0) {
     rows.forEach(row => {
         row.napWeeks = 0;
@@ -12072,6 +12099,7 @@ function buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports = 0) {
 
     let day = 0;
     let activeNap = null;
+    let napWeekDecision = { row: null, source: 'auto' };
     let supportSlotNights = 0;
     let bonusAssistedNights = 0;
     const events = [];
@@ -12079,16 +12107,22 @@ function buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports = 0) {
     while ((rows.some(row => row.remaining > 0) || activeNap) && day < maxDays) {
         if (!activeNap && day % 7 === 0) {
             const completedSelectedSupports = rows.filter(row => row.remaining <= 0 && getTrainingSleepBonusCountForRow(row)).length;
-            const napRow = chooseAutomaticNapIslandRow(rows, externalSleepBonusSupports + completedSelectedSupports);
-            if (napRow) activeNap = { row: napRow, daysLeft: 7 };
+            const weekNumber = Math.floor(day / 7) + 1;
+            napWeekDecision = chooseTrainingNapIslandAssignment(rows, externalSleepBonusSupports + completedSelectedSupports, weekNumber);
+            if (napWeekDecision.row) activeNap = { row: napWeekDecision.row, daysLeft: 7, source: napWeekDecision.source };
         }
 
         const availableTargets = rows.filter(row => row.remaining > 0 && row !== activeNap?.row);
         const completedSelectedSupports = rows.filter(row => row.remaining <= 0 && row !== activeNap?.row && getTrainingSleepBonusCountForRow(row)).length;
-        const team = getAutomaticTrainingSleepTeam(availableTargets, externalSleepBonusSupports + completedSelectedSupports);
+        const team = getAutomaticTrainingSleepTeam(
+            availableTargets,
+            externalSleepBonusSupports + completedSelectedSupports,
+            trainingPlannerState.sleepSlotCount
+        );
         events.push({
             day: day + 1,
             napId: activeNap?.row?.id || '',
+            napMode: activeNap?.source || napWeekDecision.source || 'auto',
             sleepIds: team.targets.map(row => row.id),
             supportCount: team.supportCount,
             bonusCount: team.bonusCount
@@ -12148,6 +12182,7 @@ function compressTrainingScheduleEvents(events = []) {
     events.forEach(event => {
         const signature = JSON.stringify({
             napId: event.napId || '',
+            napMode: event.napMode || 'auto',
             sleepIds: event.sleepIds || [],
             supportCount: event.supportCount || 0,
             bonusCount: event.bonusCount || 0
@@ -12331,6 +12366,10 @@ function renderTrainingPlannerModal() {
     const items = (graduationDex || []).map(item => ({ item, cap: getGraduationCapture(item), cur: getGraduationCurrent(item) }));
     const selectedRows = items.filter(row => selected.has(String(row.item.id)));
     const groups = Array.from(new Set(selectedRows.map(row => row.cur.candyGroup || getDefaultCandyGroup(row.cur.name || row.cap.name))));
+    const selectedNameById = Object.fromEntries(selectedRows.map(row => [String(row.item.id), getGraduationDexNickname(row.item)]));
+    const napOverrides = Object.entries(trainingPlannerState.napOverrideByWeek || {})
+        .sort((a, b) => Number(a[0]) - Number(b[0]));
+    const sleepSlotCount = Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.sleepSlotCount) || 5)));
 
     modal.innerHTML = `
     <div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
@@ -12365,6 +12404,37 @@ function renderTrainingPlannerModal() {
                         </div>`;
                     }).join('') : '<div class="text-xs font-bold text-slate-400 py-5 text-center col-span-full">出货库还是空的，请先补录出货、打工或未来可期个体。</div>'}
                 </div>
+            </section>
+
+            <section class="bg-teal-50/70 border border-teal-200 rounded-2xl p-3 space-y-3">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                    <div><h4 class="text-xs font-black text-teal-900"><i class="fa-solid fa-calendar-week"></i> 每周午睡岛指定与睡眠席位</h4><p class="text-[9px] text-teal-700/75 font-bold mt-0.5">周数从本次培养方案开始计算。某周指定拥有最高优先级；只覆盖这一周，下一周会重新执行长期驻岛或自动规划。</p></div>
+                    <label class="text-[10px] font-black text-indigo-800 flex items-center gap-2">可用于培养的睡眠席位
+                        <select onchange="updateTrainingPlannerSleepSlotCount(this.value)" class="bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-black">
+                            ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${sleepSlotCount === n ? 'selected' : ''}>${n} 席</option>`).join('')}
+                        </select>
+                    </label>
+                </div>
+                <div class="grid md:grid-cols-[110px_1fr_auto] gap-2 items-end">
+                    <label class="text-[9px] font-black text-teal-700">方案开始后的第几周
+                        <input id="training-nap-override-week" type="number" min="1" max="260" value="1" class="mt-1 w-full bg-white border border-teal-200 rounded-lg px-2 py-2 text-xs font-black">
+                    </label>
+                    <label class="text-[9px] font-black text-teal-700">该周安排
+                        <select id="training-nap-override-target" class="mt-1 w-full bg-white border border-teal-200 rounded-lg px-2 py-2 text-xs font-black">
+                            <option value="auto">恢复该周自动规划</option>
+                            <option value="none">该周不使用午睡岛</option>
+                            ${selectedRows.map(({ item }) => `<option value="${escapeHtmlAttr(String(item.id))}">${escapeHtml(getGraduationDexNickname(item))}</option>`).join('')}
+                        </select>
+                    </label>
+                    <button type="button" onclick="saveTrainingPlannerNapWeekOverride()" class="bg-teal-600 hover:bg-teal-500 text-white font-black text-xs px-4 py-2 rounded-xl"><i class="fa-solid fa-check"></i> 应用该周</button>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    ${napOverrides.length ? napOverrides.map(([week, value]) => {
+                        const label = value === 'none' ? '不使用午睡岛' : (selectedNameById[String(value)] || '指定对象已取消选择，将自动规划');
+                        return `<span class="inline-flex items-center gap-1 bg-white border border-teal-200 rounded-lg px-2 py-1 text-[9px] font-black text-teal-800">第${formatTrainingNumber(week)}周：${escapeHtml(label)}<button type="button" onclick='removeTrainingPlannerNapWeekOverride(${JSON.stringify(String(week))})' class="text-rose-500 hover:text-rose-700" aria-label="删除第${escapeHtmlAttr(String(week))}周指定"><i class="fa-solid fa-xmark"></i></button></span>`;
+                    }).join('') : '<span class="text-[9px] font-bold text-teal-700/60">尚未指定具体周；当前全部按个体的自动／长期驻岛／禁止上岛策略计算。</span>'}
+                </div>
+                <p class="text-[9px] font-bold text-slate-500">睡眠席位是扣除奶妈等固定过夜成员后，仍可分给培养对象或睡眠EXP辅助的总空位；系统不会超过该数量。</p>
             </section>
 
             <section class="bg-amber-50/70 border border-amber-200 rounded-2xl p-3 space-y-3">
@@ -12444,6 +12514,31 @@ function updateTrainingPlannerNapStrategy(id, value) {
     trainingPlannerState.napStrategyById[String(id)] = normalizeTrainingNapStrategy(value);
     saveTrainingPlannerState();
     calculateAndRenderTrainingPlanner(false);
+}
+
+function updateTrainingPlannerSleepSlotCount(value) {
+    trainingPlannerState.sleepSlotCount = Math.max(1, Math.min(5, Math.floor(Number(value) || 1)));
+    saveTrainingPlannerState();
+    calculateAndRenderTrainingPlanner(false);
+}
+
+function saveTrainingPlannerNapWeekOverride() {
+    const weekEl = document.getElementById('training-nap-override-week');
+    const targetEl = document.getElementById('training-nap-override-target');
+    const week = Math.max(1, Math.min(260, Math.floor(Number(weekEl?.value) || 1)));
+    const target = String(targetEl?.value || 'auto');
+    trainingPlannerState.napOverrideByWeek ||= {};
+    if (target === 'auto') delete trainingPlannerState.napOverrideByWeek[String(week)];
+    else trainingPlannerState.napOverrideByWeek[String(week)] = target;
+    saveTrainingPlannerState();
+    renderTrainingPlannerModal();
+}
+
+function removeTrainingPlannerNapWeekOverride(week) {
+    trainingPlannerState.napOverrideByWeek ||= {};
+    delete trainingPlannerState.napOverrideByWeek[String(week)];
+    saveTrainingPlannerState();
+    renderTrainingPlannerModal();
 }
 
 function updateTrainingPlannerBoostWeeks(value) {
@@ -12673,9 +12768,10 @@ function getTrainingPlanTheoreticalNights(plan) {
     if (!plan?.rows?.length) return 0;
     if (Number.isFinite(Number(plan.scheduleDays))) return Math.max(0, Number(plan.scheduleDays));
     const longestIndividual = Math.max(0, ...plan.rows.map(row => (Number(row.sleepNights) || 0) + (Number(row.napWeeks) || 0) * 7));
-    const fiveSlotCapacity = Math.ceil((Number(plan.totals?.sleepSlotNights) || 0) / 5);
+    const availableSlots = Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.sleepSlotCount) || 5)));
+    const sleepSlotCapacity = Math.ceil((Number(plan.totals?.sleepSlotNights) || 0) / availableSlots);
     const napIslandCalendar = (Number(plan.totals?.napWeeks) || 0) * 7;
-    return Math.max(longestIndividual, fiveSlotCapacity, napIslandCalendar);
+    return Math.max(longestIndividual, sleepSlotCapacity, napIslandCalendar);
 }
 
 function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
@@ -12749,7 +12845,8 @@ function calculateAndRenderTrainingPlanner(persist = true) {
     const savedNights = Math.max(0, baseline.totals.allSleepSlotNights - plan.totals.allSleepSlotNights);
     const savedCalendarNights = Math.max(0, baseline.completionNights - plan.completionNights);
     const extraShards = Math.max(0, plan.totals.netShards - baseline.totals.netShards);
-    const fullTeamEquivalent = plan.totals.allSleepSlotNights / 5;
+    const availableSleepSlots = Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.sleepSlotCount) || 5)));
+    const availableTeamEquivalent = plan.totals.allSleepSlotNights / availableSleepSlots;
     const hasUniversalCandy = plan.universalCandySAvailable > 0
         || plan.universalCandyMAvailable > 0
         || plan.universalCandyLAvailable > 0
@@ -12771,7 +12868,7 @@ function calculateAndRenderTrainingPlanner(persist = true) {
             ['礼物糖期望', `${formatTrainingNumber(plan.totals.napGiftSpeciesCandyExpected)} 颗`, 'text-fuchsia-700'],
             ['礼物梦碎期望', formatTrainingNumber(plan.totals.napGiftShardsExpected), 'text-emerald-700'],
             ['推荐完成时间', `${formatTrainingNumber(plan.completionNights)} 天`, 'text-violet-700'],
-            ['约合满5席', `${fullTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
+            [`约合满${availableSleepSlots}席`, `${availableTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
             ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
             ['净梦碎需求', formatTrainingNumber(plan.totals.netShards), 'text-rose-700']
         ].map(([label, value, color]) => `<div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">${label}</div><div class="text-sm font-black ${color} mt-1">${value}</div></div>`).join('')}
@@ -12784,13 +12881,16 @@ function calculateAndRenderTrainingPlanner(persist = true) {
     ${plan.totals.napWeeks > 0 ? `<div class="bg-teal-50 border border-teal-200 rounded-2xl px-4 py-3 text-xs font-bold text-teal-800"><i class="fa-solid fa-umbrella-beach"></i> 午睡岛共分配 <strong>${formatTrainingNumber(plan.totals.napWeeks)}</strong> 周；由于每周只能送1只，这些周数依次占用午睡岛。每日基础150 EXP经性格修正后，普通／EXP＋／EXP－性格每周分别一次性获得1050／1239／861 EXP；不受睡眠EXP奖励词条影响。在岛期间该宝可梦不再参加普通睡眠培养。<br><span class="text-[10px]">礼物按每天2次、七种结果等概率计算期望：每周26个本系糖＋2个万能糖S（折6个任意糖）＋12,000梦碎。方案已使用其中 ${formatTrainingNumber(plan.totals.napGiftCandyUsed)} 颗等价糖，提供 ${formatTrainingNumber(plan.totals.napGiftCandyExp)} EXP；梦碎毛消耗 ${formatTrainingNumber(plan.totals.shards)}，扣除礼物期望后净需求 ${formatTrainingNumber(plan.totals.netShards)}${plan.totals.napGiftShardSurplus ? `，另有期望结余 ${formatTrainingNumber(plan.totals.napGiftShardSurplus)}` : ''}。随机礼物并非保底，实际结果会波动。</span></div>` : ''}
     ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，推荐完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 天，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
     <section class="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3 space-y-2">
-        <div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calendar-days"></i> 睡眠与午睡岛方案</h4><p class="text-[9px] text-indigo-600 font-bold mt-0.5">已按优先级和连续相同安排合并日期；“长期驻岛”会覆盖自动收益判断，“禁止上岛”则完全排除。</p></div>
+        <div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calendar-days"></i> 睡眠与午睡岛方案</h4><p class="text-[9px] text-indigo-600 font-bold mt-0.5">当前按${availableSleepSlots}个可用睡眠席位计算。具体周指定优先于长期驻岛；指定周结束后立即重新规划。</p></div>
         <div class="grid md:grid-cols-2 gap-2">
             ${visibleScheduleSegments.length ? visibleScheduleSegments.map(segment => {
                 const range = segment.startDay === segment.endDay ? `第${segment.startDay}天` : `第${segment.startDay}～${segment.endDay}天`;
                 const napName = segment.napId ? escapeHtml(rowNameById[String(segment.napId)] || segment.napId) : '不使用';
+                const napModeLabel = segment.napMode === 'override'
+                    ? '（玩家指定）'
+                    : (segment.napMode === 'override_none' ? '（玩家指定空岛）' : (segment.napMode === 'long' ? '（长期驻岛）' : ''));
                 const sleepers = (segment.sleepIds || []).map(id => escapeHtml(rowNameById[String(id)] || id));
-                return `<div class="bg-white border border-indigo-100 rounded-xl px-3 py-2 text-[9px] font-bold text-slate-600"><div class="font-black text-indigo-700">${range}</div><div class="mt-1"><span class="text-teal-700">午睡岛：</span>${napName}</div><div><span class="text-sky-700">普通睡眠：</span>${sleepers.length ? sleepers.join('、') : '无培养对象'}${segment.supportCount ? ` · 另带${segment.supportCount}只词条辅助` : ''}</div><div><span class="text-amber-700">当晚生效睡眠EXP词条：</span>${segment.bonusCount || 0}个</div></div>`;
+                return `<div class="bg-white border border-indigo-100 rounded-xl px-3 py-2 text-[9px] font-bold text-slate-600"><div class="font-black text-indigo-700">${range}</div><div class="mt-1"><span class="text-teal-700">午睡岛：</span>${napName}${napModeLabel}</div><div><span class="text-sky-700">普通睡眠：</span>${sleepers.length ? sleepers.join('、') : '无培养对象'}${segment.supportCount ? ` · 另带${segment.supportCount}只词条辅助` : ''}</div><div><span class="text-amber-700">当晚生效睡眠EXP词条：</span>${segment.bonusCount || 0}个</div></div>`;
             }).join('') : '<div class="bg-white border border-indigo-100 rounded-xl px-3 py-4 text-[10px] font-bold text-slate-400 md:col-span-2">当前资源已能直接完成所有目标，无需额外睡眠或午睡岛安排。</div>'}
         </div>
         ${scheduleSegments.length > visibleScheduleSegments.length ? `<div class="text-[9px] font-bold text-indigo-500">方案较长，当前展示前${visibleScheduleSegments.length}个连续阶段，每只的最终完成时间以下表为准。</div>` : ''}
@@ -12800,7 +12900,7 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         <tbody>${plan.rows.slice().sort((a, b) => b.priority - a.priority || (a.recommendedCompletionDay ?? Infinity) - (b.recommendedCompletionDay ?? Infinity)).map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)} · ${getTrainingNapStrategyLabel(row.napStrategy)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 text-rose-700 font-black">${row.priority}</td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-center px-2 py-2 text-emerald-700 font-black">${row.recommendedCompletionDay > 0 ? `第${formatTrainingNumber(row.recommendedCompletionDay)}天<br><span class="text-[8px]">约${formatTrainingNumber(Math.ceil(row.recommendedCompletionDay / 7))}周</span>${row.futureUniversalSpeciesCandy ? `<br><span class="text-[8px] text-violet-600">含未来万能糖</span>` : ''}` : '立即完成'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-center px-2 py-2 text-fuchsia-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napGiftSpeciesCandyExpected)}糖<br><span class="text-[8px]">用${formatTrainingNumber(row.napGiftCandyUsed)} · ${formatTrainingNumber(row.napGiftShardsExpected)}梦碎</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp + row.napGiftCandyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.netShards)}<br><span class="text-[8px] text-slate-400">毛${formatTrainingNumber(row.shards)}</span></td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟最多5个席位，直接读取出货库的副技能与当前等级；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛在每个七天节点按玩家策略安排；自动模式选择净收益最高者，长期驻岛覆盖收益判断，禁止上岛则排除。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟玩家设置的1～5个可用席位，培养对象与睡眠EXP辅助合计不会超过该数量；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛每七天重新规划：具体周指定优先级最高，其次是长期驻岛，最后才是自动收益判断；“该周不使用”只暂停对应周。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
