@@ -3617,8 +3617,9 @@ function buildGraduationDexEntry(payload = {}) {
         sourceId: payload.sourceId || null,
         createdAt: payload.createdAt || new Date().toISOString(),
         excludeFromLuck: !!payload.excludeFromLuck,
-        // 打工档案仍保持 result=none，不进入任何和解/毕业/断档统计。
+        // 打工 / 未来可期档案均保持 result=none，不进入任何和解/毕业/断档统计。
         isWorker: !!payload.isWorker,
+        isFuturePotential: !!payload.isFuturePotential,
 
         // nickname：出货库大标题显示的爱称；为空时默认当前宝可梦名
         nickname: displayNickname,
@@ -3662,6 +3663,7 @@ function normalizeGraduationDexEntry(item) {
             createdAt: item.createdAt || new Date().toISOString(),
             excludeFromLuck: !!item.excludeFromLuck,
             isWorker: !!item.isWorker,
+            isFuturePotential: !!item.isFuturePotential,
             nickname: displayNickname,
             capture: captureState,
             current: currentState
@@ -3672,6 +3674,7 @@ function normalizeGraduationDexEntry(item) {
         id: item.id,
         excludeFromLuck: !!item.excludeFromLuck,
         isWorker: !!item.isWorker,
+        isFuturePotential: !!item.isFuturePotential,
         source: item.source || 'manual',
         sourceId: item.sourceId || null,
         createdAt: item.createdAt,
@@ -3903,12 +3906,21 @@ function isWorkerGraduationEntry(item) {
     return !!(item && item.isWorker);
 }
 
+function isFuturePotentialGraduationEntry(item) {
+    return !!(item && item.isFuturePotential);
+}
+
+function isTrainingOnlyGraduationEntry(item) {
+    return isWorkerGraduationEntry(item) || isFuturePotentialGraduationEntry(item);
+}
+
 function isGraduationDexEligible(payload = {}) {
     const result = payload.result || payload.capture?.result || payload.current?.result;
-    return isGraduationResult(result) || !!payload.isWorker;
+    return isGraduationResult(result) || !!payload.isWorker || !!payload.isFuturePotential;
 }
 
 function getGraduationDexEntryResultName(item, state = null) {
+    if (isFuturePotentialGraduationEntry(item)) return '未来可期';
     if (isWorkerGraduationEntry(item)) return '打工';
     const cur = state || getGraduationCurrent(item);
     return getGraduationResultName(cur?.result);
@@ -11753,6 +11765,13 @@ const TRAINING_LEVEL_TOTAL_SHARDS = [
 const TRAINING_EXP_UP_NATURES = new Set(['timid', 'hasty', 'jolly', 'naive']);
 const TRAINING_EXP_DOWN_NATURES = new Set(['brave', 'quiet', 'sassy', 'relaxed']);
 const TRAINING_EXP_FACTORS = [1, 1.5, 1.8, 2.2];
+// 午睡岛每天两次礼物，七种结果等概率：1/3/5个本系糖、1个属性糖(折4个本系糖)、
+// 1000/5000梦碎、1个万能糖S。按完整一周计算，期望正好为26个本系糖、2个万能糖S和12000梦碎。
+const TRAINING_NAP_GIFT_SPECIES_CANDY_PER_WEEK = 26;
+const TRAINING_NAP_GIFT_UNIVERSAL_S_PER_WEEK = 2;
+const TRAINING_NAP_GIFT_FLEX_CANDY_PER_WEEK = TRAINING_NAP_GIFT_UNIVERSAL_S_PER_WEEK * 3;
+const TRAINING_NAP_GIFT_TOTAL_CANDY_PER_WEEK = TRAINING_NAP_GIFT_SPECIES_CANDY_PER_WEEK + TRAINING_NAP_GIFT_FLEX_CANDY_PER_WEEK;
+const TRAINING_NAP_GIFT_SHARDS_PER_WEEK = 12000;
 const TRAINING_CANDY_GROUP_OVERRIDES = {
     '乌波(帕底亚的样子)': '乌波', '土王': '乌波',
     '六尾(阿罗拉的样子)': '六尾', '九尾(阿罗拉的样子)': '六尾',
@@ -11764,7 +11783,7 @@ let trainingPlannerState = {
     selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
     universalCandyS: 0, universalCandyM: 0, universalCandyL: 0,
     weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true,
-    priorityById: {}
+    priorityById: {}, napStrategyById: {}
 };
 
 function formatTrainingNumber(value) {
@@ -11786,6 +11805,9 @@ function normalizeTrainingPlannerState(raw = {}) {
     const cleanPriorities = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
         String(key), Math.max(1, Math.min(5, Math.floor(Number(value) || 3)))
     ]));
+    const cleanNapStrategies = obj => Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [
+        String(key), ['auto', 'long', 'never'].includes(value) ? value : 'auto'
+    ]));
     return {
         selectedIds: Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : [],
         groupInventory: cleanCounts(raw.groupInventory),
@@ -11799,6 +11821,7 @@ function normalizeTrainingPlannerState(raw = {}) {
             : Math.max(0, Math.min(999, Math.floor(Number(raw.weeklyUniversalCandyS) || 0))),
         includeWeeklyUniversalCandy: raw.includeWeeklyUniversalCandy !== false,
         priorityById: cleanPriorities(raw.priorityById),
+        napStrategyById: cleanNapStrategies(raw.napStrategyById),
         updatedAt: raw.updatedAt || ''
     };
 }
@@ -11921,6 +11944,43 @@ function getTrainingPriorityWeight(row) {
     return 2 ** (priority - 1);
 }
 
+function normalizeTrainingNapStrategy(value) {
+    return ['auto', 'long', 'never'].includes(value) ? value : 'auto';
+}
+
+function getTrainingNapStrategyLabel(value) {
+    const strategy = normalizeTrainingNapStrategy(value);
+    return strategy === 'long' ? '长期驻岛' : (strategy === 'never' ? '禁止上岛' : '自动推荐');
+}
+
+function getTrainingNapGiftPotentialExp(row) {
+    return TRAINING_NAP_GIFT_TOTAL_CANDY_PER_WEEK * getTrainingCandyExp(row.nature, false);
+}
+
+function applyTrainingNapGiftWeek(row) {
+    row.napGiftSpecificCandyExpected += TRAINING_NAP_GIFT_SPECIES_CANDY_PER_WEEK;
+    row.napGiftUniversalSExpected += TRAINING_NAP_GIFT_UNIVERSAL_S_PER_WEEK;
+    row.napGiftSpeciesCandyExpected += TRAINING_NAP_GIFT_TOTAL_CANDY_PER_WEEK;
+    row.napGiftShardsExpected += TRAINING_NAP_GIFT_SHARDS_PER_WEEK;
+
+    // 礼物糖在宝可梦一周后归队时才能使用。规划器默认先结算岛上经验，再把期望糖果按普通糖喂给该个体；
+    // 万能糖S也默认换给当期驻岛个体，且不假定礼物恰好遇到糖果增强周。
+    let candyLeft = TRAINING_NAP_GIFT_TOTAL_CANDY_PER_WEEK;
+    while (candyLeft > 0 && row.remaining > 0) {
+        const candyExp = getTrainingCandyExp(row.nature, false);
+        const shardCost = getTrainingShardCostPerCandy(row.totalExp, row.expFactor);
+        const useful = Math.min(row.remaining, candyExp);
+        row.napGiftCandyUsed += 1;
+        row.napGiftCandyExp += useful;
+        row.napGiftCandyPotentialExp += candyExp;
+        row.napGiftCandyShardCost += shardCost;
+        row.shards += shardCost;
+        row.remaining = Math.max(0, row.remaining - candyExp);
+        row.totalExp += candyExp;
+        candyLeft -= 1;
+    }
+}
+
 function getAutomaticTrainingSleepTeam(targets, supportOnlyCount) {
     let best = { targets: [], supportCount: 0, bonusCount: 0, usefulExp: 0, weightedUsefulExp: 0, urgency: 0 };
     const maxSupports = Math.min(5, Math.max(0, Math.floor(Number(supportOnlyCount) || 0)));
@@ -11960,14 +12020,19 @@ function getAutomaticTrainingSleepTeam(targets, supportOnlyCount) {
 }
 
 function chooseAutomaticNapIslandRow(rows, supportOnlyCount = 0) {
-    const unfinished = rows.filter(row => row.remaining > 0);
+    const unfinished = rows.filter(row => row.remaining > 0 && normalizeTrainingNapStrategy(row.napStrategy) !== 'never');
+    const longTerm = unfinished
+        .filter(row => normalizeTrainingNapStrategy(row.napStrategy) === 'long')
+        .sort((a, b) => b.priority - a.priority || b.remaining - a.remaining);
+    // 玩家指定“长期驻岛”时覆盖系统收益判断；多只同时指定则由优先级决定唯一岛位的先后。
+    if (longTerm.length) return longTerm[0];
     let best = null;
     unfinished.forEach(row => {
         const ownBonus = getTrainingSleepBonusCountForRow(row);
         const activeOtherTargets = unfinished.filter(other => other !== row && getTrainingSleepBonusCountForRow(other)).length;
         const estimatedTeamBonus = ownBonus + Math.min(4, Math.max(0, Number(supportOnlyCount) || 0) + activeOtherTargets);
         const normalWeekExp = getTrainingSleepExp(row.nature, estimatedTeamBonus) * 7;
-        const napUseful = Math.min(row.remaining, row.napExpPerWeek);
+        const napUseful = Math.min(row.remaining, row.napExpPerWeek + getTrainingNapGiftPotentialExp(row));
         const sleepUseful = Math.min(row.remaining, normalWeekExp);
         const otherTargets = Math.min(4, Math.max(0, unfinished.length - 1));
         const teamAuraCost = ownBonus ? Math.round(otherTargets * 100 * 0.14 * 7) : 0;
@@ -11987,6 +12052,14 @@ function buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports = 0) {
         row.napExp = 0;
         row.napPotentialExp = 0;
         row.napOverflowExp = 0;
+        row.napGiftSpecificCandyExpected = 0;
+        row.napGiftUniversalSExpected = 0;
+        row.napGiftSpeciesCandyExpected = 0;
+        row.napGiftCandyUsed = 0;
+        row.napGiftCandyExp = 0;
+        row.napGiftCandyPotentialExp = 0;
+        row.napGiftCandyShardCost = 0;
+        row.napGiftShardsExpected = 0;
         row.sleepExp = 0;
         row.sleepNights = 0;
         row.sleepActualExp = 0;
@@ -12051,6 +12124,7 @@ function buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports = 0) {
                 row.napOverflowExp += Math.max(0, row.napExpPerWeek - useful);
                 row.remaining = Math.max(0, row.remaining - row.napExpPerWeek);
                 row.totalExp += row.napExpPerWeek;
+                applyTrainingNapGiftWeek(row);
                 if (row.remaining <= 0 && row.completionDay == null) row.completionDay = day;
                 activeNap = null;
             }
@@ -12136,7 +12210,8 @@ function openTrainingProgressModal(id) {
     const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
     const fullNeed = level < 70 ? getTrainingLevelNeed(level, expFactor) : 0;
     const remaining = cur.trainingExpToNext == null ? fullNeed : Number(cur.trainingExpToNext);
-    const target = Math.max(level, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : Math.min(70, Math.max(30, level))));
+    const defaultTarget = isWorkerGraduationEntry(item) ? 30 : (isFuturePotentialGraduationEntry(item) ? 70 : Math.min(70, Math.max(30, level)));
+    const target = Math.max(level, Number(cur.trainingTargetLevel) || defaultTarget);
     const group = cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name);
 
     document.getElementById('training-progress-modal')?.remove();
@@ -12260,7 +12335,7 @@ function renderTrainingPlannerModal() {
     modal.innerHTML = `
     <div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
         <div class="px-5 py-4 bg-gradient-to-r from-indigo-700 via-violet-700 to-sky-600 text-white flex items-start justify-between gap-3">
-            <div><h3 class="text-lg font-black"><i class="fa-solid fa-chart-line"></i> 多宝可梦联合培养计算</h3><p class="text-[10px] text-white/75 font-bold mt-1">任意多选；糖果按进化链共享。系统会自动读取睡眠EXP奖励，并推荐午睡岛分配方案。</p></div>
+            <div><h3 class="text-lg font-black"><i class="fa-solid fa-chart-line"></i> 多宝可梦联合培养计算</h3><p class="text-[10px] text-white/75 font-bold mt-1">任意多选；糖果按进化链共享。每只可选择自动、长期驻岛或禁止上岛。</p></div>
             <button type="button" onclick="closeTrainingPlannerModal()" aria-label="关闭联合培养计算" class="text-white/70 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="overflow-y-auto p-4 md:p-5 space-y-4">
@@ -12273,17 +12348,22 @@ function renderTrainingPlannerModal() {
                         const checked = selected.has(itemId);
                         const level = Number(cur.trainingLevel) || 0;
                         const expFactor = normalizeTrainingExpFactor(cur.trainingExpFactor);
-                        const target = Math.max(level || 1, Number(cur.trainingTargetLevel) || (isWorkerGraduationEntry(item) ? 30 : 50));
+                        const defaultTarget = isWorkerGraduationEntry(item) ? 30 : (isFuturePotentialGraduationEntry(item) ? 70 : 50);
+                        const target = Math.max(level || 1, Number(cur.trainingTargetLevel) || defaultTarget);
                         const sleepBonusUnlock = getSleepExpBonusUnlockLevel(cur.subskills || cap.subskills);
                         const priority = Math.max(1, Math.min(5, Number(trainingPlannerState.priorityById?.[itemId]) || 3));
+                        const napStrategy = normalizeTrainingNapStrategy(trainingPlannerState.napStrategyById?.[itemId]);
+                        const typeClass = isFuturePotentialGraduationEntry(item)
+                            ? 'bg-fuchsia-100 text-fuchsia-700'
+                            : (isWorkerGraduationEntry(item) ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700');
                         return `<div class="rounded-xl border ${checked ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'} p-2.5 flex items-start gap-2">
                             <input type="checkbox" ${checked ? 'checked' : ''} ${hasProgress ? '' : 'disabled'} onchange='toggleTrainingPlannerSelection(${JSON.stringify(itemId)}, this.checked)' class="mt-1 accent-indigo-600">
-                            <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-1"><span class="text-xs font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))}</span><span class="text-[9px] font-black px-1.5 py-0.5 rounded-md ${isWorkerGraduationEntry(item) ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'}">${getGraduationDexEntryResultName(item, cur)}</span></div>
+                            <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-1"><span class="text-xs font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))}</span><span class="text-[9px] font-black px-1.5 py-0.5 rounded-md ${typeClass}">${getGraduationDexEntryResultName(item, cur)}</span></div>
                             <div class="text-[9px] text-slate-400 font-bold mt-1">${hasProgress ? `Lv.${level} · 距下级 ${formatTrainingNumber(cur.trainingExpToNext)} · 经验×${expFactor} · ${getTrainingNatureLabel(cur.nature)}` : '先录入等级经验后才能选择'}</div>
                             <div class="mt-1.5 flex flex-wrap items-center gap-1"><span class="text-[9px] text-slate-400 font-bold">目标</span><input type="number" min="${level || 1}" max="70" value="${target}" onchange='updateTrainingPlannerTarget(${JSON.stringify(itemId)}, this.value)' class="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black"><span class="ml-1 text-[9px] text-rose-500 font-bold">优先级</span><input type="number" min="1" max="5" value="${priority}" onchange='updateTrainingPlannerPriority(${JSON.stringify(itemId)}, this.value)' title="1最低，5最高，默认3" class="w-12 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1 text-[10px] font-black text-rose-700"><button type="button" onclick='openTrainingProgressModal(${JSON.stringify(item.id)})' class="text-[9px] font-black text-indigo-600 hover:text-indigo-800 px-1">编辑进度</button></div>
-                            <div class="mt-2 flex flex-wrap gap-1.5 text-[8px] font-black"><span class="px-2 py-1 rounded-lg ${sleepBonusUnlock ? (level >= sleepBonusUnlock ? 'bg-amber-100 text-amber-800' : 'bg-white border border-amber-200 text-amber-600') : 'bg-slate-100 text-slate-400'}">${sleepBonusUnlock ? `睡眠EXP奖励 Lv.${sleepBonusUnlock}${level >= sleepBonusUnlock ? '已生效' : '待解锁'}` : '无睡眠EXP奖励'}</span><span class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700">午睡岛由系统自动分配</span></div></div>
+                            <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[8px] font-black"><span class="px-2 py-1 rounded-lg ${sleepBonusUnlock ? (level >= sleepBonusUnlock ? 'bg-amber-100 text-amber-800' : 'bg-white border border-amber-200 text-amber-600') : 'bg-slate-100 text-slate-400'}">${sleepBonusUnlock ? `睡眠EXP奖励 Lv.${sleepBonusUnlock}${level >= sleepBonusUnlock ? '已生效' : '待解锁'}` : '无睡眠EXP奖励'}</span><label class="flex items-center gap-1 text-teal-700">午睡岛<select onchange='updateTrainingPlannerNapStrategy(${JSON.stringify(itemId)}, this.value)' class="bg-white border border-teal-200 rounded-lg px-1.5 py-1 text-[9px] font-black"><option value="auto" ${napStrategy === 'auto' ? 'selected' : ''}>自动推荐</option><option value="long" ${napStrategy === 'long' ? 'selected' : ''}>长期驻岛</option><option value="never" ${napStrategy === 'never' ? 'selected' : ''}>禁止上岛</option></select></label></div></div>
                         </div>`;
-                    }).join('') : '<div class="text-xs font-bold text-slate-400 py-5 text-center col-span-full">出货库还是空的，请先补录出货或打工个体。</div>'}
+                    }).join('') : '<div class="text-xs font-bold text-slate-400 py-5 text-center col-span-full">出货库还是空的，请先补录出货、打工或未来可期个体。</div>'}
                 </div>
             </section>
 
@@ -12355,6 +12435,13 @@ function updateTrainingPlannerTarget(id, value) {
 function updateTrainingPlannerPriority(id, value) {
     trainingPlannerState.priorityById ||= {};
     trainingPlannerState.priorityById[String(id)] = Math.max(1, Math.min(5, Math.floor(Number(value) || 3)));
+    saveTrainingPlannerState();
+    calculateAndRenderTrainingPlanner(false);
+}
+
+function updateTrainingPlannerNapStrategy(id, value) {
+    trainingPlannerState.napStrategyById ||= {};
+    trainingPlannerState.napStrategyById[String(id)] = normalizeTrainingNapStrategy(value);
     saveTrainingPlannerState();
     calculateAndRenderTrainingPlanner(false);
 }
@@ -12449,6 +12536,7 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
             id, item, cap, cur,
             name: getGraduationDexNickname(item), currentLevel, targetLevel,
             priority: Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.priorityById?.[id]) || 3))),
+            napStrategy: normalizeTrainingNapStrategy(trainingPlannerState.napStrategyById?.[id]),
             group: cur.candyGroup || getDefaultCandyGroup(cur.name || cap.name),
             nature: cur.nature || 'blank',
             expFactor,
@@ -12529,12 +12617,22 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
     }
 
     const schedule = buildAutomaticTrainingSchedule(rows, externalSleepBonusSupports);
-    rows.forEach(row => { row.recommendedCompletionDay = Number(row.completionDay) || 0; });
+    rows.forEach(row => {
+        row.recommendedCompletionDay = Number(row.completionDay) || 0;
+        row.netShards = Math.max(0, row.shards - row.napGiftShardsExpected);
+        row.napGiftShardSurplus = Math.max(0, row.napGiftShardsExpected - row.shards);
+    });
     const totals = rows.reduce((out, row) => {
         out.missing += row.initialMissing;
         out.napExp += row.napExp;
         out.napPotentialExp += row.napPotentialExp;
         out.napWeeks += row.napWeeks;
+        out.napGiftSpecificCandyExpected += row.napGiftSpecificCandyExpected;
+        out.napGiftUniversalSExpected += row.napGiftUniversalSExpected;
+        out.napGiftSpeciesCandyExpected += row.napGiftSpeciesCandyExpected;
+        out.napGiftCandyUsed += row.napGiftCandyUsed;
+        out.napGiftCandyExp += row.napGiftCandyExp;
+        out.napGiftShardsExpected += row.napGiftShardsExpected;
         out.normalCandy += row.candyNormal;
         out.boostedCandy += row.candyBoosted;
         out.universalSpeciesCandy += row.universalSpeciesCandy;
@@ -12543,7 +12641,9 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null) {
         out.sleepSlotNights += row.sleepNights;
         out.shards += row.shards;
         return out;
-    }, { missing: 0, napExp: 0, napPotentialExp: 0, napWeeks: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
+    }, { missing: 0, napExp: 0, napPotentialExp: 0, napWeeks: 0, napGiftSpecificCandyExpected: 0, napGiftUniversalSExpected: 0, napGiftSpeciesCandyExpected: 0, napGiftCandyUsed: 0, napGiftCandyExp: 0, napGiftShardsExpected: 0, normalCandy: 0, boostedCandy: 0, universalSpeciesCandy: 0, candyExp: 0, sleepExp: 0, sleepSlotNights: 0, shards: 0 });
+    totals.netShards = Math.max(0, totals.shards - totals.napGiftShardsExpected);
+    totals.napGiftShardSurplus = Math.max(0, totals.napGiftShardsExpected - totals.shards);
     totals.sleepSupportSlotNights = schedule.supportSlotNights;
     totals.allSleepSlotNights = totals.sleepSlotNights + schedule.supportSlotNights;
     const universalConversion = getUniversalCandyConversion(
@@ -12624,7 +12724,7 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
         if (!best
             || completionNights < best.completionNights
             || (completionNights === best.completionNights && weeks < best.projectedUniversalWeeks)
-            || (completionNights === best.completionNights && weeks === best.projectedUniversalWeeks && plan.totals.shards < best.totals.shards)) {
+            || (completionNights === best.completionNights && weeks === best.projectedUniversalWeeks && plan.totals.netShards < best.totals.netShards)) {
             best = candidate;
         }
         if (best && weeks * 7 > best.completionNights + 28) break;
@@ -12648,7 +12748,7 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         .reduce((sum, [, n]) => sum + (Number(n) || 0), 0);
     const savedNights = Math.max(0, baseline.totals.allSleepSlotNights - plan.totals.allSleepSlotNights);
     const savedCalendarNights = Math.max(0, baseline.completionNights - plan.completionNights);
-    const extraShards = Math.max(0, plan.totals.shards - baseline.totals.shards);
+    const extraShards = Math.max(0, plan.totals.netShards - baseline.totals.netShards);
     const fullTeamEquivalent = plan.totals.allSleepSlotNights / 5;
     const hasUniversalCandy = plan.universalCandySAvailable > 0
         || plan.universalCandyMAvailable > 0
@@ -12668,10 +12768,12 @@ function calculateAndRenderTrainingPlanner(persist = true) {
             ['睡眠席位晚', formatTrainingNumber(plan.totals.sleepSlotNights), 'text-indigo-700'],
             ['词条辅助席位', formatTrainingNumber(plan.totals.sleepSupportSlotNights), 'text-amber-700'],
             ['午睡岛占用', `${formatTrainingNumber(plan.totals.napWeeks)} 周`, 'text-teal-700'],
+            ['礼物糖期望', `${formatTrainingNumber(plan.totals.napGiftSpeciesCandyExpected)} 颗`, 'text-fuchsia-700'],
+            ['礼物梦碎期望', formatTrainingNumber(plan.totals.napGiftShardsExpected), 'text-emerald-700'],
             ['推荐完成时间', `${formatTrainingNumber(plan.completionNights)} 天`, 'text-violet-700'],
             ['约合满5席', `${fullTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
             ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
-            ['梦碎估算', formatTrainingNumber(plan.totals.shards), 'text-rose-700']
+            ['净梦碎需求', formatTrainingNumber(plan.totals.netShards), 'text-rose-700']
         ].map(([label, value, color]) => `<div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">${label}</div><div class="text-sm font-black ${color} mt-1">${value}</div></div>`).join('')}
     </section>
     ${hasUniversalCandy ? `<div class="bg-violet-50 border border-violet-200 rounded-2xl px-4 py-3 text-xs font-bold text-violet-800"><i class="fa-solid fa-gift"></i>
@@ -12679,10 +12781,10 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         ${trainingPlannerState.includeWeeklyUniversalCandy ? `理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 个完整周，预计另获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个。` : ''}
     </div>` : ''}
     ${plan.bonusAssistedNights > 0 ? `<div class="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs font-bold text-amber-800"><i class="fa-solid fa-star"></i> 系统已从出货库面板自动识别睡眠EXP奖励：选中的培养个体会在达到解锁等级后加入词条安排，另有 <strong>${formatTrainingNumber(plan.externalSleepBonusSupports)}</strong> 只未选中但已解锁的出货库个体可作为辅助队员${plan.externalSleepBonusSupportNames?.length ? `（${plan.externalSleepBonusSupportNames.map(escapeHtml).join('、')}）` : ''}。推荐方案中共有 ${formatTrainingNumber(plan.bonusAssistedNights)} 晚使用了至少1个生效词条。</div>` : ''}
-    ${plan.totals.napWeeks > 0 ? `<div class="bg-teal-50 border border-teal-200 rounded-2xl px-4 py-3 text-xs font-bold text-teal-800"><i class="fa-solid fa-umbrella-beach"></i> 午睡岛共分配 <strong>${formatTrainingNumber(plan.totals.napWeeks)}</strong> 周；由于每周只能送1只，这些周数依次占用午睡岛。每日基础150 EXP经性格修正后，普通／EXP＋／EXP－性格每周分别一次性获得1050／1239／861 EXP；不受睡眠EXP奖励词条影响。在岛期间该宝可梦不再参加普通睡眠培养。</div>` : ''}
+    ${plan.totals.napWeeks > 0 ? `<div class="bg-teal-50 border border-teal-200 rounded-2xl px-4 py-3 text-xs font-bold text-teal-800"><i class="fa-solid fa-umbrella-beach"></i> 午睡岛共分配 <strong>${formatTrainingNumber(plan.totals.napWeeks)}</strong> 周；由于每周只能送1只，这些周数依次占用午睡岛。每日基础150 EXP经性格修正后，普通／EXP＋／EXP－性格每周分别一次性获得1050／1239／861 EXP；不受睡眠EXP奖励词条影响。在岛期间该宝可梦不再参加普通睡眠培养。<br><span class="text-[10px]">礼物按每天2次、七种结果等概率计算期望：每周26个本系糖＋2个万能糖S（折6个任意糖）＋12,000梦碎。方案已使用其中 ${formatTrainingNumber(plan.totals.napGiftCandyUsed)} 颗等价糖，提供 ${formatTrainingNumber(plan.totals.napGiftCandyExp)} EXP；梦碎毛消耗 ${formatTrainingNumber(plan.totals.shards)}，扣除礼物期望后净需求 ${formatTrainingNumber(plan.totals.netShards)}${plan.totals.napGiftShardSurplus ? `，另有期望结余 ${formatTrainingNumber(plan.totals.napGiftShardSurplus)}` : ''}。随机礼物并非保底，实际结果会波动。</span></div>` : ''}
     ${extraCandy > 0 ? `<div class="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-800"><i class="fa-solid fa-forward"></i> 额外糖果情景合计 +${formatTrainingNumber(extraCandy)} 颗：相比只用当前库存，减少 <strong>${formatTrainingNumber(savedNights)}</strong> 个睡眠席位晚，推荐完成时间缩短 <strong>${formatTrainingNumber(savedCalendarNights)}</strong> 天，新增梦碎约 <strong>${formatTrainingNumber(extraShards)}</strong>。</div>` : ''}
     <section class="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3 space-y-2">
-        <div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calendar-days"></i> 推荐睡眠与午睡岛方案</h4><p class="text-[9px] text-indigo-600 font-bold mt-0.5">已按优先级和连续相同安排合并日期；高优先级会更早获得糖果、睡眠席位和午睡岛机会。</p></div>
+        <div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calendar-days"></i> 睡眠与午睡岛方案</h4><p class="text-[9px] text-indigo-600 font-bold mt-0.5">已按优先级和连续相同安排合并日期；“长期驻岛”会覆盖自动收益判断，“禁止上岛”则完全排除。</p></div>
         <div class="grid md:grid-cols-2 gap-2">
             ${visibleScheduleSegments.length ? visibleScheduleSegments.map(segment => {
                 const range = segment.startDay === segment.endDay ? `第${segment.startDay}天` : `第${segment.startDay}～${segment.endDay}天`;
@@ -12694,11 +12796,11 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         ${scheduleSegments.length > visibleScheduleSegments.length ? `<div class="text-[9px] font-bold text-indigo-500">方案较长，当前展示前${visibleScheduleSegments.length}个连续阶段，每只的最终完成时间以下表为准。</div>` : ''}
     </section>
     <section class="overflow-x-auto border border-slate-200 rounded-2xl">
-        <table class="w-full text-[10px] min-w-[1280px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">优先级</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">预计完成</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">午睡岛</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">每晚EXP/词条</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">梦碎</th></tr></thead>
-        <tbody>${plan.rows.slice().sort((a, b) => b.priority - a.priority || (a.recommendedCompletionDay ?? Infinity) - (b.recommendedCompletionDay ?? Infinity)).map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 text-rose-700 font-black">${row.priority}</td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-center px-2 py-2 text-emerald-700 font-black">${row.recommendedCompletionDay > 0 ? `第${formatTrainingNumber(row.recommendedCompletionDay)}天<br><span class="text-[8px]">约${formatTrainingNumber(Math.ceil(row.recommendedCompletionDay / 7))}周</span>${row.futureUniversalSpeciesCandy ? `<br><span class="text-[8px] text-violet-600">含未来万能糖</span>` : ''}` : '立即完成'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.shards)}</td></tr>`).join('')}</tbody></table>
+        <table class="w-full text-[10px] min-w-[1450px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">个体</th><th class="px-2 py-2">优先级</th><th class="px-2 py-2">等级目标</th><th class="px-2 py-2">预计完成</th><th class="px-2 py-2">总缺口</th><th class="px-2 py-2">午睡岛</th><th class="px-2 py-2">岛上礼物期望</th><th class="px-2 py-2">普通糖</th><th class="px-2 py-2">增强糖</th><th class="px-2 py-2">其中万能糖换</th><th class="px-2 py-2">糖果经验</th><th class="px-2 py-2">睡眠经验</th><th class="px-2 py-2">每晚EXP/词条</th><th class="px-2 py-2">上队晚数</th><th class="px-2 py-2">净梦碎</th></tr></thead>
+        <tbody>${plan.rows.slice().sort((a, b) => b.priority - a.priority || (a.recommendedCompletionDay ?? Infinity) - (b.recommendedCompletionDay ?? Infinity)).map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)} · ${getTrainingNapStrategyLabel(row.napStrategy)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 text-rose-700 font-black">${row.priority}</td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-center px-2 py-2 text-emerald-700 font-black">${row.recommendedCompletionDay > 0 ? `第${formatTrainingNumber(row.recommendedCompletionDay)}天<br><span class="text-[8px]">约${formatTrainingNumber(Math.ceil(row.recommendedCompletionDay / 7))}周</span>${row.futureUniversalSpeciesCandy ? `<br><span class="text-[8px] text-violet-600">含未来万能糖</span>` : ''}` : '立即完成'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-center px-2 py-2 text-fuchsia-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napGiftSpeciesCandyExpected)}糖<br><span class="text-[8px]">用${formatTrainingNumber(row.napGiftCandyUsed)} · ${formatTrainingNumber(row.napGiftShardsExpected)}梦碎</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp + row.napGiftCandyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.netShards)}<br><span class="text-[8px] text-slate-400">毛${formatTrainingNumber(row.shards)}</span></td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟最多5个席位，直接读取出货库的副技能与当前等级；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛也由系统在每个七天节点自动选择净收益最高的培养对象；如果普通睡眠反而能更早完成，该周会主动留空。“推荐完成时间”由上述自动调度模拟得出，不要求玩家手动填写词条数或午睡岛周数。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟最多5个席位，直接读取出货库的副技能与当前等级；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛在每个七天节点按玩家策略安排；自动模式选择净收益最高者，长期驻岛覆盖收益判断，禁止上岛则排除。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。每周万能糖S收益按可实现的七天节点动态求解，避免把未来糖果提前白拿。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
@@ -12733,7 +12835,7 @@ function renderGraduationDexModalShell() {
                     <i class="fa-solid fa-trophy text-amber-500"></i> 出货宝可梦个体库
                 </h3>
                 <p class="text-[10px] text-slate-400 font-medium mt-0.5">
-                    和解及以上自动收录；达不到和解但准备临时培养的个体可作为「打工」补录。等级经验可随时更新，并用于联合培养计算。
+                    和解及以上自动收录；低于和解可按用途补录为「打工」或「未来可期」。两类都不计评分，但可参与培养计算。
                 </p>
             </div>
 
@@ -12743,6 +12845,9 @@ function renderGraduationDexModalShell() {
                 </button>
                 <button onclick="openWorkerBackfillModal()" class="bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
                     <i class="fa-solid fa-helmet-safety"></i> 补录打工
+                </button>
+                <button onclick="openFuturePotentialBackfillModal()" class="bg-fuchsia-100 hover:bg-fuchsia-200 text-fuchsia-800 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
+                    <i class="fa-solid fa-seedling"></i> 补录未来可期
                 </button>
                 <button onclick="openGraduationBackfillModal()" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
                     <i class="fa-solid fa-plus"></i> 补录出货
@@ -12759,6 +12864,7 @@ function renderGraduationDexModalShell() {
                 <option value="bigGrad">大毕业</option>
                 <option value="goldGrad">金帮毕业</option>
                 <option value="worker">打工</option>
+                <option value="future">未来可期</option>
             </select>
         </div>
 
@@ -12783,7 +12889,8 @@ function renderGraduationDexList() {
         const cur = getGraduationCurrent(item);
 
         if (filter === 'worker' && !isWorkerGraduationEntry(item)) return false;
-        if (filter !== 'all' && filter !== 'worker' && (isWorkerGraduationEntry(item) || cur.result !== filter)) return false;
+        if (filter === 'future' && !isFuturePotentialGraduationEntry(item)) return false;
+        if (!['all', 'worker', 'future'].includes(filter) && (isTrainingOnlyGraduationEntry(item) || cur.result !== filter)) return false;
 
         const displayNickname = getGraduationDexNickname(item);
         const curNatureName = ALL_AUDIT_NATURES[cur.nature]?.name || '无性格修正';
@@ -12813,8 +12920,9 @@ function renderGraduationDexList() {
             capSkillText,
             cap.date,
             cap.session,
-            item.source === 'daily' ? '每日打卡' : (item.source === 'worker' ? '打工补录' : '手动补录'),
+            item.source === 'daily' ? '每日打卡' : (item.source === 'worker' ? '打工补录' : (item.source === 'future' ? '未来可期补录' : '手动补录')),
             isWorkerGraduationEntry(item) ? '打工 临时培养' : '',
+            isFuturePotentialGraduationEntry(item) ? '未来可期 后期培养 70级' : '',
             (cur.isShiny || cap.isShiny) ? '闪光 shiny 色违' : ''
         ].join(' ').toLowerCase();
 
@@ -12838,7 +12946,9 @@ function renderGraduationDexList() {
             grad: 'bg-emerald-50 text-emerald-700 border-emerald-200',
             bigGrad: 'bg-purple-50 text-purple-700 border-purple-200',
             goldGrad: 'bg-red-50 text-red-700 border-red-200'
-        }[cur.result] || (isWorkerGraduationEntry(item) ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-50 text-slate-600 border-slate-200');
+        }[cur.result] || (isFuturePotentialGraduationEntry(item)
+            ? 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200'
+            : (isWorkerGraduationEntry(item) ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-50 text-slate-600 border-slate-200'));
 
         const capResultClass = {
             tied: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -12852,7 +12962,7 @@ function renderGraduationDexList() {
         const capNatureName = ALL_AUDIT_NATURES[cap.nature]?.name || '无性格修正';
         const curFoodBadge = getFoodBadgeText(cur.foodCombo, cur.track);
         const capFoodBadge = getFoodBadgeText(cap.foodCombo, cap.track);
-        const sourceText = item.source === 'daily' ? '每日打卡自动归档' : (item.source === 'worker' ? '打工个体补录' : '手动补录');
+        const sourceText = item.source === 'daily' ? '每日打卡自动归档' : (item.source === 'worker' ? '打工个体补录' : (item.source === 'future' ? '未来可期个体补录' : '手动补录'));
         const trainingLevel = Number(cur.trainingLevel) || 0;
         const targetLevel = Number(cur.trainingTargetLevel) || 0;
         const expToNext = cur.trainingExpToNext;
@@ -12907,9 +13017,9 @@ function renderGraduationDexList() {
                     <button onclick='openEditGraduationDexModal(${JSON.stringify(item.id)}, "capture")' class="px-2 py-1 rounded-lg bg-white hover:bg-indigo-500 hover:text-white text-slate-500 border border-slate-200 text-[10px] font-black transition">
                         <i class="fa-solid fa-clock-rotate-left"></i> 编辑捕捉时
                     </button>
-                    <button onclick='toggleGraduationDexLuckExclude(${JSON.stringify(item.id)}, event)' class="px-2 py-1 rounded-lg ${item.excludeFromLuck ? 'bg-sky-500 text-white border-sky-500' : 'bg-white text-slate-500 border-slate-200 hover:bg-sky-50 hover:text-sky-700'} border text-[10px] font-black transition" title="将该个体从运气评分中排除，但保留档案展示">
-                        <i class="fa-solid fa-filter-circle-xmark"></i> ${item.excludeFromLuck ? '不计分: 开' : '不计分'}
-                    </button>
+                    ${isTrainingOnlyGraduationEntry(item)
+                        ? `<span class="px-2 py-1 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 text-[10px] font-black"><i class="fa-solid fa-filter-circle-xmark"></i> 天然不计评分</span>`
+                        : `<button onclick='toggleGraduationDexLuckExclude(${JSON.stringify(item.id)}, event)' class="px-2 py-1 rounded-lg ${item.excludeFromLuck ? 'bg-sky-500 text-white border-sky-500' : 'bg-white text-slate-500 border-slate-200 hover:bg-sky-50 hover:text-sky-700'} border text-[10px] font-black transition" title="将该个体从运气评分中排除，但保留档案展示"><i class="fa-solid fa-filter-circle-xmark"></i> ${item.excludeFromLuck ? '不计分: 开' : '不计分'}</button>`}
                     <button onclick='deleteGraduationDexEntry(${JSON.stringify(item.id)}, event)' class="px-2 py-1 rounded-lg bg-white hover:bg-red-500 hover:text-white text-slate-400 border border-slate-200 text-[10px] font-black transition">
                         <i class="fa-solid fa-trash-can"></i> 删除
                     </button>
@@ -13041,6 +13151,33 @@ function openWorkerBackfillModal() {
     if (submitBtn) {
         submitBtn.className = 'w-full bg-sky-600 hover:bg-sky-500 text-white font-black text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md';
         submitBtn.innerHTML = `<i class="fa-solid fa-helmet-safety"></i> 收入出货库 · 标记为打工`;
+    }
+}
+
+function openFuturePotentialBackfillModal() {
+    openGraduationBackfillModal({ result: 'none' });
+    const modal = document.getElementById('daily-checkin-modal');
+    if (!modal) return;
+    modal.dataset.futurePotentialBackfill = '1';
+
+    const title = modal.querySelector('h3');
+    if (title) title.innerHTML = `<i class="fa-solid fa-seedling text-fuchsia-500"></i> 补录未来可期宝可梦`;
+    const desc = title ? title.closest('.text-center')?.querySelector('p') : null;
+    if (desc) desc.textContent = '未来可期档案用于记录当前不达和解标准、但预计高等级后会变强的个体；保持“没货”评分，不进入和解、毕业、出货率或断档统计。';
+
+    window.userManuallyOverrodeResult = true;
+    window.currentSystemRecommendValue = 'none';
+    const resultEl = document.getElementById('checkin-result');
+    if (resultEl) {
+        resultEl.value = 'none';
+        resultEl.disabled = true;
+        resultEl.classList.add('opacity-60', 'cursor-not-allowed');
+    }
+
+    const submitBtn = modal.querySelector('[data-submit-daily-checkin="1"]') || modal.querySelector('button[onclick^="submitGraduationDexBackfill"]');
+    if (submitBtn) {
+        submitBtn.className = 'w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-black text-xs py-2.5 rounded-xl transition duration-150 flex items-center justify-center gap-1.5 shadow-md';
+        submitBtn.innerHTML = `<i class="fa-solid fa-seedling"></i> 收入出货库 · 标记为未来可期`;
     }
 }
 
@@ -13433,11 +13570,11 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
         return;
     }
 
-    if (!isWorkerGraduationEntry(item) && !isGraduationResult(state.result)) {
+    if (!isTrainingOnlyGraduationEntry(item) && !isGraduationResult(state.result)) {
         alert("出货库可收录【和解 / 毕业 / 大毕业 / 金帮毕业】个体。");
         return;
     }
-    if (isWorkerGraduationEntry(item)) state.result = 'none';
+    if (isTrainingOnlyGraduationEntry(item)) state.result = 'none';
 
     if (mode === 'capture') {
         const ok = confirm("你正在修改【捕捉时状态】。这不会自动重算历史抽卡库或 Box，只会修改出货库中的原始档案。确定保存吗？");
@@ -16409,6 +16546,8 @@ window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
     if (graduationBackfillSubmitting) return;
     const modal = document.getElementById('daily-checkin-modal');
     const isWorker = modal?.dataset?.workerBackfill === '1';
+    const isFuturePotential = modal?.dataset?.futurePotentialBackfill === '1';
+    const isTrainingOnly = isWorker || isFuturePotential;
     let state;
     try {
         state = readCurrentCheckInPanelState();
@@ -16422,11 +16561,11 @@ window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
         alert('请输入要补录的宝可梦名字！');
         return;
     }
-    if (!isWorker && !isGraduationResult(state.result)) {
+    if (!isTrainingOnly && !isGraduationResult(state.result)) {
         alert('出货库可收录【和解 / 毕业 / 大毕业 / 金帮毕业】个体，不能选择没货。');
         return;
     }
-    if (isWorker) state.result = 'none';
+    if (isTrainingOnly) state.result = 'none';
 
     graduationBackfillSubmitting = true;
     if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
@@ -16435,16 +16574,17 @@ window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
 
     try {
         addGraduationDexEntry({
-            source: isWorker ? 'worker' : 'manual',
+            source: isWorker ? 'worker' : (isFuturePotential ? 'future' : 'manual'),
             isWorker,
+            isFuturePotential,
             nickname: state.nickname || state.name,
             capture: state,
             current: Object.assign({}, state, {
                 nickname: state.nickname || state.name,
-                trainingTargetLevel: isWorker ? 30 : null
+                trainingTargetLevel: isWorker ? 30 : (isFuturePotential ? 70 : null)
             })
         });
-        if (!isWorker) maybeSyncBackfilledGraduationToBox(state);
+        if (!isTrainingOnly) maybeSyncBackfilledGraduationToBox(state);
         saveGraduationDexToLocal();
         if (currentCloudUser) scheduleSaveGraduationDexToCloud();
         const dexModal = document.getElementById('graduation-dex-modal');
@@ -16454,7 +16594,9 @@ window.submitGraduationDexBackfill = function submitGraduationDexBackfillV22() {
         }, 80);
         showToast(isWorker
             ? `已把【${state.name}】作为打工个体收入出货库，不影响任何评分统计`
-            : `已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`);
+            : (isFuturePotential
+                ? `已把【${state.name}】标记为未来可期并收入出货库，不影响任何评分统计`
+                : `已补录【${state.name} · ${getGraduationResultName(state.result)}】到出货库`));
     } catch (err) {
         console.error('补录出货库失败：', err);
         alert('补录失败：' + (err && err.message ? err.message : '未知错误'));
