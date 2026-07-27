@@ -1152,6 +1152,7 @@ const BALL_SYSTEM_DAILY_REWARD_TEMPLATES = [
 const BALL_SHOP_PURCHASE_COSTS = { regularPoke: 150, premiumPoke: 100, premiumGreat: 400 };
 
 let ballPlannerState = getDefaultBallPlannerState();
+let ballDailyRewardStatsRange = 'all';
 
 function getCurrentMonthKey() {
     const now = new Date();
@@ -1634,6 +1635,179 @@ function getBallPlannerDailyRewardStats() {
     return { count, total, monthlyCount, monthly, byName, monthlyByName };
 }
 
+function getBallDailyRewardDateOrdinal(date) {
+    const match = String(date || '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!match) return NaN;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const ms = Date.UTC(year, month - 1, day);
+    const parsed = new Date(ms);
+    if (
+        parsed.getUTCFullYear() !== year ||
+        parsed.getUTCMonth() !== month - 1 ||
+        parsed.getUTCDate() !== day
+    ) return NaN;
+    return Math.floor(ms / 86400000);
+}
+
+function getBallDailyRewardDateFromOrdinal(ordinal) {
+    if (!Number.isFinite(ordinal)) return '';
+    return new Date(ordinal * 86400000).toISOString().slice(0, 10);
+}
+
+function buildBallDailyRewardStats(range = 'all', today = getTodayLocalDateString(), entries = ballPlannerState.entries || []) {
+    const safeRange = ['all', '7', '30'].includes(String(range)) ? String(range) : 'all';
+    const windowDays = safeRange === '7' ? 7 : (safeRange === '30' ? 30 : 0);
+    const todayOrdinal = getBallDailyRewardDateOrdinal(today);
+    const rangeStartOrdinal = windowDays && Number.isFinite(todayOrdinal) ? todayOrdinal - windowDays + 1 : NaN;
+    let futureExcludedCount = 0;
+    let undatedCount = 0;
+    const selected = [];
+
+    (Array.isArray(entries) ? entries : []).forEach(entry => {
+        if (!entry || entry.sourceType !== 'dailyReward') return;
+        const dateOrdinal = getBallDailyRewardDateOrdinal(entry.date);
+        if (!Number.isFinite(dateOrdinal)) {
+            undatedCount += 1;
+            if (!windowDays) selected.push({ entry, dateOrdinal: NaN, date: '' });
+            return;
+        }
+        if (Number.isFinite(todayOrdinal) && dateOrdinal > todayOrdinal) {
+            futureExcludedCount += 1;
+            return;
+        }
+        if (windowDays && (dateOrdinal < rangeStartOrdinal || dateOrdinal > todayOrdinal)) return;
+        selected.push({ entry, dateOrdinal, date: getBallDailyRewardDateFromOrdinal(dateOrdinal) });
+    });
+
+    const resourceTotals = { poke: 0, great: 0, ultra: 0, diamonds: 0 };
+    const categoryMap = new Map();
+    const datedOrdinals = [];
+    const recordedDates = new Set();
+    selected.forEach(({ entry, dateOrdinal, date }) => {
+        const name = String(entry.displayName || entry.templateName || '每日奖励').trim() || '每日奖励';
+        if (!categoryMap.has(name)) {
+            categoryMap.set(name, {
+                name,
+                count: 0,
+                ratio: 0,
+                resources: { poke: 0, great: 0, ultra: 0, diamonds: 0 }
+            });
+        }
+        const category = categoryMap.get(name);
+        category.count += 1;
+        BALL_KEYS.forEach(key => {
+            const value = Math.max(0, Number(entry.balls?.[key]) || 0);
+            category.resources[key] += value;
+            resourceTotals[key] += value;
+        });
+        const diamonds = Math.max(0, Number(entry.diamonds) || 0);
+        category.resources.diamonds += diamonds;
+        resourceTotals.diamonds += diamonds;
+        if (Number.isFinite(dateOrdinal)) {
+            datedOrdinals.push(dateOrdinal);
+            recordedDates.add(date);
+        }
+    });
+
+    const count = selected.length;
+    const categories = Array.from(categoryMap.values())
+        .map(category => Object.assign(category, { ratio: count ? category.count / count * 100 : 0 }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
+    const firstOrdinal = datedOrdinals.length ? Math.min(...datedOrdinals) : NaN;
+    const lastOrdinal = datedOrdinals.length ? Math.max(...datedOrdinals) : NaN;
+    const spanDays = datedOrdinals.length ? lastOrdinal - firstOrdinal + 1 : 0;
+    const coverageDenominator = windowDays || spanDays;
+    const recordedDayCount = recordedDates.size;
+    const coverageRate = coverageDenominator ? recordedDayCount / coverageDenominator * 100 : 0;
+
+    return {
+        range: safeRange,
+        count,
+        categories,
+        resourceTotals,
+        recordedDayCount,
+        windowDays,
+        spanDays,
+        coverageRate,
+        missingDayCount: Math.max(0, coverageDenominator - recordedDayCount),
+        firstDate: getBallDailyRewardDateFromOrdinal(firstOrdinal),
+        lastDate: getBallDailyRewardDateFromOrdinal(lastOrdinal),
+        rangeStart: getBallDailyRewardDateFromOrdinal(rangeStartOrdinal),
+        rangeEnd: Number.isFinite(todayOrdinal) ? getBallDailyRewardDateFromOrdinal(todayOrdinal) : '',
+        futureExcludedCount,
+        undatedCount
+    };
+}
+
+function getBallDailyRewardResourceSummary(resources = {}) {
+    const parts = [];
+    if (Number(resources.poke) > 0) parts.push(`红白球 ${fmtBallNum(resources.poke)}`);
+    if (Number(resources.great) > 0) parts.push(`蓝球 ${fmtBallNum(resources.great)}`);
+    if (Number(resources.ultra) > 0) parts.push(`黑/黄球 ${fmtBallNum(resources.ultra)}`);
+    if (Number(resources.diamonds) > 0) parts.push(`钻石/非球 ${fmtBallNum(resources.diamonds)}`);
+    return parts.join(' · ') || '该类记录未填写数量';
+}
+
+function renderBallDailyRewardStatsHtml(range = ballDailyRewardStatsRange) {
+    const stats = buildBallDailyRewardStats(range);
+    const tabs = [
+        { key: 'all', label: '全部记录' },
+        { key: '7', label: '近7天' },
+        { key: '30', label: '近30天' }
+    ];
+    const coverageText = stats.windowDays
+        ? `${stats.recordedDayCount}/${stats.windowDays} 天`
+        : (stats.spanDays ? `${stats.recordedDayCount}/${stats.spanDays} 天` : '0 天');
+    const dateText = stats.windowDays
+        ? `${stats.rangeStart} ～ ${stats.rangeEnd}`
+        : (stats.firstDate ? `${stats.firstDate} ～ ${stats.lastDate}` : '尚无日期范围');
+    const categoryRows = stats.categories.map(category => {
+        const ratioText = `${category.ratio.toFixed(1)}%`;
+        return `<div class="rounded-2xl bg-white border border-amber-100 px-3 py-2.5">
+            <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0 text-[11px] font-black text-slate-700 truncate">${escapeHtml(category.name)}</div>
+                <div class="shrink-0 text-[11px] font-black text-amber-700">${category.count} 次 · ${ratioText}</div>
+            </div>
+            <div class="h-1.5 rounded-full bg-amber-100 overflow-hidden mt-2"><div class="h-full rounded-full bg-amber-400" style="width:${Math.max(0, Math.min(100, category.ratio)).toFixed(1)}%"></div></div>
+            <div class="text-[9px] font-bold text-slate-400 mt-1.5">${escapeHtml(getBallDailyRewardResourceSummary(category.resources))}</div>
+        </div>`;
+    }).join('');
+    const warningParts = [];
+    if (stats.futureExcludedCount) warningParts.push(`另有 ${stats.futureExcludedCount} 条未来日期记录未计入`);
+    if (stats.undatedCount && stats.range === 'all') warningParts.push(`${stats.undatedCount} 条无有效日期记录已计入次数、未计入覆盖天数`);
+    const coverageHint = stats.windowDays
+        ? `按今天向前、含今天的 ${stats.windowDays} 个自然日统计。未录入的日期只影响覆盖率，不会被当成某一种奖励。`
+        : `比例分母是截止今天已录入的 ${stats.count} 条奖励记录，不是自然日数；同一天若录入多条，会分别计数。`;
+
+    return `<div class="rounded-3xl border border-amber-200 bg-white/70 p-3 sm:p-4 flex flex-col gap-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+                <div class="text-xs font-black text-amber-900"><i class="fa-solid fa-chart-pie text-amber-500"></i> 已录入每日奖励统计</div>
+                <div class="text-[9px] font-bold text-amber-700 mt-0.5">${escapeHtml(dateText)}</div>
+            </div>
+            <div class="grid grid-cols-3 gap-1 rounded-2xl bg-amber-50 border border-amber-100 p-1">
+                ${tabs.map(tab => `<button type="button" onclick="setBallDailyRewardStatsRange('${tab.key}')" class="px-2.5 py-1.5 rounded-xl text-[10px] font-black transition ${stats.range === tab.key ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-amber-700 hover:bg-white'}">${tab.label}</button>`).join('')}
+            </div>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <div class="rounded-2xl bg-amber-50 border border-amber-100 px-3 py-2"><div class="text-[9px] font-black text-amber-600">奖励记录</div><div class="text-lg font-black font-mono text-amber-900">${stats.count} 次</div></div>
+            <div class="rounded-2xl bg-amber-50 border border-amber-100 px-3 py-2"><div class="text-[9px] font-black text-amber-600">奖励种类</div><div class="text-lg font-black font-mono text-amber-900">${stats.categories.length} 种</div></div>
+            <div class="rounded-2xl bg-amber-50 border border-amber-100 px-3 py-2"><div class="text-[9px] font-black text-amber-600">日期覆盖</div><div class="text-lg font-black font-mono text-amber-900">${coverageText}</div><div class="text-[9px] font-bold text-amber-700">${stats.coverageRate.toFixed(1)}%</div></div>
+            <div class="rounded-2xl bg-amber-50 border border-amber-100 px-3 py-2"><div class="text-[9px] font-black text-amber-600">累计奖励数量</div><div class="text-[10px] font-black text-amber-900 mt-1 leading-relaxed">${escapeHtml(getBallDailyRewardResourceSummary(stats.resourceTotals))}</div></div>
+        </div>
+        ${stats.categories.length ? `<div class="grid grid-cols-1 md:grid-cols-2 gap-2">${categoryRows}</div>` : `<div class="rounded-2xl border border-dashed border-amber-200 bg-amber-50/60 px-4 py-6 text-center"><div class="text-xs font-black text-amber-800">这个范围内还没有每日奖励记录</div><div class="text-[10px] font-bold text-amber-600 mt-1">录入后会自动显示种类、次数和比例。</div></div>`}
+        <div class="text-[9px] font-bold text-slate-400 leading-relaxed">${coverageHint}${warningParts.length ? ` ${warningParts.join('；')}。` : ''}</div>
+    </div>`;
+}
+
+function setBallDailyRewardStatsRange(range) {
+    ballDailyRewardStatsRange = ['all', '7', '30'].includes(String(range)) ? String(range) : 'all';
+    const container = document.getElementById('ball-daily-reward-stats');
+    if (container) container.innerHTML = renderBallDailyRewardStatsHtml(ballDailyRewardStatsRange);
+}
+
 function getBallPlannerResearchUsageByDate() {
     const byDate = {};
     getVisibleSleepResearchLogs(historyLogs).forEach(r => {
@@ -1935,6 +2109,7 @@ function renderBallPlannerModal() {
                 <label>钻石/非球数量<input type="number" id="ball-daily-diamonds" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
                 <button onclick="addBallDailyRewardEntry()" class="self-end bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl py-2.5 text-xs font-black">记录每日奖励</button>
             </div>
+            <div id="ball-daily-reward-stats">${renderBallDailyRewardStatsHtml(ballDailyRewardStatsRange)}</div>
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
             <div class="rounded-3xl border border-slate-200 p-4 flex flex-col gap-3">
