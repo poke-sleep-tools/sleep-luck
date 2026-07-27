@@ -12129,6 +12129,14 @@ function getTrainingPriorityWeight(row) {
     return 2 ** (priority - 1);
 }
 
+function getTrainingPlanningPriority(row) {
+    return Math.max(1, Math.min(5, Math.floor(Number(row?.planningPriority ?? row?.priority) || 3)));
+}
+
+function getTrainingPlanningPriorityWeight(row) {
+    return 2 ** (getTrainingPlanningPriority(row) - 1);
+}
+
 function normalizeTrainingNapStrategy(value) {
     return ['auto', 'long', 'never'].includes(value) ? value : 'auto';
 }
@@ -12182,8 +12190,8 @@ function getAutomaticTrainingSleepTeam(targets, supportOnlyCount, availableSlots
                 const bonusCount = supportCount + trial.reduce((sum, row) => sum + getTrainingSleepBonusCountForRow(row), 0);
                 const usefulExp = trial.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)), 0);
                 const totalPressure = trial.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)), 0);
-                const weightedUsefulExp = trial.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
-                const urgency = trial.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
+                const weightedUsefulExp = trial.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPlanningPriorityWeight(row), 0);
+                const urgency = trial.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPlanningPriorityWeight(row), 0);
                 // 先保证有限席位产生尽可能多的全队有效经验，再处理最长工作量，最后才用优先级打破近似平局。
                 const score = usefulExp * 1000000000000 + totalPressure * 1000000 + weightedUsefulExp * 1000 + urgency;
                 if (score > bestCandidateScore) {
@@ -12197,8 +12205,8 @@ function getAutomaticTrainingSleepTeam(targets, supportOnlyCount, availableSlots
         const bonusCount = supportCount + chosen.reduce((sum, row) => sum + getTrainingSleepBonusCountForRow(row), 0);
         const usefulExp = chosen.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)), 0);
         const totalPressure = chosen.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)), 0);
-        const weightedUsefulExp = chosen.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
-        const urgency = chosen.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPriorityWeight(row), 0);
+        const weightedUsefulExp = chosen.reduce((sum, row) => sum + Math.min(row.remaining, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPlanningPriorityWeight(row), 0);
+        const urgency = chosen.reduce((sum, row) => sum + row.remaining / Math.max(1, getTrainingSleepExp(row.nature, bonusCount)) * getTrainingPlanningPriorityWeight(row), 0);
         if (usefulExp > best.usefulExp
             || (usefulExp === best.usefulExp && totalPressure > best.totalPressure)
             || (usefulExp === best.usefulExp && totalPressure === best.totalPressure && weightedUsefulExp > best.weightedUsefulExp)
@@ -12213,7 +12221,7 @@ function chooseAutomaticNapIslandRow(rows, supportOnlyCount = 0) {
     const unfinished = rows.filter(row => row.remaining > 0 && normalizeTrainingNapStrategy(row.napStrategy) !== 'never');
     const longTerm = unfinished
         .filter(row => normalizeTrainingNapStrategy(row.napStrategy) === 'long')
-        .sort((a, b) => b.priority - a.priority || b.remaining - a.remaining);
+        .sort((a, b) => getTrainingPlanningPriority(b) - getTrainingPlanningPriority(a) || b.remaining - a.remaining);
     // 玩家指定“长期驻岛”时覆盖系统收益判断；多只同时指定则由优先级决定唯一岛位的先后。
     if (longTerm.length) return longTerm[0];
     let best = null;
@@ -12232,8 +12240,8 @@ function chooseAutomaticNapIslandRow(rows, supportOnlyCount = 0) {
         if (score <= 0 || estimatedSleepNights < 7) return;
         if (!best
             || score > best.score
-            || (score === best.score && row.priority > best.row.priority)
-            || (score === best.score && row.priority === best.row.priority && row.remaining > best.row.remaining)) {
+            || (score === best.score && getTrainingPlanningPriority(row) > getTrainingPlanningPriority(best.row))
+            || (score === best.score && getTrainingPlanningPriority(row) === getTrainingPlanningPriority(best.row) && row.remaining > best.row.remaining)) {
             best = { row, score };
         }
     });
@@ -12827,7 +12835,12 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null, o
         };
     }).filter(row => row.currentLevel > 0 && row.targetLevel >= row.currentLevel);
 
+    const neutralPriority = options.priorityMode === 'neutral';
+    const priorityCap = Number.isFinite(Number(options.priorityCap))
+        ? Math.max(1, Math.min(5, Math.floor(Number(options.priorityCap))))
+        : 5;
     rows.forEach(row => {
+        row.planningPriority = neutralPriority ? 3 : Math.min(row.priority, priorityCap);
         row.napExpPerDay = getTrainingNapIslandExpPerDay(row.nature);
         row.napExpPerWeek = row.napExpPerDay * 7;
     });
@@ -12878,12 +12891,12 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null, o
             const aPressure = a.remaining / getTrainingSleepExp(a.nature, getTrainingSleepBonusCountForRow(a));
             const bPressure = b.remaining / getTrainingSleepExp(b.nature, getTrainingSleepBonusCountForRow(b));
             if (allocationMode === 'priority') {
-                return b.priority - a.priority || bPressure - aPressure || b.remaining - a.remaining;
+                return getTrainingPlanningPriority(b) - getTrainingPlanningPriority(a) || bPressure - aPressure || b.remaining - a.remaining;
             }
             if (allocationMode === 'balanced') {
-                const aScore = aPressure * (1 + (a.priority - 3) * 0.12);
-                const bScore = bPressure * (1 + (b.priority - 3) * 0.12);
-                return bScore - aScore || bPressure - aPressure || b.priority - a.priority || b.remaining - a.remaining;
+                const aScore = aPressure * (1 + (getTrainingPlanningPriority(a) - 3) * 0.12);
+                const bScore = bPressure * (1 + (getTrainingPlanningPriority(b) - 3) * 0.12);
+                return bScore - aScore || bPressure - aPressure || getTrainingPlanningPriority(b) - getTrainingPlanningPriority(a) || b.remaining - a.remaining;
             }
             // 默认使用“整体工期”模式：只按剩余睡眠工作量削峰，保留一条不受优先级改变影响的稳定候选路线。
             return bPressure - aPressure || b.remaining - a.remaining || String(a.id).localeCompare(String(b.id));
@@ -12959,6 +12972,8 @@ function buildTrainingPlan(includeExtra = true, universalCandyOverride = null, o
         universalCandyMUsed: universalConversion.m,
         universalCandyLUsed: universalConversion.l,
         allocationMode,
+        priorityMode: neutralPriority ? 'neutral' : (priorityCap < 5 ? 'capped' : 'exact'),
+        priorityCap,
         universalSpeciesUsed,
         universalConvertedSpecies: universalConversion.converted,
         universalConvertedLeftover: universalConversion.leftover,
@@ -13023,13 +13038,37 @@ function compareTrainingPlanCandidates(a, b) {
     return (modeRank[a.allocationMode] ?? 9) - (modeRank[b.allocationMode] ?? 9);
 }
 
+function getTrainingAllocationProfileLabel(plan) {
+    const modeLabel = plan?.allocationMode === 'priority'
+        ? '强优先级'
+        : (plan?.allocationMode === 'balanced' ? '平衡分配' : '整体削峰');
+    if (plan?.priorityMode === 'neutral') return `${modeLabel} · 不看优先级基准`;
+    if (plan?.priorityMode === 'capped') return `${modeLabel} · 保留优先级≤${plan.priorityCap}路线`;
+    return `${modeLabel} · 当前优先级`;
+}
+
 function buildBestTrainingPlanForResources(includeExtra, universalCandyOverride, futureWeeks = 0, weeklyUniversalCandyS = 0) {
-    // 单一贪心顺序无法保证好结果，因此同时尝试整体工期、轻度优先级、强优先级三条分配路线，
-    // 最后统一按“全队工期 → 优先级加权完成时间 → 全体完成时间总和”选出更优方案。
-    const modes = ['overall', 'balanced', 'priority'];
+    // 固定保留完全不看优先级的整体基准；此外逐级截断当前优先级，确保某只从 N 升到 N+1 后，
+    // “仍按 N 调度”的旧类方案不会从候选集合中消失。
+    const selectedPriorities = (trainingPlannerState.selectedIds || []).map(id => (
+        Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.priorityById?.[String(id)]) || 3)))
+    ));
+    const maxPriority = selectedPriorities.length ? Math.max(...selectedPriorities) : 3;
+    const profiles = [
+        { allocationMode: 'overall', priorityMode: 'neutral', priorityCap: 5, key: 'overall-neutral' },
+        { allocationMode: 'overall', priorityMode: 'exact', priorityCap: 5, key: 'overall-exact' },
+        { allocationMode: 'balanced', priorityMode: 'exact', priorityCap: 5, key: 'balanced-exact' },
+        { allocationMode: 'priority', priorityMode: 'exact', priorityCap: 5, key: 'priority-exact' }
+    ];
+    for (let cap = 1; cap < maxPriority; cap++) {
+        ['overall', 'balanced', 'priority'].forEach(allocationMode => {
+            profiles.push({ allocationMode, priorityMode: 'capped', priorityCap: cap, key: `${allocationMode}-cap${cap}` });
+        });
+    }
     let best = null;
-    modes.forEach(allocationMode => {
-        const plan = buildTrainingPlan(includeExtra, universalCandyOverride, { allocationMode });
+    profiles.forEach(profile => {
+        const plan = buildTrainingPlan(includeExtra, universalCandyOverride, profile);
+        plan.allocationProfile = profile.key;
         plan.optimizationMetrics = getTrainingPlanOptimizationMetrics(plan, futureWeeks, weeklyUniversalCandyS);
         plan.rows.forEach((row, index) => {
             row.futureUniversalAvailabilityDay = plan.optimizationMetrics.rowFutureAvailabilityDays[index] || 0;
@@ -13141,6 +13180,7 @@ function calculateAndRenderTrainingPlanner(persist = true) {
             ['礼物糖期望', `${formatTrainingNumber(plan.totals.napGiftSpeciesCandyExpected)} 颗`, 'text-fuchsia-700'],
             ['礼物梦碎期望', formatTrainingNumber(plan.totals.napGiftShardsExpected), 'text-emerald-700'],
             ['推荐完成时间', `${formatTrainingNumber(plan.completionNights)} 天`, 'text-violet-700'],
+            ['择优路线', getTrainingAllocationProfileLabel(plan), 'text-indigo-700'],
             [`约合满${availableSleepSlots}席`, `${availableTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
             ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
             ['净梦碎需求', formatTrainingNumber(plan.totals.netShards), 'text-rose-700']
@@ -13173,7 +13213,7 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         <tbody>${plan.rows.slice().sort((a, b) => b.priority - a.priority || (a.recommendedCompletionDay ?? Infinity) - (b.recommendedCompletionDay ?? Infinity)).map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)} · ${getTrainingNapStrategyLabel(row.napStrategy)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 text-rose-700 font-black">${row.priority}</td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-center px-2 py-2 text-emerald-700 font-black">${row.recommendedCompletionDay > 0 ? `第${formatTrainingNumber(row.recommendedCompletionDay)}天<br><span class="text-[8px]">约${formatTrainingNumber(Math.ceil(row.recommendedCompletionDay / 7))}周</span>${row.futureUniversalSpeciesCandy ? `<br><span class="text-[8px] text-violet-600">含未来万能糖 · 最晚第${formatTrainingNumber(row.futureUniversalAvailabilityDay)}天可用</span>` : ''}` : '立即完成'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-center px-2 py-2 text-fuchsia-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napGiftSpeciesCandyExpected)}糖<br><span class="text-[8px]">用${formatTrainingNumber(row.napGiftCandyUsed)} · ${formatTrainingNumber(row.napGiftShardsExpected)}梦碎</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp + row.napGiftCandyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.netShards)}<br><span class="text-[8px] text-slate-400">毛${formatTrainingNumber(row.shards)}</span></td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        方案选择先尽量缩短全队全部完成的日历时间；整体工期相同时，再优先缩短高优先级个体的完成时间，并继续比较全体完成时间总和。系统会同时尝试整体削峰、平衡分配和强优先级三种糖果路线，避免单一路线形成局部解。睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟玩家设置的1～5个可用席位，培养对象与睡眠EXP辅助合计不会超过该数量；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛每七天重新规划：具体周指定优先级最高，其次是长期驻岛，最后才是自动收益判断；“该周不使用”只暂停对应周。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。未来每周万能糖按实际分配顺序落到各自的七天节点，不再把所有使用者统一推迟到规划的最后一周。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        方案选择先尽量缩短全队全部完成的日历时间；整体工期相同时，再优先缩短高优先级个体的完成时间，并继续比较全体完成时间总和。系统会尝试整体削峰、平衡分配和强优先级三种糖果路线，并固定保留完全不看优先级的整体基准及较低优先级截断路线；提高某只优先级时，原先同层级的高效路线不会从候选中消失。睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟玩家设置的1～5个可用席位，培养对象与睡眠EXP辅助合计不会超过该数量；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛每七天重新规划：具体周指定优先级最高，其次是长期驻岛，最后才是自动收益判断；“该周不使用”只暂停对应周。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。未来每周万能糖按实际分配顺序落到各自的七天节点，不再把所有使用者统一推迟到规划的最后一周。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
