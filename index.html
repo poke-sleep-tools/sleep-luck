@@ -11958,7 +11958,8 @@ let trainingPlannerState = {
     selectedIds: [], groupInventory: {}, groupExtra: {}, boostWeeks: 0,
     universalCandyS: 0, universalCandyM: 0, universalCandyL: 0,
     weeklyUniversalCandyS: 6, includeWeeklyUniversalCandy: true,
-    priorityById: {}, napStrategyById: {}, napOverrideByWeek: {}, sleepSlotCount: 5
+    priorityById: {}, napStrategyById: {}, napOverrideByWeek: {}, sleepSlotCount: 5,
+    prioritySlackDays: 7
 };
 
 function formatTrainingNumber(value) {
@@ -11989,6 +11990,12 @@ function normalizeTrainingPlannerState(raw = {}) {
         const week = Math.min(260, rawWeek);
         return [[String(week), value === 'none' ? 'none' : String(value)]];
     }));
+    const requestedPrioritySlack = raw.prioritySlackDays == null
+        ? 7
+        : Math.max(0, Math.min(28, Math.floor(Number(raw.prioritySlackDays) || 0)));
+    const prioritySlackDays = [0, 3, 7, 14, 28].reduce((best, value) => (
+        Math.abs(value - requestedPrioritySlack) < Math.abs(best - requestedPrioritySlack) ? value : best
+    ), 7);
     return {
         selectedIds: Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : [],
         groupInventory: cleanCounts(raw.groupInventory),
@@ -12007,6 +12014,7 @@ function normalizeTrainingPlannerState(raw = {}) {
         sleepSlotCount: raw.sleepSlotCount == null
             ? 5
             : Math.max(1, Math.min(5, Math.floor(Number(raw.sleepSlotCount) || 1))),
+        prioritySlackDays,
         updatedAt: raw.updatedAt || ''
     };
 }
@@ -12561,6 +12569,7 @@ function renderTrainingPlannerModal() {
     const napOverrides = Object.entries(trainingPlannerState.napOverrideByWeek || {})
         .sort((a, b) => Number(a[0]) - Number(b[0]));
     const sleepSlotCount = Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.sleepSlotCount) || 5)));
+    const prioritySlackDays = Math.max(0, Math.min(28, Math.floor(Number(trainingPlannerState.prioritySlackDays) || 0)));
 
     modal.innerHTML = `
     <div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
@@ -12600,11 +12609,18 @@ function renderTrainingPlannerModal() {
             <section class="bg-teal-50/70 border border-teal-200 rounded-2xl p-3 space-y-3">
                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
                     <div><h4 class="text-xs font-black text-teal-900"><i class="fa-solid fa-calendar-week"></i> 每周午睡岛指定与睡眠席位</h4><p class="text-[9px] text-teal-700/75 font-bold mt-0.5">周数从本次培养方案开始计算。某周指定拥有最高优先级；只覆盖这一周，下一周会重新执行长期驻岛或自动规划。</p></div>
-                    <label class="text-[10px] font-black text-indigo-800 flex items-center gap-2">可用于培养的睡眠席位
-                        <select onchange="updateTrainingPlannerSleepSlotCount(this.value)" class="bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-black">
-                            ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${sleepSlotCount === n ? 'selected' : ''}>${n} 席</option>`).join('')}
-                        </select>
-                    </label>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <label class="text-[10px] font-black text-indigo-800 flex items-center gap-2">可用于培养的睡眠席位
+                            <select onchange="updateTrainingPlannerSleepSlotCount(this.value)" class="bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-black">
+                                ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${sleepSlotCount === n ? 'selected' : ''}>${n} 席</option>`).join('')}
+                            </select>
+                        </label>
+                        <label class="text-[10px] font-black text-rose-800 flex items-center gap-2">优先级可接受全队延后
+                            <select onchange="updateTrainingPlannerPrioritySlackDays(this.value)" class="bg-white border border-rose-200 rounded-xl px-3 py-2 text-xs font-black">
+                                ${[[0, '0天（绝对最短）'], [3, '3天（轻度）'], [7, '7天（推荐）'], [14, '14天（强）'], [28, '28天（极强）']].map(([days, label]) => `<option value="${days}" ${prioritySlackDays === days ? 'selected' : ''}>${label}</option>`).join('')}
+                            </select>
+                        </label>
+                    </div>
                 </div>
                 <div class="grid md:grid-cols-[110px_1fr_auto] gap-2 items-end">
                     <label class="text-[9px] font-black text-teal-700">方案开始后的第几周
@@ -12625,7 +12641,7 @@ function renderTrainingPlannerModal() {
                         return `<span class="inline-flex items-center gap-1 bg-white border border-teal-200 rounded-lg px-2 py-1 text-[9px] font-black text-teal-800">第${formatTrainingNumber(week)}周：${escapeHtml(label)}<button type="button" onclick='removeTrainingPlannerNapWeekOverride(${JSON.stringify(String(week))})' class="text-rose-500 hover:text-rose-700" aria-label="删除第${escapeHtmlAttr(String(week))}周指定"><i class="fa-solid fa-xmark"></i></button></span>`;
                     }).join('') : '<span class="text-[9px] font-bold text-teal-700/60">尚未指定具体周；当前全部按个体的自动／长期驻岛／禁止上岛策略计算。</span>'}
                 </div>
-                <p class="text-[9px] font-bold text-slate-500">睡眠席位是扣除奶妈等固定过夜成员后，仍可分给培养对象或睡眠EXP辅助的总空位；系统不会超过该数量。</p>
+                <p class="text-[9px] font-bold text-slate-500">睡眠席位是扣除奶妈等固定过夜成员后，仍可分给培养对象或睡眠EXP辅助的总空位；系统不会超过该数量。“可接受全队延后”表示系统先找到绝对最快工期，再允许在这个上限内换取高优先级个体更早完成；设为0天时优先级只处理同工期方案。</p>
             </section>
 
             <section class="bg-amber-50/70 border border-amber-200 rounded-2xl p-3 space-y-3">
@@ -12709,6 +12725,14 @@ function updateTrainingPlannerNapStrategy(id, value) {
 
 function updateTrainingPlannerSleepSlotCount(value) {
     trainingPlannerState.sleepSlotCount = Math.max(1, Math.min(5, Math.floor(Number(value) || 1)));
+    saveTrainingPlannerState();
+    calculateAndRenderTrainingPlanner(false);
+}
+
+function updateTrainingPlannerPrioritySlackDays(value) {
+    const allowed = [0, 3, 7, 14, 28];
+    const requested = Math.max(0, Math.min(28, Math.floor(Number(value) || 0)));
+    trainingPlannerState.prioritySlackDays = allowed.includes(requested) ? requested : 7;
     saveTrainingPlannerState();
     calculateAndRenderTrainingPlanner(false);
 }
@@ -13038,6 +13062,34 @@ function compareTrainingPlanCandidates(a, b) {
     return (modeRank[a.allocationMode] ?? 9) - (modeRank[b.allocationMode] ?? 9);
 }
 
+function selectTrainingPlanCandidate(candidates = [], slackDays = trainingPlannerState.prioritySlackDays) {
+    const valid = (Array.isArray(candidates) ? candidates : []).filter(Boolean);
+    if (!valid.length) return null;
+    const allowedSlack = Math.max(0, Math.min(28, Math.floor(Number(slackDays) || 0)));
+    valid.forEach(plan => {
+        if (!plan.optimizationMetrics) {
+            plan.optimizationMetrics = getTrainingPlanOptimizationMetrics(plan, plan.projectedUniversalWeeks);
+        }
+    });
+    const fastestCalendarDays = Math.min(...valid.map(plan => plan.optimizationMetrics.calendarDays));
+    const eligible = valid.filter(plan => plan.optimizationMetrics.calendarDays <= fastestCalendarDays + allowedSlack);
+    eligible.sort((a, b) => {
+        const am = a.optimizationMetrics;
+        const bm = b.optimizationMetrics;
+        if (am.weightedCompletionDays !== bm.weightedCompletionDays) return am.weightedCompletionDays - bm.weightedCompletionDays;
+        if (am.totalCompletionDays !== bm.totalCompletionDays) return am.totalCompletionDays - bm.totalCompletionDays;
+        if (am.calendarDays !== bm.calendarDays) return am.calendarDays - bm.calendarDays;
+        if (am.futureWeeks !== bm.futureWeeks) return am.futureWeeks - bm.futureWeeks;
+        if (am.netShards !== bm.netShards) return am.netShards - bm.netShards;
+        return compareTrainingPlanCandidates(a, b);
+    });
+    const selected = eligible[0];
+    selected.fastestCalendarDays = fastestCalendarDays;
+    selected.prioritySlackDays = allowedSlack;
+    selected.priorityTradeoffDays = Math.max(0, selected.optimizationMetrics.calendarDays - fastestCalendarDays);
+    return selected;
+}
+
 function getTrainingAllocationProfileLabel(plan) {
     const modeLabel = plan?.allocationMode === 'priority'
         ? '强优先级'
@@ -13047,7 +13099,7 @@ function getTrainingAllocationProfileLabel(plan) {
     return `${modeLabel} · 当前优先级`;
 }
 
-function buildBestTrainingPlanForResources(includeExtra, universalCandyOverride, futureWeeks = 0, weeklyUniversalCandyS = 0) {
+function buildTrainingPlanCandidatesForResources(includeExtra, universalCandyOverride, futureWeeks = 0, weeklyUniversalCandyS = 0) {
     // 固定保留完全不看优先级的整体基准；此外逐级截断当前优先级，确保某只从 N 升到 N+1 后，
     // “仍按 N 调度”的旧类方案不会从候选集合中消失。
     const selectedPriorities = (trainingPlannerState.selectedIds || []).map(id => (
@@ -13065,7 +13117,7 @@ function buildBestTrainingPlanForResources(includeExtra, universalCandyOverride,
             profiles.push({ allocationMode, priorityMode: 'capped', priorityCap: cap, key: `${allocationMode}-cap${cap}` });
         });
     }
-    let best = null;
+    const candidates = [];
     profiles.forEach(profile => {
         const plan = buildTrainingPlan(includeExtra, universalCandyOverride, profile);
         plan.allocationProfile = profile.key;
@@ -13073,9 +13125,15 @@ function buildBestTrainingPlanForResources(includeExtra, universalCandyOverride,
         plan.rows.forEach((row, index) => {
             row.futureUniversalAvailabilityDay = plan.optimizationMetrics.rowFutureAvailabilityDays[index] || 0;
         });
-        if (!best || compareTrainingPlanCandidates(plan, best) < 0) best = plan;
+        candidates.push(plan);
     });
-    return best;
+    return candidates;
+}
+
+function buildBestTrainingPlanForResources(includeExtra, universalCandyOverride, futureWeeks = 0, weeklyUniversalCandyS = 0) {
+    return selectTrainingPlanCandidate(
+        buildTrainingPlanCandidatesForResources(includeExtra, universalCandyOverride, futureWeeks, weeklyUniversalCandyS)
+    );
 }
 
 function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
@@ -13101,11 +13159,12 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
         return plan;
     }
 
-    let best = null;
+    const candidatePool = [];
+    let strictBestCalendarDays = Infinity;
     // Lv.1→70 即使是减经验性格，也远低于 260 周；此上限同时防止异常输入拖慢页面。
     for (let weeks = 0; weeks <= 260; weeks++) {
         const earnedUniversal = weeks * weeklyIncome;
-        const plan = buildBestTrainingPlanForResources(
+        const plans = buildTrainingPlanCandidatesForResources(
             includeExtra,
             {
                 s: currentUniversal + earnedUniversal,
@@ -13116,23 +13175,26 @@ function buildTrainingPlanWithWeeklyUniversal(includeExtra = true) {
             weeks,
             weeklyIncome
         );
-        const metrics = plan.optimizationMetrics;
-        const candidate = Object.assign(plan, {
-            projectedUniversalWeeks: weeks,
-            projectedUniversalCandyS: earnedUniversal,
-            theoreticalSleepNights: metrics.theoreticalSleepNights,
-            completionNights: metrics.calendarDays
+        plans.forEach(plan => {
+            const metrics = plan.optimizationMetrics;
+            Object.assign(plan, {
+                projectedUniversalWeeks: weeks,
+                projectedUniversalCandyS: earnedUniversal,
+                theoreticalSleepNights: metrics.theoreticalSleepNights,
+                completionNights: metrics.calendarDays
+            });
+            plan.rows.forEach(row => {
+                row.recommendedCompletionDay = Math.max(
+                    Number(row.completionDay) || 0,
+                    Number(row.futureUniversalAvailabilityDay) || 0
+                );
+            });
+            strictBestCalendarDays = Math.min(strictBestCalendarDays, metrics.calendarDays);
+            candidatePool.push(plan);
         });
-        candidate.rows.forEach(row => {
-            row.recommendedCompletionDay = Math.max(
-                Number(row.completionDay) || 0,
-                Number(row.futureUniversalAvailabilityDay) || 0
-            );
-        });
-        if (!best || compareTrainingPlanCandidates(candidate, best) < 0) best = candidate;
-        if (best && weeks * 7 > best.completionNights + 28) break;
+        if (Number.isFinite(strictBestCalendarDays) && weeks * 7 > strictBestCalendarDays + 28) break;
     }
-    return best || buildBestTrainingPlanForResources(
+    return selectTrainingPlanCandidate(candidatePool) || buildBestTrainingPlanForResources(
         includeExtra,
         { s: currentUniversal, m: currentUniversalM, l: currentUniversalL, currentSpeciesCapacity: currentUniversalSpeciesCapacity },
         0,
@@ -13159,6 +13221,10 @@ function calculateAndRenderTrainingPlanner(persist = true) {
     const extraShards = Math.max(0, plan.totals.netShards - baseline.totals.netShards);
     const availableSleepSlots = Math.max(1, Math.min(5, Math.floor(Number(trainingPlannerState.sleepSlotCount) || 5)));
     const availableTeamEquivalent = plan.totals.allSleepSlotNights / availableSleepSlots;
+    const fastestCalendarDays = Number.isFinite(Number(plan.fastestCalendarDays))
+        ? Number(plan.fastestCalendarDays)
+        : Number(plan.completionNights) || 0;
+    const priorityTradeoffDays = Math.max(0, Number(plan.priorityTradeoffDays) || 0);
     const hasUniversalCandy = plan.universalCandySAvailable > 0
         || plan.universalCandyMAvailable > 0
         || plan.universalCandyLAvailable > 0
@@ -13180,12 +13246,15 @@ function calculateAndRenderTrainingPlanner(persist = true) {
             ['礼物糖期望', `${formatTrainingNumber(plan.totals.napGiftSpeciesCandyExpected)} 颗`, 'text-fuchsia-700'],
             ['礼物梦碎期望', formatTrainingNumber(plan.totals.napGiftShardsExpected), 'text-emerald-700'],
             ['推荐完成时间', `${formatTrainingNumber(plan.completionNights)} 天`, 'text-violet-700'],
+            ['绝对最快工期', `${formatTrainingNumber(fastestCalendarDays)} 天`, 'text-slate-700'],
+            ['优先级工期取舍', priorityTradeoffDays ? `+${formatTrainingNumber(priorityTradeoffDays)} 天` : '未延后', priorityTradeoffDays ? 'text-rose-700' : 'text-emerald-700'],
             ['择优路线', getTrainingAllocationProfileLabel(plan), 'text-indigo-700'],
             [`约合满${availableSleepSlots}席`, `${availableTeamEquivalent.toFixed(1)} 晚`, 'text-violet-500'],
             ['万能糖换出', `${formatTrainingNumber(plan.universalSpeciesUsed)} 颗`, 'text-violet-700'],
             ['净梦碎需求', formatTrainingNumber(plan.totals.netShards), 'text-rose-700']
         ].map(([label, value, color]) => `<div class="bg-white border border-slate-200 rounded-2xl p-3"><div class="text-[9px] font-black text-slate-400">${label}</div><div class="text-sm font-black ${color} mt-1">${value}</div></div>`).join('')}
     </section>
+    ${priorityTradeoffDays > 0 ? `<div class="bg-rose-50 border border-rose-200 rounded-2xl px-4 py-3 text-xs font-bold text-rose-800"><i class="fa-solid fa-scale-balanced"></i> 绝对最快可在 <strong>${formatTrainingNumber(fastestCalendarDays)}天</strong> 完成全队；当前方案为了让高优先级个体更早完成，使用了你允许的工期余量，预计全队晚 <strong>${formatTrainingNumber(priorityTradeoffDays)}天</strong> 完成（设置上限 ${formatTrainingNumber(plan.prioritySlackDays)}天）。</div>` : `<div class="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 text-xs font-bold text-emerald-800"><i class="fa-solid fa-circle-check"></i> 当前优先级安排没有牺牲全队最快工期；全队仍按 ${formatTrainingNumber(fastestCalendarDays)}天 完成。</div>`}
     ${hasUniversalCandy ? `<div class="bg-violet-50 border border-violet-200 rounded-2xl px-4 py-3 text-xs font-bold text-violet-800"><i class="fa-solid fa-gift"></i>
         本方案预计使用万能糖 <strong>S ${formatTrainingNumber(plan.universalCandySUsed)}</strong> 个、<strong>M ${formatTrainingNumber(plan.universalCandyMUsed)}</strong> 个、<strong>L ${formatTrainingNumber(plan.universalCandyLUsed)}</strong> 个，共换出 ${formatTrainingNumber(plan.universalConvertedSpecies)} 颗宝可梦糖果，其中本次培养使用 ${formatTrainingNumber(plan.universalSpeciesUsed)} 颗${plan.universalConvertedLeftover ? `，兑换后余下 ${formatTrainingNumber(plan.universalConvertedLeftover)} 颗` : ''}。
         ${trainingPlannerState.includeWeeklyUniversalCandy ? `理论培养期间经过 <strong>${formatTrainingNumber(plan.projectedUniversalWeeks)}</strong> 个完整周，预计另获得万能糖S <strong>${formatTrainingNumber(plan.projectedUniversalCandyS)}</strong> 个。` : ''}
@@ -13213,7 +13282,7 @@ function calculateAndRenderTrainingPlanner(persist = true) {
         <tbody>${plan.rows.slice().sort((a, b) => b.priority - a.priority || (a.recommendedCompletionDay ?? Infinity) - (b.recommendedCompletionDay ?? Infinity)).map((row, idx) => `<tr class="${idx % 2 ? 'bg-slate-50' : 'bg-white'} border-t border-slate-100"><td class="px-3 py-2"><div class="font-black text-slate-800">${escapeHtml(row.name)}</div><div class="text-[9px] font-bold text-slate-400">${escapeHtml(row.group)}糖果 · 经验×${row.expFactor} · ${getTrainingNatureLabel(row.nature)} · ${getTrainingNapStrategyLabel(row.napStrategy)}${row.sleepBonusUnlockLevel ? ` · 自身词条Lv.${row.sleepBonusUnlockLevel}` : ''}</div></td><td class="text-center px-2 py-2 text-rose-700 font-black">${row.priority}</td><td class="text-center px-2 py-2 font-black">${row.currentLevel}→${row.targetLevel}</td><td class="text-center px-2 py-2 text-emerald-700 font-black">${row.recommendedCompletionDay > 0 ? `第${formatTrainingNumber(row.recommendedCompletionDay)}天<br><span class="text-[8px]">约${formatTrainingNumber(Math.ceil(row.recommendedCompletionDay / 7))}周</span>${row.futureUniversalSpeciesCandy ? `<br><span class="text-[8px] text-violet-600">含未来万能糖 · 最晚第${formatTrainingNumber(row.futureUniversalAvailabilityDay)}天可用</span>` : ''}` : '立即完成'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.initialMissing)}</td><td class="text-center px-2 py-2 text-teal-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napWeeks)}周<br><span class="text-[8px]">${formatTrainingNumber(row.napExp)} EXP · ${formatTrainingNumber(row.napExpPerDay)}/日</span>` : '0'}</td><td class="text-center px-2 py-2 text-fuchsia-700 font-black">${row.napWeeks ? `${formatTrainingNumber(row.napGiftSpeciesCandyExpected)}糖<br><span class="text-[8px]">用${formatTrainingNumber(row.napGiftCandyUsed)} · ${formatTrainingNumber(row.napGiftShardsExpected)}梦碎</span>` : '0'}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyNormal)}</td><td class="text-right px-2 py-2 text-amber-700 font-black">${formatTrainingNumber(row.candyBoosted)}</td><td class="text-right px-2 py-2 text-violet-700 font-black">${formatTrainingNumber(row.universalSpeciesCandy)}</td><td class="text-right px-2 py-2">${formatTrainingNumber(row.candyExp + row.napGiftCandyExp)}</td><td class="text-right px-2 py-2 text-sky-700 font-black">${formatTrainingNumber(row.sleepExp)}</td><td class="text-center px-2 py-2 text-amber-700 font-black">${row.sleepPerNight === row.sleepPerNightEnd ? formatTrainingNumber(row.sleepPerNight) : `${formatTrainingNumber(row.sleepPerNight)}→${formatTrainingNumber(row.sleepPerNightEnd)}`}<br><span class="text-[8px]">${row.sleepBonusCountStart === row.sleepBonusCountEnd ? row.sleepBonusCountStart : `${row.sleepBonusCountStart}→${row.sleepBonusCountEnd}`}个</span></td><td class="text-right px-2 py-2 text-indigo-700 font-black">${formatTrainingNumber(row.sleepNights)}</td><td class="text-right px-3 py-2">${formatTrainingNumber(row.netShards)}<br><span class="text-[8px] text-slate-400">毛${formatTrainingNumber(row.shards)}</span></td></tr>`).join('')}</tbody></table>
     </section>
     <div class="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-[9px] text-slate-500 font-bold leading-relaxed">
-        方案选择先尽量缩短全队全部完成的日历时间；整体工期相同时，再优先缩短高优先级个体的完成时间，并继续比较全体完成时间总和。系统会尝试整体削峰、平衡分配和强优先级三种糖果路线，并固定保留完全不看优先级的整体基准及较低优先级截断路线；提高某只优先级时，原先同层级的高效路线不会从候选中消失。睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟玩家设置的1～5个可用席位，培养对象与睡眠EXP辅助合计不会超过该数量；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛每七天重新规划：具体周指定优先级最高，其次是长期驻岛，最后才是自动收益判断；“该周不使用”只暂停对应周。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。未来每周万能糖按实际分配顺序落到各自的七天节点，不再把所有使用者统一推迟到规划的最后一周。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
+        系统先找出全队绝对最快工期，再从不超过玩家所设“可接受全队延后”的候选中，优先缩短高优先级个体的完成时间，并继续比较全体完成时间总和；设为0天时只会在同工期方案之间使用优先级。系统会尝试整体削峰、平衡分配和强优先级三种糖果路线，并固定保留完全不看优先级的整体基准及较低优先级截断路线；提高某只优先级时，原先同层级的高效路线不会从候选中消失。睡眠EXP奖励对当晚全队生效，每个已解锁词条+14%并加算叠加。系统会逐日模拟玩家设置的1～5个可用席位，培养对象与睡眠EXP辅助合计不会超过该数量；培养中达到词条解锁级后，从下一晚开始自动参与编队评估。午睡岛每七天重新规划：具体周指定优先级最高，其次是长期驻岛，最后才是自动收益判断；“该周不使用”只暂停对应周。升级经验倍率按普通累计经验的1/1.5/1.8/2.2倍逐级取整；午睡岛的每日150 EXP受性格±18%影响，但不受睡眠EXP词条影响。礼物使用等概率期望，实际不是保底；属性糖按4个本系糖折算，礼物万能糖S默认用于当期驻岛个体，礼物糖按普通糖计算。万能糖 S/M/L 按3/20/100颗折算，并优先选择兑换溢出最少的组合。未来每周万能糖按实际分配顺序落到各自的七天节点，不再把所有使用者统一推迟到规划的最后一周。增强糖按普通单颗经验翻倍（60/50/42）且单颗梦碎×4，每周共享额度350颗。梦碎目前依据累计梦碎表按等级区间折算，属于第一版估算口径。
     </div>`;
 }
 
