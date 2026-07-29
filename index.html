@@ -11980,6 +11980,7 @@ let sleepTypePlannerState = {
     nextSession: '一觉',
     updatedAt: ''
 };
+let sleepTypeSimulationProfile = null;
 
 function isSleepTypeRecordLog(log) {
     return !!(log && log.type === 'sleep_type_record');
@@ -12171,6 +12172,193 @@ function calculateSleepTypeHistoryStats(records = getRecentCompleteSleepTypeReco
     return { count: complete.length, averages, deviations, records: complete };
 }
 
+function getSleepTypeWindowStats(priorMeasurements = []) {
+    const windowRecords = (Array.isArray(priorMeasurements) ? priorMeasurements : []).slice(-30);
+    const completeRecords = windowRecords.filter(hasCompleteSleepTypePercentages);
+    return {
+        windowRecords,
+        completeRecords,
+        windowCount: windowRecords.length,
+        completeCount: completeRecords.length,
+        fullWindow: windowRecords.length === 30 && completeRecords.length === 30,
+        stats: calculateSleepTypeHistoryStats(completeRecords)
+    };
+}
+
+function rankSleepTypeDeviationCandidates(percentages = {}, averages = {}) {
+    const deviations = Object.fromEntries(SLEEP_TYPE_KEYS.map(type => [
+        type,
+        Number(percentages?.[type]) - Number(averages?.[type])
+    ]));
+    const ranking = SLEEP_TYPE_KEYS.slice().sort((a, b) => (
+        deviations[b] - deviations[a] ||
+        Number(percentages?.[b]) - Number(percentages?.[a]) ||
+        SLEEP_TYPE_KEYS.indexOf(a) - SLEEP_TYPE_KEYS.indexOf(b)
+    ));
+    return {
+        deviations,
+        ranking,
+        basicType: ranking[0],
+        correctionType: ranking[1],
+        thirdType: ranking[2]
+    };
+}
+
+function getSleepTypeActualMode(actualResult, ranking = []) {
+    const actual = normalizeSleepTypeResult(actualResult);
+    if (actual === 'unknown') return 'unknown';
+    if (actual === 'balanced') return 'balanced';
+    const index = ranking.indexOf(actual);
+    if (index === 0) return 'direct';
+    if (index === 1) return 'second';
+    return 'unexplained';
+}
+
+function getSleepTypeModeResult(mode, ranking = []) {
+    if (mode === 'balanced') return 'balanced';
+    if (mode === 'second') return ranking[1] || ranking[0] || 'unknown';
+    return ranking[0] || 'unknown';
+}
+
+function buildSleepTypeCorrectionModel(auditRows = [], basicType = null) {
+    const eligible = (Array.isArray(auditRows) ? auditRows : []).filter(row => (
+        row?.testable && ['direct', 'second', 'balanced', 'unexplained'].includes(row.actualMode)
+    ));
+    const sameBasic = basicType ? eligible.filter(row => row.basicType === basicType) : [];
+    const sourceRows = sameBasic.length >= 3 ? sameBasic : eligible;
+    const counts = { direct: 0, second: 0, balanced: 0, unexplained: 0 };
+    sourceRows.forEach(row => { counts[row.actualMode] += 1; });
+    const sampleCount = sourceRows.length;
+    const selectableScores = {
+        direct: counts.direct + 2,
+        second: counts.second + 0.75,
+        balanced: counts.balanced + 0.75
+    };
+    const predictedMode = ['direct', 'second', 'balanced'].sort((a, b) => (
+        selectableScores[b] - selectableScores[a] ||
+        ['direct', 'second', 'balanced'].indexOf(a) - ['direct', 'second', 'balanced'].indexOf(b)
+    ))[0];
+    const rates = Object.fromEntries(Object.keys(counts).map(mode => [
+        mode,
+        sampleCount ? counts[mode] / sampleCount : 0
+    ]));
+    return {
+        counts,
+        rates,
+        sampleCount,
+        sameBasicSampleCount: sameBasic.length,
+        scope: sameBasic.length >= 3 ? 'same_basic' : 'all',
+        predictedMode
+    };
+}
+
+function backtestSleepTypeHistory(records = getVisibleSleepTypeRecords()) {
+    const chronological = (Array.isArray(records) ? records : [])
+        .slice()
+        .sort((a, b) => getSleepTypeRecordSortValue(a).localeCompare(getSleepTypeRecordSortValue(b)));
+    const priorMeasurements = [];
+    const learnedRows = [];
+    const rows = [];
+
+    chronological.forEach(record => {
+        const normalized = normalizeSleepTypeRecord(record);
+        const windowInfo = getSleepTypeWindowStats(priorMeasurements);
+        const actual = normalizeSleepTypeResult(normalized.result);
+        let row = {
+            key: getSleepTypeRecordKey(normalized.date, normalized.session),
+            record: normalized,
+            actual,
+            testable: false,
+            reason: hasCompleteSleepTypePercentages(normalized) ? 'no_prior_baseline' : 'missing_percentages',
+            windowCount: windowInfo.windowCount,
+            completeCount: windowInfo.completeCount,
+            fullWindow: windowInfo.fullWindow
+        };
+
+        if (hasCompleteSleepTypePercentages(normalized) && windowInfo.completeCount > 0 && actual !== 'unknown') {
+            const ranked = rankSleepTypeDeviationCandidates(normalized.percentages, windowInfo.stats.averages);
+            const correctionModel = buildSleepTypeCorrectionModel(learnedRows, ranked.basicType);
+            const adaptiveResult = getSleepTypeModeResult(correctionModel.predictedMode, ranked.ranking);
+            const actualMode = getSleepTypeActualMode(actual, ranked.ranking);
+            row = Object.assign(row, ranked, {
+                testable: true,
+                reason: '',
+                baseline: windowInfo.stats.averages,
+                actualMode,
+                correctionModel,
+                adaptiveResult,
+                basicHit: actual === ranked.basicType,
+                adaptiveHit: actual === adaptiveResult,
+                candidateCovered: actual === ranked.basicType || actual === ranked.correctionType || actual === 'balanced'
+            });
+            learnedRows.push(row);
+        }
+        rows.push(row);
+        priorMeasurements.push(normalized);
+    });
+
+    const evaluated = rows.filter(row => row.testable);
+    const counts = { direct: 0, second: 0, balanced: 0, unexplained: 0 };
+    evaluated.forEach(row => { counts[row.actualMode] += 1; });
+    const total = evaluated.length;
+    const fullWindowCount = evaluated.filter(row => row.fullWindow).length;
+    const basicHits = evaluated.filter(row => row.basicHit).length;
+    const adaptiveHits = evaluated.filter(row => row.adaptiveHit).length;
+    const covered = evaluated.filter(row => row.candidateCovered).length;
+    return {
+        rows,
+        byKey: new Map(rows.map(row => [row.key, row])),
+        counts,
+        total,
+        fullWindowCount,
+        basicHits,
+        adaptiveHits,
+        covered,
+        basicAccuracy: total ? basicHits / total : 0,
+        adaptiveAccuracy: total ? adaptiveHits / total : 0,
+        candidateCoverage: total ? covered / total : 0
+    };
+}
+
+function buildSleepTypeClassificationPrediction(percentages = {}, records = getVisibleSleepTypeRecords()) {
+    const normalizedPercentages = {};
+    SLEEP_TYPE_KEYS.forEach(type => {
+        normalizedPercentages[type] = Math.max(0, Math.min(100, Number(percentages?.[type]) || 0));
+    });
+    const total = SLEEP_TYPE_KEYS.reduce((sum, type) => sum + normalizedPercentages[type], 0);
+    if (total <= 0) return { ok: false, reason: 'empty' };
+    SLEEP_TYPE_KEYS.forEach(type => {
+        normalizedPercentages[type] = normalizedPercentages[type] / total * 100;
+    });
+
+    const visible = (Array.isArray(records) ? records : []).slice();
+    const currentWindow = visible.slice(0, 30).reverse();
+    const windowInfo = getSleepTypeWindowStats(currentWindow);
+    if (!windowInfo.completeCount) return { ok: false, reason: 'no_baseline', percentages: normalizedPercentages };
+    const ranked = rankSleepTypeDeviationCandidates(normalizedPercentages, windowInfo.stats.averages);
+    const backtest = backtestSleepTypeHistory(visible);
+    const correctionModel = buildSleepTypeCorrectionModel(backtest.rows, ranked.basicType);
+    const adaptiveResult = getSleepTypeModeResult(correctionModel.predictedMode, ranked.ranking);
+    const correctionRate = correctionModel.sampleCount
+        ? 1 - correctionModel.rates.direct
+        : 0;
+    const riskLevel = correctionModel.sampleCount < 4
+        ? '样本不足'
+        : (correctionRate >= 0.45 ? '较高' : (correctionRate >= 0.2 ? '中等' : '较低'));
+    return Object.assign({
+        ok: true,
+        percentages: normalizedPercentages,
+        baseline: windowInfo.stats.averages,
+        baselineCount: windowInfo.completeCount,
+        fullWindow: windowInfo.fullWindow,
+        backtest,
+        correctionModel,
+        adaptiveResult,
+        correctionRate,
+        riskLevel
+    }, ranked);
+}
+
 function getSleepTypeCandidateProfile(type, completeRecords = getRecentCompleteSleepTypeRecords(30)) {
     const matching = completeRecords.filter(record => record.result === type);
     if (!matching.length) return Object.assign({}, SLEEP_TYPE_FALLBACK_PROFILES[type]);
@@ -12289,6 +12477,86 @@ function getSleepTypeResultBadge(result) {
     };
     const key = normalizeSleepTypeResult(result);
     return `<span class="inline-flex rounded-lg border px-2 py-1 text-[9px] font-black ${styles[key]}">${SLEEP_TYPE_RESULT_META[key]}</span>`;
+}
+
+function formatSleepTypeRate(value) {
+    const number = Number(value);
+    return `${(Number.isFinite(number) ? number * 100 : 0).toFixed(0)}%`;
+}
+
+function getSleepTypeBacktestBadge(row) {
+    if (!row?.testable) {
+        const label = row?.reason === 'missing_percentages' ? '缺少比例' : '缺少此前基准';
+        return `<span class="rounded-lg bg-slate-50 border border-slate-200 px-2 py-1 text-[8px] font-black text-slate-400">${label}</span>`;
+    }
+    const meta = {
+        direct: ['基础命中', 'bg-emerald-50 border-emerald-100 text-emerald-700'],
+        second: ['第二候选纠偏', 'bg-sky-50 border-sky-100 text-sky-700'],
+        balanced: ['无特征纠偏', 'bg-violet-50 border-violet-100 text-violet-700'],
+        unexplained: ['当前模型未解释', 'bg-rose-50 border-rose-100 text-rose-700']
+    };
+    const [label, style] = meta[row.actualMode] || meta.unexplained;
+    return `<span class="rounded-lg border px-2 py-1 text-[8px] font-black ${style}">${label}${row.fullWindow ? '' : ' · 部分窗口'}</span>`;
+}
+
+function renderSleepTypePredictionHtml(prediction) {
+    if (!prediction?.ok) {
+        const text = prediction?.reason === 'no_baseline'
+            ? '还没有可用于计算个人基准的完整比例记录。'
+            : '请输入三种睡眠比例。';
+        return `<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-[10px] font-bold text-slate-400">${text}</div>`;
+    }
+    const model = prediction.correctionModel;
+    const sampleText = model.sampleCount
+        ? `${model.sampleCount}条${model.scope === 'same_basic' ? '同基础类型' : '可回测'}历史`
+        : '暂无可回测历史';
+    const rateRows = [
+        ['基础第一候选', model.rates.direct, 'text-emerald-700'],
+        ['改判第二候选', model.rates.second, 'text-sky-700'],
+        ['改判无特征', model.rates.balanced, 'text-violet-700'],
+        ['其他未解释', model.rates.unexplained, 'text-rose-700']
+    ].map(([label, rate, color]) => `<div class="rounded-xl bg-white border border-slate-100 px-2 py-2"><div class="text-[8px] font-black text-slate-400">${label}</div><div class="text-sm font-black font-mono ${color}">${formatSleepTypeRate(rate)}</div></div>`).join('');
+    const deviationRows = prediction.ranking.map((type, index) => `
+        <div class="flex items-center justify-between gap-2 rounded-xl border ${index === 0 ? 'border-emerald-100 bg-emerald-50/60' : (index === 1 ? 'border-sky-100 bg-sky-50/60' : 'border-slate-100 bg-white')} px-3 py-2">
+            <div><div class="text-[9px] font-black text-slate-700">${index === 0 ? '① 基础候选' : (index === 1 ? '② 隐藏纠偏候选' : '③ 其余类型')}：${SLEEP_TYPE_META[type].label}</div><div class="text-[8px] font-bold text-slate-400">本觉 ${formatSleepTypePercent(prediction.percentages[type])} · 基准 ${formatSleepTypePercent(prediction.baseline[type])}</div></div>
+            <div class="text-sm font-black font-mono ${prediction.deviations[type] >= 0 ? 'text-emerald-700' : 'text-rose-500'}">${prediction.deviations[type] >= 0 ? '+' : ''}${prediction.deviations[type].toFixed(1)}</div>
+        </div>
+    `).join('');
+    return `<div class="space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-start">
+            <div>${deviationRows}</div>
+            <div class="rounded-2xl bg-slate-900 text-white px-4 py-3 min-w-[190px]">
+                <div class="text-[8px] font-black text-white/60">个人自适应模型首选</div>
+                <div class="text-xl font-black mt-1">${SLEEP_TYPE_RESULT_META[prediction.adaptiveResult]}</div>
+                <div class="text-[8px] font-bold text-white/60 mt-1">隐藏纠偏风险：${prediction.riskLevel}</div>
+                <div class="text-[8px] font-bold text-white/50">${sampleText}</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">${rateRows}</div>
+        <div class="rounded-xl bg-amber-50 border border-amber-100 px-3 py-2 text-[8px] font-bold text-amber-800">“个人自适应模型首选”只使用这条记录之前已经发生的个人历史规律；第二候选即使本觉比例为0，也不会被提前排除。隐藏规则未公开，因此这里只给出可检验的候选与历史频率，不把它包装成确定答案。</div>
+    </div>`;
+}
+
+function renderSleepTypeBacktestSummaryHtml(backtest) {
+    if (!backtest?.total) {
+        return `<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-[10px] font-bold text-slate-400">至少需要两条具有完整比例且填写了最终判定的记录，才能开始逐觉回测。</div>`;
+    }
+    const cards = [
+        ['基础公式命中', `${backtest.basicHits}/${backtest.total}`, formatSleepTypeRate(backtest.basicAccuracy), 'text-emerald-700'],
+        ['个人自适应命中', `${backtest.adaptiveHits}/${backtest.total}`, formatSleepTypeRate(backtest.adaptiveAccuracy), 'text-indigo-700'],
+        ['纠偏候选覆盖', `${backtest.covered}/${backtest.total}`, formatSleepTypeRate(backtest.candidateCoverage), 'text-violet-700'],
+        ['完整30觉窗口', `${backtest.fullWindowCount}/${backtest.total}`, backtest.fullWindowCount ? '可严格核验' : '仍在积累', 'text-slate-700']
+    ].map(([label, count, value, color]) => `<div class="rounded-xl bg-white border border-slate-100 px-3 py-2"><div class="text-[8px] font-black text-slate-400">${label}</div><div class="text-base font-black font-mono ${color}">${value}</div><div class="text-[8px] font-bold text-slate-400">${count}</div></div>`).join('');
+    return `<div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">${cards}</div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+            <div class="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2 text-[9px] font-black text-emerald-700">基础第一 ${backtest.counts.direct}</div>
+            <div class="rounded-xl bg-sky-50 border border-sky-100 px-3 py-2 text-[9px] font-black text-sky-700">第二候选 ${backtest.counts.second}</div>
+            <div class="rounded-xl bg-violet-50 border border-violet-100 px-3 py-2 text-[9px] font-black text-violet-700">无特征 ${backtest.counts.balanced}</div>
+            <div class="rounded-xl bg-rose-50 border border-rose-100 px-3 py-2 text-[9px] font-black text-rose-700">尚未解释 ${backtest.counts.unexplained}</div>
+        </div>
+        <p class="mt-2 text-[8px] font-bold text-slate-400 leading-relaxed">回测严格按时间顺序进行：预测某一觉时只看它之前最多30次测量，不偷看当觉或未来记录。若网站尚未保存那一觉之前完整的30次数据，会标为“部分窗口”；这类结果可用于观察，但不能当作对游戏原始基准的严格复原。</p>
+    </div>`;
 }
 
 function renderSleepTypeResearchFieldsHtml(prefix, record = null) {
@@ -12415,6 +12683,9 @@ function renderSleepTypePlannerModal() {
     loadSleepTypePlannerState();
     const records = getVisibleSleepTypeRecords();
     const recommendation = buildSleepTypeRecommendation(sleepTypePlannerState, records);
+    const backtest = backtestSleepTypeHistory(records);
+    const simulationProfile = sleepTypeSimulationProfile || recommendation.candidateProfile;
+    const simulationPrediction = buildSleepTypeClassificationPrediction(simulationProfile, records);
     const resultCounts = { dozing: 0, snoozing: 0, slumbering: 0, balanced: 0, unknown: 0 };
     records.slice(0, 30).forEach(record => { resultCounts[normalizeSleepTypeResult(record.result)] += 1; });
     const today = getTodayLocalDateString();
@@ -12425,8 +12696,9 @@ function renderSleepTypePlannerModal() {
         const percentageText = hasCompleteSleepTypePercentages(record)
             ? SLEEP_TYPE_KEYS.map(type => `${SLEEP_TYPE_META[type].label}${formatSleepTypePercent(record.percentages[type])}`).join(' · ')
             : '未填写三种比例';
+        const auditRow = backtest.byKey.get(getSleepTypeRecordKey(record.date, record.session));
         return `<div class="rounded-2xl border border-slate-200 bg-white p-3 flex items-center justify-between gap-3">
-            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-black text-slate-800">${escapeHtml(record.date)} · ${escapeHtml(record.session)}</span>${getSleepTypeResultBadge(record.result)}<span class="text-[8px] font-black text-slate-400">${record.source === 'research' ? '由睡眠研究同步' : '独立录入'}</span></div><div class="text-[9px] font-bold text-slate-500 mt-1">${percentageText}</div></button>
+            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-black text-slate-800">${escapeHtml(record.date)} · ${escapeHtml(record.session)}</span>${getSleepTypeResultBadge(record.result)}${getSleepTypeBacktestBadge(auditRow)}<span class="text-[8px] font-black text-slate-400">${record.source === 'research' ? '由睡眠研究同步' : '独立录入'}</span></div><div class="text-[9px] font-bold text-slate-500 mt-1">${percentageText}${auditRow?.testable ? ` · 基础预测${SLEEP_TYPE_RESULT_META[auditRow.basicType]} · 第二候选${SLEEP_TYPE_RESULT_META[auditRow.correctionType]}` : ''}</div></button>
             <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="deleteSleepTypeRecord(this.dataset.date, this.dataset.session, event)" class="shrink-0 w-8 h-8 rounded-xl bg-rose-50 text-rose-600 border border-rose-100"><i class="fa-solid fa-trash-can"></i></button>
         </div>`;
     }).join('') : '<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs font-bold text-slate-400">还没有睡眠比例记录。可以在下方集中补录，也可以在睡眠研究里选填。</div>';
@@ -12439,6 +12711,21 @@ function renderSleepTypePlannerModal() {
                 <label class="rounded-2xl border border-sky-100 bg-sky-50 p-3 text-[10px] font-black text-sky-900">下一觉是哪一觉？<select onchange="updateSleepTypeNextSession(this.value)" class="mt-2 w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-xs font-black"><option value="一觉" ${sleepTypePlannerState.nextSession === '一觉' ? 'selected' : ''}>一觉：直接满足偏好</option><option value="二觉" ${sleepTypePlannerState.nextSession === '二觉' ? 'selected' : ''}>二觉：为未来一觉校准</option></select></label>
             </section>
             ${renderSleepTypeRecommendationHtml(recommendation)}
+            <section class="rounded-3xl border border-indigo-200 bg-indigo-50/40 p-4">
+                <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                    <div><h4 class="text-sm font-black text-indigo-950"><i class="fa-solid fa-compass text-indigo-600"></i> 下一觉判定推演</h4><p class="text-[9px] font-bold text-indigo-600 mt-0.5">输入你预计能控制出的比例，先算基础第一名，再结合个人历史估计第二候选与无特征纠偏。</p></div>
+                    <button type="button" onclick="applyRecommendedSleepTypeSimulationProfile()" class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-[9px] font-black text-indigo-700">套用当前推荐结构</button>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mt-3">
+                    ${SLEEP_TYPE_KEYS.map(type => `<label class="text-[9px] font-black text-slate-500">${SLEEP_TYPE_META[type].label}%<input id="simulation-sleep-type-${type}" type="number" min="0" max="100" step="0.1" value="${Number(simulationProfile[type] || 0).toFixed(1)}" onchange="completeSleepTypePercentageFields('simulation')" class="mt-1 w-full rounded-xl border border-indigo-100 bg-white px-3 py-2 text-sm font-black font-mono"></label>`).join('')}
+                </div>
+                <button type="button" onclick="runSleepTypeSimulationFromInputs()" class="mt-2 w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 text-xs font-black"><i class="fa-solid fa-play"></i> 按这组比例推演</button>
+                <div id="sleep-type-simulation-output" class="mt-3">${renderSleepTypePredictionHtml(simulationPrediction)}</div>
+            </section>
+            <section class="rounded-3xl border border-slate-200 bg-slate-50/60 p-4">
+                <div class="flex items-start justify-between gap-2 mb-3"><div><h4 class="text-sm font-black text-slate-900"><i class="fa-solid fa-flask-vial text-violet-600"></i> 历史逐觉回测</h4><p class="text-[9px] font-bold text-slate-500 mt-0.5">反过来检查：当时只用此前数据，我们的基础公式和个人纠偏模型能否解释实际判定。</p></div><span class="rounded-xl bg-white border border-slate-200 px-3 py-2 text-[9px] font-black text-slate-500">${backtest.total}觉可回测</span></div>
+                ${renderSleepTypeBacktestSummaryHtml(backtest)}
+            </section>
             <section class="rounded-2xl border border-slate-200 p-3"><div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-chart-column text-violet-500"></i> 最近记录概况</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">比例基准使用最近30次具有完整百分比的测量；最终判定次数使用最近30条记录。</p></div><div class="flex flex-wrap gap-1">${['dozing','snoozing','slumbering','balanced','unknown'].map(type => `<span class="rounded-lg bg-slate-50 border border-slate-200 px-2 py-1 text-[9px] font-black text-slate-600">${SLEEP_TYPE_RESULT_META[type]} ${resultCounts[type]}</span>`).join('')}</div></div></section>
             <section class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-3">
                 <div class="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3 self-start"><div class="flex items-center justify-between gap-2"><div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-pen-to-square"></i> 独立补录或修改</h4><p class="text-[8px] font-bold text-indigo-600 mt-0.5">同一日期＋同一觉只保留一条，研究端填写后也会显示在这里。</p></div><button type="button" onclick="clearSleepTypePlannerForm()" class="rounded-lg bg-white border border-indigo-100 px-2 py-1 text-[9px] font-black text-indigo-700">清空</button></div>
@@ -12453,6 +12740,31 @@ function renderSleepTypePlannerModal() {
     </div>`;
 }
 
+function runSleepTypeSimulationFromInputs() {
+    const data = readSleepTypeFields('simulation', { silent: true });
+    if (!data || data.empty || !hasCompleteSleepTypePercentages({ percentages: data.percentages })) {
+        alert('请填写合计为100%的浅浅、安然、深深比例。也可以只填两项，让系统自动补出第三项。');
+        return;
+    }
+    sleepTypeSimulationProfile = Object.assign({}, data.percentages);
+    const output = document.getElementById('sleep-type-simulation-output');
+    if (output) {
+        output.innerHTML = renderSleepTypePredictionHtml(
+            buildSleepTypeClassificationPrediction(sleepTypeSimulationProfile, getVisibleSleepTypeRecords())
+        );
+    }
+}
+
+function applyRecommendedSleepTypeSimulationProfile() {
+    const recommendation = buildSleepTypeRecommendation(sleepTypePlannerState, getVisibleSleepTypeRecords());
+    sleepTypeSimulationProfile = Object.assign({}, recommendation.candidateProfile);
+    SLEEP_TYPE_KEYS.forEach(type => {
+        const input = document.getElementById(`simulation-sleep-type-${type}`);
+        if (input) input.value = Number(sleepTypeSimulationProfile[type] || 0).toFixed(1);
+    });
+    runSleepTypeSimulationFromInputs();
+}
+
 async function openSleepTypePlannerModal() {
     document.getElementById('sleep-type-planner-modal')?.remove();
     if (currentCloudUser) {
@@ -12465,6 +12777,7 @@ async function openSleepTypePlannerModal() {
     modal.className = 'fixed inset-0 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 animate-fadeIn';
     modal.style.zIndex = '72';
     document.body.appendChild(modal);
+    sleepTypeSimulationProfile = null;
     renderSleepTypePlannerModal();
 }
 
