@@ -11983,6 +11983,7 @@ let sleepTypePlannerState = {
     includeSecondSleep: true,
     allowFakeSleepPlanning: false,
     planningSessions: 0,
+    balanceSafetyMode: 'balanced',
     updatedAt: ''
 };
 let sleepTypeSimulationProfile = null;
@@ -12019,6 +12020,7 @@ function normalizeSleepTypePlannerState(raw = {}) {
         includeSecondSleep: raw.includeSecondSleep !== false,
         allowFakeSleepPlanning: raw.allowFakeSleepPlanning === true,
         planningSessions: [0, 6, 9, 12, 15, 18].includes(Number(raw.planningSessions)) ? Number(raw.planningSessions) : 0,
+        balanceSafetyMode: ['steady', 'balanced', 'extreme'].includes(raw.balanceSafetyMode) ? raw.balanceSafetyMode : 'balanced',
         updatedAt: raw.updatedAt || ''
     };
 }
@@ -12925,6 +12927,49 @@ function getSleepTypePlanResultRank(result, state = sleepTypePlannerState) {
     return SLEEP_TYPE_KEYS.includes(result) ? normalized.preferenceRanks[result] : 4;
 }
 
+function getSleepTypeSafetySpacingMetrics(steps = [], state = sleepTypePlannerState) {
+    const normalized = normalizeSleepTypePlannerState(state);
+    const thirdTypes = SLEEP_TYPE_KEYS.filter(type => normalized.preferenceRanks[type] === 3);
+    let secondIndex = 0;
+    let thirdCount = 0;
+    let prefixPenalty = 0;
+    const thirdPositions = [];
+    (Array.isArray(steps) ? steps : []).forEach(step => {
+        if (step.slot?.session !== '二觉') return;
+        secondIndex += 1;
+        if (thirdTypes.includes(step.predictedResult)) {
+            thirdCount += 1;
+            thirdPositions.push(secondIndex);
+        }
+        const rawTarget = secondIndex * 2 / 3;
+        const target = normalized.balanceSafetyMode === 'steady'
+            ? Math.ceil(rawTarget)
+            : (normalized.balanceSafetyMode === 'extreme' ? Math.floor(rawTarget) : Math.round(rawTarget));
+        prefixPenalty += Math.abs(thirdCount - target);
+    });
+    const gaps = [];
+    let previous = 0;
+    thirdPositions.forEach(position => {
+        gaps.push(position - previous - 1);
+        previous = position;
+    });
+    gaps.push(Math.max(0, secondIndex - previous));
+    const maxGap = gaps.length ? Math.max(...gaps) : secondIndex;
+    const squaredGapPenalty = gaps.reduce((sum, gap) => sum + gap * gap, 0);
+    return {
+        mode: normalized.balanceSafetyMode,
+        thirdTypes,
+        secondSlotCount: secondIndex,
+        thirdCount,
+        thirdPositions,
+        gaps,
+        maxGap,
+        squaredGapPenalty,
+        leadingGap: thirdPositions.length ? thirdPositions[0] - 1 : secondIndex,
+        prefixPenalty
+    };
+}
+
 function getSleepTypePlanPreferenceVector(steps = [], state = sleepTypePlannerState, horizon = 1) {
     const firstCounts = { 2: 0, 3: 0, 4: 0 };
     const secondCounts = { 1: 0, 2: 0, 3: 0, 4: 0 };
@@ -12942,10 +12987,15 @@ function getSleepTypePlanPreferenceVector(steps = [], state = sleepTypePlannerSt
         if (step.actionMode === 'fake') fakeCount += 1;
         if (step.actionType === step.predictedResult) intentMatches += 1;
     });
+    const safety = getSleepTypeSafetySpacingMetrics(steps, state);
     return [
         firstCounts[4],
         firstCounts[3],
         firstCounts[2],
+        safety.prefixPenalty,
+        safety.maxGap,
+        safety.squaredGapPenalty,
+        safety.leadingGap,
         earlyFirstPenalty,
         fakeCount,
         secondCounts[4],
@@ -13090,6 +13140,7 @@ function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVi
     const thirdPreferenceTotal = thirdPreferenceTypes.reduce((sum, type) => sum + resultCounts[type], 0);
     const thirdPreferenceInFirst = thirdPreferenceTypes.reduce((sum, type) => sum + sessionResultCounts['一觉'][type], 0);
     const secondSlotCount = (best?.steps || []).filter(step => step.slot.session === '二觉').length;
+    const safetySpacing = getSleepTypeSafetySpacingMetrics(best?.steps || [], normalizedState);
     return {
         ok: !!best,
         model,
@@ -13106,6 +13157,8 @@ function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVi
         thirdPreferenceTotal,
         thirdPreferenceInFirst,
         secondSlotCount,
+        safetyMode: normalizedState.balanceSafetyMode,
+        safetySpacing,
         thirdPreferenceFitsSecond: thirdPreferenceTotal <= secondSlotCount,
         preferencePlacementSatisfied: thirdPreferenceTotal > secondSlotCount || thirdPreferenceInFirst === 0
     };
@@ -13233,6 +13286,11 @@ function renderSleepTypeFuturePlanHtml(plan, state = sleepTypePlannerState) {
     const modelLabel = plan.model.family === 'debt'
         ? `累计欠账模型（保留${(plan.model.decay * 100).toFixed(0)}%）＋${plan.model.balanceWindow}觉强制平衡`
         : `短窗口配额模型（${plan.model.windowSize ? `${plan.model.windowSize}觉` : '全历史'}）＋${plan.model.balanceWindow}觉强制平衡`;
+    const safetyModeMeta = {
+        steady: { label: '稳健提前', text: '更早开始在二觉偿还第三倾向欠账' },
+        balanced: { label: '均衡提前', text: '把第三倾向均匀分散在前中后段' },
+        extreme: { label: '极限安排', text: '允许更接近临界点后再偿还欠账' }
+    }[plan.safetyMode] || { label: '均衡提前', text: '把第三倾向均匀分散在前中后段' };
     const rows = plan.steps.map(step => {
         const profileText = step.actionMode === 'fake'
             ? '固定100 / 0 / 0'
@@ -13257,12 +13315,13 @@ function renderSleepTypeFuturePlanHtml(plan, state = sleepTypePlannerState) {
         <div class="flex flex-wrap items-center gap-2 mb-3">
             <span class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-[9px] font-black text-indigo-700">${modelLabel}</span>
             <span class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-[9px] font-black text-indigo-700">${plan.horizon}觉排程${Number(state.planningSessions) ? ' · 手动长度' : ` · 历史自动推断${plan.inferredHorizon}觉`}</span>
+            <span class="rounded-xl bg-white border border-emerald-100 px-3 py-2 text-[9px] font-black text-emerald-700">${safetyModeMeta.label} · 最大连续${plan.safetySpacing?.maxGap || 0}个二觉不安排第三倾向</span>
             ${Object.entries(plan.resultCounts).map(([type, count]) => `<span class="rounded-lg bg-white border border-slate-100 px-2 py-1 text-[8px] font-black text-slate-500">${SLEEP_TYPE_RESULT_META[type]} ${count}</span>`).join('')}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">${allocationRows}</div>
-        <div class="space-y-2 mb-3">${placementNotice}${plan.planningPhaseAdjusted ? '<div class="rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2 text-[8px] font-bold text-indigo-700">历史中存在命中数只差1条的近似平衡相位；排程选择了更能把高倾向留给一觉的相位。</div>' : ''}</div>
+        <div class="space-y-2 mb-3">${placementNotice}<div class="rounded-xl bg-emerald-50/70 border border-emerald-100 px-3 py-2 text-[8px] font-bold text-emerald-800">${safetyModeMeta.text}；第三倾向在二觉中的位置为：${plan.safetySpacing?.thirdPositions?.length ? plan.safetySpacing.thirdPositions.map(position => `第${position}个二觉`).join('、') : '本周期无需安排'}。</div>${plan.planningPhaseAdjusted ? '<div class="rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2 text-[8px] font-bold text-indigo-700">历史中存在命中数只差1条的近似平衡相位；排程选择了更能把高倾向留给一觉的相位。</div>' : ''}</div>
         <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white"><table class="w-full min-w-[620px] text-[9px]"><thead class="bg-slate-900 text-white"><tr><th class="px-3 py-2 text-left">顺序</th><th class="px-3 py-2 text-left">建议控制的结构</th><th class="px-3 py-2 text-left">模型预测判定</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <p class="mt-2 text-[8px] font-bold text-slate-500 leading-relaxed">排程先满足强制平衡，再按分层规则分配：先最小化一觉中的第三倾向次数，再最小化一觉中的第二倾向次数，最后才优化二觉顺序与具体结构。因此只要二觉位置足够且平衡相位允许，第三倾向不会进入一觉。</p>
+        <p class="mt-2 text-[8px] font-bold text-slate-500 leading-relaxed">排程先满足强制平衡，再按分层规则分配：先保证第三倾向尽量不进入一觉，再按所选提前量把它均匀穿插到二觉，避免等到欠账临界点才集中补偿；最后才优化第二倾向和具体结构。</p>
     </div>`;
 }
 
@@ -13489,10 +13548,11 @@ function renderSleepTypePlannerModal() {
             <section class="rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-violet-50 p-4">
                 <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3 mb-3">
                     <div><h4 class="text-sm font-black text-indigo-950"><i class="fa-solid fa-route text-indigo-600"></i> 连续多觉排程</h4><p class="text-[9px] font-bold text-indigo-600 mt-0.5">从已录入历史反推平衡周期；优化整段结果，同时让一觉比二觉更优先满足你的类型倾向。</p></div>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[9px] font-black">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 text-[9px] font-black">
                         <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600"><input type="checkbox" onchange="updateSleepTypePlanSetting('includeSecondSleep', this.checked)" ${sleepTypePlannerState.includeSecondSleep ? 'checked' : ''}> 计划中包含二觉</label>
                         <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600"><input type="checkbox" onchange="updateSleepTypePlanSetting('allowFakeSleepPlanning', this.checked)" ${sleepTypePlannerState.allowFakeSleepPlanning ? 'checked' : ''}> 允许规划假睡</label>
                         <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600">排程长度<select onchange="updateSleepTypePlanSetting('planningSessions', this.value)" class="ml-1 bg-white font-black"><option value="0" ${sleepTypePlannerState.planningSessions === 0 ? 'selected' : ''}>历史自动</option>${[6,9,12,15,18].map(value => `<option value="${value}" ${sleepTypePlannerState.planningSessions === value ? 'selected' : ''}>${value}觉</option>`).join('')}</select></label>
+                        <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600">平衡提前量<select onchange="updateSleepTypePlanSetting('balanceSafetyMode', this.value)" class="ml-1 bg-white font-black"><option value="steady" ${sleepTypePlannerState.balanceSafetyMode === 'steady' ? 'selected' : ''}>稳健</option><option value="balanced" ${sleepTypePlannerState.balanceSafetyMode === 'balanced' ? 'selected' : ''}>均衡</option><option value="extreme" ${sleepTypePlannerState.balanceSafetyMode === 'extreme' ? 'selected' : ''}>极限</option></select></label>
                     </div>
                 </div>
                 ${renderSleepTypeFuturePlanHtml(futurePlan, sleepTypePlannerState)}
@@ -13587,6 +13647,8 @@ function updateSleepTypePlanSetting(key, value) {
     } else if (key === 'planningSessions') {
         const parsed = Number(value);
         sleepTypePlannerState.planningSessions = [0, 6, 9, 12, 15, 18].includes(parsed) ? parsed : 0;
+    } else if (key === 'balanceSafetyMode') {
+        sleepTypePlannerState.balanceSafetyMode = ['steady', 'balanced', 'extreme'].includes(value) ? value : 'balanced';
     } else {
         return;
     }
