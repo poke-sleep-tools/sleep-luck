@@ -11987,6 +11987,7 @@ let sleepTypePlannerState = {
     updatedAt: ''
 };
 let sleepTypeSimulationProfile = null;
+let sleepTypeUnifiedRecommendation = null;
 let sleepTypePlannerEditingRecordId = null;
 
 function isSleepTypeRecordLog(log) {
@@ -13164,6 +13165,29 @@ function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVi
     };
 }
 
+function alignSleepTypeRecommendationWithFuturePlan(baseRecommendation, futurePlan, state = sleepTypePlannerState) {
+    if (!baseRecommendation || !futurePlan?.ok || !futurePlan.steps?.length) return baseRecommendation;
+    const firstStep = futurePlan.steps[0];
+    const plannedType = SLEEP_TYPE_KEYS.includes(firstStep.actionType) ? firstStep.actionType : baseRecommendation.primary;
+    const profile = Object.assign({}, firstStep.percentages || baseRecommendation.candidateProfile);
+    const normalizedState = normalizeSleepTypePlannerState(state);
+    return Object.assign({}, baseRecommendation, {
+        state: normalizedState,
+        mode: 'planned',
+        primary: plannedType,
+        candidateProfile: profile,
+        simulatedAverages: firstStep.slot.session === '二觉'
+            ? appendSleepTypeProfileToWindow(baseRecommendation.stats.records, profile)
+            : null,
+        plannedStep: firstStep,
+        plannedSession: firstStep.slot.session,
+        plannedPredictedResult: firstStep.predictedResult,
+        plannedFake: firstStep.actionMode === 'fake',
+        plannedBalanceIntervention: !!firstStep.deterministic?.balanceGuardTriggered,
+        futurePlan
+    });
+}
+
 function formatSleepTypePercent(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return '—';
@@ -13481,6 +13505,20 @@ function syncResearchSleepTypeFields(prefix, dateInputId, sessionInputId) {
 
 function getSleepTypeRecommendationExplanation(result) {
     const primaryLabel = SLEEP_TYPE_META[result.primary].label;
+    if (result.mode === 'planned') {
+        const session = result.plannedSession || result.state.nextSession;
+        if (result.plannedFake) {
+            return `顶部推荐已与连续排程统一：当前${session}安排假睡，固定按浅浅100%、最终无特征处理；这一步只在你允许规划假睡时出现。`;
+        }
+        const predictedLabel = SLEEP_TYPE_RESULT_META[result.plannedPredictedResult] || '未确定';
+        const rank = result.state.preferenceRanks[result.primary];
+        const reason = session === '一觉'
+            ? `这是所有平衡可行路径中最符合一觉倾向的安排`
+            : (rank === 3
+                ? '这一步用于提前稀释第三倾向欠账，并把校准成本留在二觉'
+                : '这一步用于调整平衡相位，为后续一觉保留更靠前的倾向');
+        return `顶部推荐直接读取连续排程第1步：本次${session}建议争取【${primaryLabel}】结构，模型预计最终判定为【${predictedLabel}】；${reason}。`;
+    }
     const backupLabel = SLEEP_TYPE_META[result.backup].label;
     if (result.mode === 'calibration') {
         return `这次二觉建议以【${primaryLabel}】结构作为校准目标，主要目的是改善下一次一觉争取【${SLEEP_TYPE_META[result.futurePrimary].label}】时的相对偏差；【${backupLabel}】是次选。二觉推荐不等于玩家最喜欢${primaryLabel}。`;
@@ -13493,6 +13531,13 @@ function getSleepTypeRecommendationExplanation(result) {
 function renderSleepTypeRecommendationHtml(result) {
     const primaryMeta = SLEEP_TYPE_META[result.primary];
     const profile = result.candidateProfile;
+    const recommendationLabel = result.mode === 'planned'
+        ? `${result.plannedSession} · 连续排程首步`
+        : (result.mode === 'calibration' ? '二觉校准推荐' : '一觉直接推荐');
+    const recommendationTitle = result.plannedFake ? '建议安排：假睡' : `建议争取：${primaryMeta.fullLabel}`;
+    const recommendationSubtitle = result.mode === 'planned'
+        ? `${result.plannedFake ? '固定判定无特征' : `模型预计判定：${SLEEP_TYPE_RESULT_META[result.plannedPredictedResult]}`} · 与下方第1步完全一致 · 已有 ${result.completeCount}/30 次完整比例`
+        : `备用：${SLEEP_TYPE_META[result.backup].fullLabel} · 已有 ${result.completeCount}/30 次完整比例`;
     const averageCards = SLEEP_TYPE_KEYS.map(type => {
         const before = result.stats.averages[type];
         const after = result.simulatedAverages?.[type];
@@ -13500,12 +13545,12 @@ function renderSleepTypeRecommendationHtml(result) {
     }).join('');
     return `<div class="rounded-3xl border border-violet-200 bg-gradient-to-br from-violet-50 via-white to-indigo-50 p-4">
         <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-            <div><div class="text-[9px] font-black text-violet-600">${result.mode === 'calibration' ? '二觉校准推荐' : '一觉直接推荐'} · 数据置信度${result.dataConfidence}</div><div class="text-2xl font-black text-slate-900 mt-1"><i class="fa-solid ${primaryMeta.icon} text-${primaryMeta.color}-500"></i> 建议争取：${primaryMeta.fullLabel}</div><div class="text-[10px] font-bold text-slate-500 mt-1">备用：${SLEEP_TYPE_META[result.backup].fullLabel} · 已有 ${result.completeCount}/30 次完整比例</div></div>
+            <div><div class="text-[9px] font-black text-violet-600">${recommendationLabel} · 数据置信度${result.dataConfidence}</div><div class="text-2xl font-black text-slate-900 mt-1"><i class="fa-solid ${result.plannedFake ? 'fa-mask-face' : primaryMeta.icon} text-${result.plannedFake ? 'violet' : primaryMeta.color}-500"></i> ${recommendationTitle}</div><div class="text-[10px] font-bold text-slate-500 mt-1">${recommendationSubtitle}</div></div>
             <div class="rounded-2xl bg-white border border-violet-100 px-3 py-2 text-[9px] font-black text-violet-700"><div>参考目标结构</div><div class="font-mono mt-1">${SLEEP_TYPE_KEYS.map(type => `${SLEEP_TYPE_META[type].label}${formatSleepTypePercent(profile[type])}`).join(' · ')}</div></div>
         </div>
         <div class="mt-3 rounded-2xl bg-white/80 border border-white px-3 py-2 text-[10px] font-bold text-slate-600 leading-relaxed">${getSleepTypeRecommendationExplanation(result)}</div>
         <div class="grid grid-cols-3 gap-2 mt-3">${averageCards}</div>
-        <div class="mt-2 text-[8px] font-bold text-slate-400"><i class="fa-solid fa-triangle-exclamation"></i> 推荐的是“适合争取的睡眠结构”，不是保证游戏最终判定；无特征的隐藏阈值尚未公开。</div>
+        <div class="mt-2 text-[8px] font-bold text-slate-400"><i class="fa-solid fa-triangle-exclamation"></i> ${result.mode === 'planned' ? '这里与连续排程共用同一个结论；' : ''}推荐的是“适合争取的睡眠结构”，不是保证游戏最终判定；无特征的隐藏阈值尚未公开。</div>
     </div>`;
 }
 
@@ -13514,9 +13559,11 @@ function renderSleepTypePlannerModal() {
     if (!modal) return;
     loadSleepTypePlannerState();
     const records = getVisibleSleepTypeRecords();
-    const recommendation = buildSleepTypeRecommendation(sleepTypePlannerState, records);
+    const baseRecommendation = buildSleepTypeRecommendation(sleepTypePlannerState, records);
     const backtest = backtestSleepTypeHistory(records);
     const futurePlan = buildSleepTypeFuturePlan(sleepTypePlannerState, records, backtest);
+    const recommendation = alignSleepTypeRecommendationWithFuturePlan(baseRecommendation, futurePlan, sleepTypePlannerState);
+    sleepTypeUnifiedRecommendation = recommendation;
     const simulationProfile = sleepTypeSimulationProfile || recommendation.candidateProfile;
     const simulationPrediction = buildSleepTypeClassificationPrediction(simulationProfile, records, backtest);
     const resultCounts = { dozing: 0, snoozing: 0, slumbering: 0, balanced: 0, unknown: 0 };
@@ -13602,7 +13649,17 @@ function runSleepTypeSimulationFromInputs() {
 }
 
 function applyRecommendedSleepTypeSimulationProfile() {
-    const recommendation = buildSleepTypeRecommendation(sleepTypePlannerState, getVisibleSleepTypeRecords());
+    let recommendation = sleepTypeUnifiedRecommendation;
+    if (!recommendation) {
+        const records = getVisibleSleepTypeRecords();
+        const baseRecommendation = buildSleepTypeRecommendation(sleepTypePlannerState, records);
+        const backtest = backtestSleepTypeHistory(records);
+        recommendation = alignSleepTypeRecommendationWithFuturePlan(
+            baseRecommendation,
+            buildSleepTypeFuturePlan(sleepTypePlannerState, records, backtest),
+            sleepTypePlannerState
+        );
+    }
     sleepTypeSimulationProfile = Object.assign({}, recommendation.candidateProfile);
     SLEEP_TYPE_KEYS.forEach(type => {
         const input = document.getElementById(`simulation-sleep-type-${type}`);
@@ -13624,6 +13681,7 @@ async function openSleepTypePlannerModal() {
     modal.style.zIndex = '72';
     document.body.appendChild(modal);
     sleepTypeSimulationProfile = null;
+    sleepTypeUnifiedRecommendation = null;
     sleepTypePlannerEditingRecordId = null;
     renderSleepTypePlannerModal();
 }
