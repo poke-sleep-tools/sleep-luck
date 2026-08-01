@@ -12594,6 +12594,7 @@ function backtestSleepTypeHistory(records = getVisibleSleepTypeRecords()) {
     const walkForwardRows = [];
     let walkForwardModel = getDefaultDeterministicSleepTypeModel();
     evaluated.forEach(row => {
+        row.walkForwardReady = walkForwardRows.length >= 4;
         if (walkForwardRows.length >= 4 && (walkForwardRows.length === 4 || walkForwardRows.length % 5 === 0)) {
             walkForwardModel = fitDeterministicSleepTypeBalanceModel(walkForwardRows);
         }
@@ -12915,17 +12916,104 @@ function buildSleepTypePlanningSlots(state = sleepTypePlannerState, horizon = 9)
 
 function getSleepTypePlanStepUtility(result, slot, state, actionMode = 'normal', index = 0, horizon = 1) {
     const normalized = normalizeSleepTypePlannerState(state);
-    const resultRank = SLEEP_TYPE_KEYS.includes(result) ? normalized.preferenceRanks[result] : 4;
-    const preferenceValue = result === 'balanced' ? -0.25 : 4 - resultRank;
-    const sessionWeight = slot.session === '一觉' ? 12 : 2;
+    const oneSleepScore = slot.session === '一觉' ? getSleepTypeOneSleepScore(result, normalized) : 0;
     const earlyWeight = 1 + (horizon - index) / Math.max(1, horizon) * 0.25;
     const fakePenalty = actionMode === 'fake' ? 4 : 0;
-    return preferenceValue * sessionWeight * earlyWeight - fakePenalty;
+    return oneSleepScore * earlyWeight - fakePenalty;
 }
 
 function getSleepTypePlanResultRank(result, state = sleepTypePlannerState) {
     const normalized = normalizeSleepTypePlannerState(state);
     return SLEEP_TYPE_KEYS.includes(result) ? normalized.preferenceRanks[result] : 4;
+}
+
+function getSleepTypeOneSleepScore(result, state = sleepTypePlannerState) {
+    const rank = getSleepTypePlanResultRank(result, state);
+    if (rank === 1) return 100;
+    if (rank === 2) return 50;
+    return 0;
+}
+
+function getSleepTypeRecentBalanceRisk(priorRecords = [], actionType = 'dozing', state = sleepTypePlannerState) {
+    const normalized = normalizeSleepTypePlannerState(state);
+    const chronological = (Array.isArray(priorRecords) ? priorRecords : [])
+        .slice()
+        .sort((a, b) => getSleepTypeRecordSortValue(a).localeCompare(getSleepTypeRecordSortValue(b)))
+        .map(normalizeSleepTypeRecord);
+    const thirdTypes = SLEEP_TYPE_KEYS.filter(type => normalized.preferenceRanks[type] === 3);
+    const windows = [3, 4, 6, 9]
+        .filter(size => chronological.length >= Math.min(3, size))
+        .map(size => {
+            const source = chronological.slice(-size);
+            const counts = { dozing: 0, snoozing: 0, slumbering: 0 };
+            source.forEach(record => {
+                const result = normalizeSleepTypeResult(record.result);
+                if (SLEEP_TYPE_KEYS.includes(result)) counts[result] += 1;
+            });
+            const typedCount = Object.values(counts).reduce((sum, value) => sum + value, 0);
+            const minimum = Math.min(...SLEEP_TYPE_KEYS.map(type => counts[type]));
+            const maximum = Math.max(...SLEEP_TYPE_KEYS.map(type => counts[type]));
+            const actionExcess = counts[actionType] - minimum;
+            const thirdDeficit = thirdTypes.some(type => counts[type] === minimum && counts[type] < counts[actionType]);
+            const pressure = typedCount >= 2
+                ? Math.max(0, actionExcess) + (thirdDeficit ? 1 : 0) + Math.max(0, maximum - minimum - 1) * 0.5
+                : 0;
+            return { size, counts, typedCount, minimum, maximum, actionExcess, thirdDeficit, pressure };
+        });
+    const shortDanger = windows.some(row => row.size <= 4 && row.typedCount >= 2 && row.actionExcess >= 1 && row.thirdDeficit);
+    const broadDanger = windows.some(row => row.size >= 6 && row.typedCount >= 4 && row.actionExcess >= 2 && row.thirdDeficit);
+    const pressure = windows.reduce((sum, row) => sum + row.pressure * (row.size <= 4 ? 1.5 : 1), 0);
+    return {
+        actionType,
+        thirdTypes,
+        windows,
+        pressure,
+        high: shortDanger || broadDanger,
+        medium: !shortDanger && !broadDanger && pressure >= 2
+    };
+}
+
+function assessSleepTypeActionAcrossModels(action, chronologicalHistory = [], models = [], state = sleepTypePlannerState, session = '一觉') {
+    const normalized = normalizeSleepTypePlannerState(state);
+    const usableModels = Array.isArray(models) && models.length ? models : [getDefaultDeterministicSleepTypeModel()];
+    const predictions = usableModels.map(model => ({
+        model,
+        prediction: predictSleepTypeWithFixedModel(action.percentages, chronologicalHistory, model, action.mode)
+    })).filter(item => item.prediction?.ok);
+    const resultCounts = { dozing: 0, snoozing: 0, slumbering: 0, balanced: 0, unknown: 0 };
+    const scores = [];
+    predictions.forEach(item => {
+        const result = normalizeSleepTypeResult(item.prediction.result);
+        resultCounts[result] = (resultCounts[result] || 0) + 1;
+        scores.push(getSleepTypeOneSleepScore(result, normalized));
+    });
+    const modelCount = predictions.length;
+    const minScore = scores.length ? Math.min(...scores) : 0;
+    const averageScore = scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : 0;
+    const zeroScoreCount = scores.filter(value => value === 0).length;
+    const distinctResults = Object.entries(resultCounts).filter(([, count]) => count > 0).map(([result]) => result);
+    const balanceRisk = getSleepTypeRecentBalanceRisk(chronologicalHistory, action.type, normalized);
+    const actionRank = SLEEP_TYPE_KEYS.includes(action.type) ? normalized.preferenceRanks[action.type] : 4;
+    const high = session === '一觉' && (
+        zeroScoreCount > 0 ||
+        (actionRank === 1 && balanceRisk.high)
+    );
+    const medium = session === '一觉' && !high && (
+        distinctResults.length > 1 ||
+        minScore < 100 ||
+        (actionRank === 1 && balanceRisk.medium)
+    );
+    return {
+        modelCount,
+        predictions,
+        resultCounts,
+        distinctResults,
+        minScore,
+        averageScore,
+        zeroScoreCount,
+        balanceRisk,
+        riskLevel: high ? 'high' : (medium ? 'medium' : 'low')
+    };
 }
 
 function getSleepTypeSafetySpacingMetrics(steps = [], state = sleepTypePlannerState) {
@@ -12972,36 +13060,63 @@ function getSleepTypeSafetySpacingMetrics(steps = [], state = sleepTypePlannerSt
 }
 
 function getSleepTypePlanPreferenceVector(steps = [], state = sleepTypePlannerState, horizon = 1) {
-    const firstCounts = { 2: 0, 3: 0, 4: 0 };
-    const secondCounts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const resultCounts = { dozing: 0, snoozing: 0, slumbering: 0 };
+    let balancedCount = 0;
+    let highRiskFirstCount = 0;
+    let mediumRiskFirstCount = 0;
+    let zeroScoreScenarioCount = 0;
+    let oneSleepWorstScore = 0;
+    let oneSleepAverageScore = 0;
+    let oneSleepScore = 0;
+    let firstThirdCount = 0;
+    let firstBalancedCount = 0;
     let earlyFirstPenalty = 0;
     let fakeCount = 0;
     let intentMatches = 0;
     (Array.isArray(steps) ? steps : []).forEach((step, index) => {
         const rank = getSleepTypePlanResultRank(step.predictedResult, state);
+        if (SLEEP_TYPE_KEYS.includes(step.predictedResult)) resultCounts[step.predictedResult] += 1;
+        else balancedCount += 1;
         if (step.slot?.session === '一觉') {
-            if (rank >= 2) firstCounts[Math.min(4, rank)] += 1;
+            const score = getSleepTypeOneSleepScore(step.predictedResult, state);
+            const assessment = step.riskAssessment || {};
+            oneSleepScore += score;
+            oneSleepWorstScore += Number.isFinite(Number(assessment.minScore)) ? Number(assessment.minScore) : score;
+            oneSleepAverageScore += Number.isFinite(Number(assessment.averageScore)) ? Number(assessment.averageScore) : score;
+            zeroScoreScenarioCount += Number(assessment.zeroScoreCount) || 0;
+            if (assessment.riskLevel === 'high') highRiskFirstCount += 1;
+            else if (assessment.riskLevel === 'medium') mediumRiskFirstCount += 1;
+            if (rank === 3) firstThirdCount += 1;
+            if (rank >= 4) firstBalancedCount += 1;
             earlyFirstPenalty += Math.max(0, rank - 1) * Math.max(1, horizon - index);
-        } else {
-            secondCounts[Math.min(4, rank)] += 1;
         }
         if (step.actionMode === 'fake') fakeCount += 1;
         if (step.actionType === step.predictedResult) intentMatches += 1;
     });
     const safety = getSleepTypeSafetySpacingMetrics(steps, state);
+    const typedValues = Object.values(resultCounts);
+    const balanceSpread = Math.max(...typedValues) - Math.min(...typedValues);
+    const typedTotal = typedValues.reduce((sum, value) => sum + value, 0);
+    const balanceTarget = typedTotal / 3;
+    const balanceSquared = typedValues.reduce((sum, value) => sum + (value - balanceTarget) ** 2, 0);
     return [
-        firstCounts[4],
-        firstCounts[3],
-        firstCounts[2],
+        firstThirdCount,
+        firstBalancedCount,
+        highRiskFirstCount,
+        zeroScoreScenarioCount,
         safety.prefixPenalty,
         safety.maxGap,
         safety.squaredGapPenalty,
         safety.leadingGap,
+        balanceSpread,
+        balanceSquared,
+        -oneSleepWorstScore,
+        -oneSleepAverageScore,
+        -oneSleepScore,
+        mediumRiskFirstCount,
+        balancedCount,
         earlyFirstPenalty,
         fakeCount,
-        secondCounts[4],
-        secondCounts[1],
-        secondCounts[2],
         -intentMatches
     ];
 }
@@ -13018,7 +13133,7 @@ function compareSleepTypePlanCandidates(a, b, state = sleepTypePlannerState, hor
     return JSON.stringify(a.steps.map(step => step.actionType)).localeCompare(JSON.stringify(b.steps.map(step => step.actionType)));
 }
 
-function runSleepTypePlanBeam(model, chronological, slots, actions, normalizedState, horizon) {
+function runSleepTypePlanBeam(model, chronological, slots, actions, normalizedState, horizon, phaseModels = [model]) {
     let beam = [{ history: chronological, steps: [], score: 0 }];
     const beamWidth = 48;
     slots.forEach((slot, index) => {
@@ -13027,6 +13142,13 @@ function runSleepTypePlanBeam(model, chronological, slots, actions, normalizedSt
             actions.forEach(action => {
                 const prediction = predictSleepTypeWithFixedModel(action.percentages, candidate.history, model, action.mode);
                 if (!prediction.ok) return;
+                const riskAssessment = assessSleepTypeActionAcrossModels(
+                    action,
+                    candidate.history,
+                    phaseModels,
+                    normalizedState,
+                    slot.session
+                );
                 const simulatedRecord = normalizeSleepTypeRecord({
                     id: `simulated_${index}_${action.type}`,
                     date: `9999-12-${String(index + 1).padStart(2, '0')}`,
@@ -13049,7 +13171,9 @@ function runSleepTypePlanBeam(model, chronological, slots, actions, normalizedSt
                         basicType: prediction.basicType,
                         predictedResult: prediction.result,
                         fixedRule: !!prediction.fixedRule,
-                        deterministic: prediction.deterministic
+                        deterministic: prediction.deterministic,
+                        oneSleepScore: slot.session === '一觉' ? getSleepTypeOneSleepScore(prediction.result, normalizedState) : null,
+                        riskAssessment
                     }),
                     score: candidate.score + utility + intentBonus
                 };
@@ -13080,7 +13204,13 @@ function getSleepTypePlanningPhaseModels(fittedModel, audit = {}) {
         }));
     }
     const bestHits = Math.max(...candidates.map(model => model.planningPhaseHits));
-    return candidates.filter(model => model.planningPhaseHits >= bestHits - 1);
+    return candidates
+        .filter(model => model.planningPhaseHits >= bestHits - 1)
+        .sort((a, b) => (
+            b.planningPhaseHits - a.planningPhaseHits ||
+            Math.abs(Number(a.balanceOffset) - Number(fittedModel?.balanceOffset)) - Math.abs(Number(b.balanceOffset) - Number(fittedModel?.balanceOffset)) ||
+            a.balanceOffset - b.balanceOffset
+        ));
 }
 
 function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVisibleSleepTypeRecords(), backtest = null) {
@@ -13113,23 +13243,9 @@ function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVi
             percentages: { dozing: 100, snoozing: 0, slumbering: 0 }
         });
     }
-    const phaseCandidates = getSleepTypePlanningPhaseModels(fittedModel, audit)
-        .map(model => ({
-            model,
-            best: runSleepTypePlanBeam(model, chronological, slots, actions, normalizedState, horizon)
-        }))
-        .filter(candidate => candidate.best);
-    phaseCandidates.sort((a, b) => (
-        compareSleepTypePlanCandidates(a.best, b.best, normalizedState, horizon) ||
-        b.model.planningPhaseHits - a.model.planningPhaseHits ||
-        a.model.balanceOffset - b.model.balanceOffset
-    ));
-    const selectedPhase = phaseCandidates[0] || {
-        model: fittedModel,
-        best: runSleepTypePlanBeam(fittedModel, chronological, slots, actions, normalizedState, horizon)
-    };
-    const model = selectedPhase.model;
-    const best = selectedPhase.best;
+    const phaseModels = getSleepTypePlanningPhaseModels(fittedModel, audit);
+    const model = phaseModels[0] || fittedModel;
+    const best = runSleepTypePlanBeam(model, chronological, slots, actions, normalizedState, horizon, phaseModels);
     const resultCounts = { dozing: 0, snoozing: 0, slumbering: 0, balanced: 0 };
     const sessionResultCounts = {
         '一觉': { dozing: 0, snoozing: 0, slumbering: 0, balanced: 0 },
@@ -13142,11 +13258,17 @@ function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVi
     const thirdPreferenceInFirst = thirdPreferenceTypes.reduce((sum, type) => sum + sessionResultCounts['一觉'][type], 0);
     const secondSlotCount = (best?.steps || []).filter(step => step.slot.session === '二觉').length;
     const safetySpacing = getSleepTypeSafetySpacingMetrics(best?.steps || [], normalizedState);
+    const oneSleepSteps = (best?.steps || []).filter(step => step.slot.session === '一觉');
+    const oneSleepScore = oneSleepSteps.reduce((sum, step) => sum + getSleepTypeOneSleepScore(step.predictedResult, normalizedState), 0);
+    const oneSleepWorstScore = oneSleepSteps.reduce((sum, step) => sum + (Number(step.riskAssessment?.minScore) || 0), 0);
+    const highRiskFirstCount = oneSleepSteps.filter(step => step.riskAssessment?.riskLevel === 'high').length;
     return {
         ok: !!best,
         model,
         fittedModel,
         planningPhaseAdjusted: Number(model.balanceOffset) !== Number(fittedModel.balanceOffset),
+        phaseModelCount: phaseModels.length,
+        phaseModels,
         inferredHorizon,
         horizon,
         slots,
@@ -13160,6 +13282,12 @@ function buildSleepTypeFuturePlan(state = sleepTypePlannerState, records = getVi
         secondSlotCount,
         safetyMode: normalizedState.balanceSafetyMode,
         safetySpacing,
+        oneSleepCount: oneSleepSteps.length,
+        oneSleepScore,
+        oneSleepWorstScore,
+        oneSleepMaxScore: oneSleepSteps.length * 100,
+        highRiskFirstCount,
+        firstStepRisk: best?.steps?.[0]?.riskAssessment || null,
         thirdPreferenceFitsSecond: thirdPreferenceTotal <= secondSlotCount,
         preferencePlacementSatisfied: thirdPreferenceTotal > secondSlotCount || thirdPreferenceInFirst === 0
     };
@@ -13184,6 +13312,7 @@ function alignSleepTypeRecommendationWithFuturePlan(baseRecommendation, futurePl
         plannedPredictedResult: firstStep.predictedResult,
         plannedFake: firstStep.actionMode === 'fake',
         plannedBalanceIntervention: !!firstStep.deterministic?.balanceGuardTriggered,
+        plannedRiskAssessment: firstStep.riskAssessment || null,
         futurePlan
     });
 }
@@ -13219,17 +13348,20 @@ function getSleepTypeBacktestBadge(row) {
         const label = row?.reason === 'missing_percentages' ? '缺少比例' : '缺少此前基准';
         return `<span class="rounded-lg bg-slate-50 border border-slate-200 px-2 py-1 text-[8px] font-black text-slate-400">${label}</span>`;
     }
+    if (!row.walkForwardReady) {
+        return `<span class="rounded-lg bg-slate-50 border border-slate-200 px-2 py-1 text-[8px] font-black text-slate-500">样本积累期 · 不计睡前命中</span>`;
+    }
     const meta = {
         direct: '实际为基础第一',
         second: '实际为基础第二',
         balanced: '实际为无特征',
         unexplained: '实际为基础第三'
     };
-    const hit = !!row.deterministicHit;
+    const hit = !!row.walkForwardHit;
     const style = hit
         ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
         : 'bg-rose-50 border-rose-100 text-rose-700';
-    return `<span class="rounded-lg border px-2 py-1 text-[8px] font-black ${style}">${hit ? '确定性模型命中' : '确定性模型未命中'} · ${meta[row.actualMode] || meta.unexplained}${row.fullWindow ? '' : ' · 部分窗口'}</span>`;
+    return `<span class="rounded-lg border px-2 py-1 text-[8px] font-black ${style}">${hit ? '睡前向前验证命中' : '睡前向前验证未命中'} · ${meta[row.actualMode] || meta.unexplained}${row.fullWindow ? '' : ' · 部分窗口'}</span>`;
 }
 
 function renderSleepTypePredictionHtml(prediction) {
@@ -13281,7 +13413,7 @@ function renderSleepTypeBacktestSummaryHtml(backtest) {
     }
     const cards = [
         ['基础公式命中', `${backtest.basicHits}/${backtest.total}`, formatSleepTypeRate(backtest.basicAccuracy), 'text-emerald-700'],
-        ['确定性模型拟合', `${backtest.deterministicHits}/${backtest.total}`, formatSleepTypeRate(backtest.deterministicAccuracy), 'text-indigo-700'],
+        ['全样本事后拟合', `${backtest.deterministicHits}/${backtest.total}`, formatSleepTypeRate(backtest.deterministicAccuracy), 'text-indigo-700'],
         ['逐觉向前验证', `${backtest.walkForwardHits}/${backtest.total}`, formatSleepTypeRate(backtest.walkForwardAccuracy), 'text-violet-700'],
         ['假睡固定规则', `${backtest.fixedRuleHits}/${backtest.fixedRuleCount}`, backtest.fixedRuleCount ? '不参与训练' : '暂无假睡', 'text-slate-700'],
         ['交替压力测试', `安然首次第${backtest.balanceStressTest.firstSnoozingStep || '—'}觉`, backtest.balanceStressTest.passed ? '通过' : '未通过', backtest.balanceStressTest.passed ? 'text-emerald-700' : 'text-rose-700']
@@ -13299,7 +13431,7 @@ function renderSleepTypeBacktestSummaryHtml(backtest) {
             <div class="rounded-xl bg-rose-50 border border-rose-100 px-3 py-2 text-[9px] font-black text-rose-700">尚未解释 ${backtest.counts.unexplained}</div>
         </div>
         <div class="mt-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-[9px] font-black text-slate-600">当前最佳确定性候选：${mechanismLabel} · 修正强度 ${model.weight.toFixed(0)}分 · 弱信号线 ${model.neutralThreshold.toFixed(0)} · 接近线 ${model.leadThreshold.toFixed(0)}</div>
-        <p class="mt-2 text-[8px] font-bold text-slate-400 leading-relaxed">“确定性模型拟合”让多种窗口长度与欠账衰减参数从你的旧记录中竞争；强制平衡窗口也由历史命中率选择，但不会允许模型无限浅浅、深深交替。“交替压力测试”会连续输入90/0/10与10/0/90，模型必须确定性地产生安然并在后续持续偿还安然欠账，否则不能视为可用。假睡仍按固定规则单独核验。</p>
+        <p class="mt-2 text-[8px] font-bold text-slate-400 leading-relaxed">“全样本事后拟合”允许模型看到整段答案，只用于解释历史，不能证明当时预测正确；真正衡量睡前可靠性的是“逐觉向前验证”，每一觉只能使用它之前的数据。规划会同时保留多个历史证据接近的纠偏相位，并按保守结果安排一觉。假睡仍按固定规则单独核验。</p>
     </div>`;
 }
 
@@ -13315,14 +13447,26 @@ function renderSleepTypeFuturePlanHtml(plan, state = sleepTypePlannerState) {
         balanced: { label: '均衡提前', text: '把第三倾向均匀分散在前中后段' },
         extreme: { label: '极限安排', text: '允许更接近临界点后再偿还欠账' }
     }[plan.safetyMode] || { label: '均衡提前', text: '把第三倾向均匀分散在前中后段' };
-    const rows = plan.steps.map(step => {
+    const rows = plan.steps.map((step, index) => {
         const profileText = step.actionMode === 'fake'
             ? '固定100 / 0 / 0'
             : SLEEP_TYPE_KEYS.map(type => `${SLEEP_TYPE_META[type].label}${formatSleepTypePercent(step.percentages[type])}`).join(' · ');
+        const risk = step.riskAssessment;
+        const riskMeta = risk?.riskLevel === 'high'
+            ? { label: '高风险', style: 'text-rose-700 bg-rose-50 border-rose-100' }
+            : (risk?.riskLevel === 'medium'
+                ? { label: '有分歧', style: 'text-amber-700 bg-amber-50 border-amber-100' }
+                : { label: '低风险', style: 'text-emerald-700 bg-emerald-50 border-emerald-100' });
+        const phaseBreakdown = risk?.modelCount > 1
+            ? Object.entries(risk.resultCounts || {}).filter(([, count]) => count > 0).map(([type, count]) => `${SLEEP_TYPE_RESULT_META[type]}${count}`).join(' / ')
+            : '';
+        const valueText = step.slot.session === '一觉'
+            ? `一觉价值${step.oneSleepScore}分 · 保守下限${risk?.minScore ?? step.oneSleepScore}分`
+            : '二觉不计收益 · 用于平衡';
         return `<tr class="border-t border-slate-100">
             <td class="px-3 py-2 font-black text-slate-700">第${step.slot.day}天 · ${step.slot.session}</td>
             <td class="px-3 py-2"><span class="font-black ${step.actionMode === 'fake' ? 'text-violet-700' : 'text-indigo-700'}">${step.actionLabel}</span><div class="text-[8px] font-mono font-bold text-slate-400 mt-0.5">${profileText}</div></td>
-            <td class="px-3 py-2">${getSleepTypeResultBadge(step.predictedResult)}<div class="text-[8px] font-bold ${step.deterministic?.balanceGuardTriggered ? 'text-sky-700' : 'text-slate-400'} mt-1">${step.fixedRule ? '假睡固定规则' : (step.deterministic?.balanceGuardTriggered ? `平衡介入：${SLEEP_TYPE_RESULT_META[step.deterministic.softResult]}→${SLEEP_TYPE_RESULT_META[step.predictedResult]}` : `基础候选${SLEEP_TYPE_RESULT_META[step.basicType]}`)}</div></td>
+            <td class="px-3 py-2">${getSleepTypeResultBadge(step.predictedResult)} ${index === 0 || step.slot.session === '一觉' ? `<span class="inline-flex rounded-lg border px-2 py-1 text-[8px] font-black ${riskMeta.style}">${riskMeta.label}</span>` : ''}<div class="text-[8px] font-bold ${risk?.riskLevel === 'high' ? 'text-rose-600' : 'text-slate-400'} mt-1">${valueText}${phaseBreakdown ? ` · 相位结果 ${phaseBreakdown}` : ''}</div></td>
         </tr>`;
     }).join('');
     const allocationRows = ['一觉', '二觉'].map(session => {
@@ -13339,13 +13483,15 @@ function renderSleepTypeFuturePlanHtml(plan, state = sleepTypePlannerState) {
         <div class="flex flex-wrap items-center gap-2 mb-3">
             <span class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-[9px] font-black text-indigo-700">${modelLabel}</span>
             <span class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-[9px] font-black text-indigo-700">${plan.horizon}觉排程${Number(state.planningSessions) ? ' · 手动长度' : ` · 历史自动推断${plan.inferredHorizon}觉`}</span>
+            <span class="rounded-xl bg-white border border-amber-100 px-3 py-2 text-[9px] font-black text-amber-700">一觉得分 ${plan.oneSleepScore}/${plan.oneSleepMaxScore} · 保守下限${plan.oneSleepWorstScore}</span>
+            <span class="rounded-xl bg-white border ${plan.highRiskFirstCount ? 'border-rose-100 text-rose-700' : 'border-emerald-100 text-emerald-700'} px-3 py-2 text-[9px] font-black">高风险一觉 ${plan.highRiskFirstCount}次 · 同时检查${plan.phaseModelCount || 1}个近似相位</span>
             <span class="rounded-xl bg-white border border-emerald-100 px-3 py-2 text-[9px] font-black text-emerald-700">${safetyModeMeta.label} · 最大连续${plan.safetySpacing?.maxGap || 0}个二觉不安排第三倾向</span>
             ${Object.entries(plan.resultCounts).map(([type, count]) => `<span class="rounded-lg bg-white border border-slate-100 px-2 py-1 text-[8px] font-black text-slate-500">${SLEEP_TYPE_RESULT_META[type]} ${count}</span>`).join('')}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">${allocationRows}</div>
-        <div class="space-y-2 mb-3">${placementNotice}<div class="rounded-xl bg-emerald-50/70 border border-emerald-100 px-3 py-2 text-[8px] font-bold text-emerald-800">${safetyModeMeta.text}；第三倾向在二觉中的位置为：${plan.safetySpacing?.thirdPositions?.length ? plan.safetySpacing.thirdPositions.map(position => `第${position}个二觉`).join('、') : '本周期无需安排'}。</div>${plan.planningPhaseAdjusted ? '<div class="rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2 text-[8px] font-bold text-indigo-700">历史中存在命中数只差1条的近似平衡相位；排程选择了更能把高倾向留给一觉的相位。</div>' : ''}</div>
+        <div class="space-y-2 mb-3">${placementNotice}<div class="rounded-xl bg-emerald-50/70 border border-emerald-100 px-3 py-2 text-[8px] font-bold text-emerald-800">${safetyModeMeta.text}；第三倾向在二觉中的位置为：${plan.safetySpacing?.thirdPositions?.length ? plan.safetySpacing.thirdPositions.map(position => `第${position}个二觉`).join('、') : '本周期无需安排'}。</div><div class="rounded-xl bg-sky-50 border border-sky-100 px-3 py-2 text-[8px] font-bold text-sky-800">纠偏状态使用一觉与二觉的完整时间线；收益只计算一觉。模型先服从历史命中，再在证据接近的相位中检查保守下限，不会为了排出第一志愿选择证据更差的相位。</div>${plan.highRiskFirstCount ? '<div class="rounded-xl bg-rose-50 border border-rose-100 px-3 py-2 text-[8px] font-black text-rose-700">当前没有办法把所有一觉风险降为零；表中高风险行只是现有信息下损失较小的安排，请优先补充最新判定后重新规划。</div>' : ''}</div>
         <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white"><table class="w-full min-w-[620px] text-[9px]"><thead class="bg-slate-900 text-white"><tr><th class="px-3 py-2 text-left">顺序</th><th class="px-3 py-2 text-left">建议控制的结构</th><th class="px-3 py-2 text-left">模型预测判定</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <p class="mt-2 text-[8px] font-bold text-slate-500 leading-relaxed">排程先满足强制平衡，再按分层规则分配：先保证第三倾向尽量不进入一觉，再按所选提前量把它均匀穿插到二觉，避免等到欠账临界点才集中补偿；最后才优化第二倾向和具体结构。</p>
+        <p class="mt-2 text-[8px] font-bold text-slate-500 leading-relaxed">长期目标让浅浅、安然、深深尽量等分；一觉按第一志愿100分、第二志愿50分、第三志愿及无特征0分，二觉不计收益。排程先避免一觉在任何合理相位中跌到0分，再追求三类平衡和更高总分，因此会主动安排部分一觉第二志愿，而不是连续极限押第一志愿。</p>
     </div>`;
 }
 
@@ -13511,9 +13657,13 @@ function getSleepTypeRecommendationExplanation(result) {
             return `顶部推荐已与连续排程统一：当前${session}安排假睡，固定按浅浅100%、最终无特征处理；这一步只在你允许规划假睡时出现。`;
         }
         const predictedLabel = SLEEP_TYPE_RESULT_META[result.plannedPredictedResult] || '未确定';
+        const risk = result.plannedRiskAssessment;
+        if (session === '一觉' && risk?.riskLevel === 'high') {
+            return `顶部推荐读取连续排程第1步，但当前所有可选结构都仍存在明显纠偏风险。这一项是现有信息下保守损失较小的方案：建议控制【${primaryLabel}】结构，单模型基准判定为【${predictedLabel}】，跨相位保守下限为${risk.minScore}分；请把它视为风险警报，不是安全保证。`;
+        }
         const rank = result.state.preferenceRanks[result.primary];
         const reason = session === '一觉'
-            ? `这是所有平衡可行路径中最符合一觉倾向的安排`
+            ? `它先规避一觉掉到第三志愿或无特征，再在安全方案中最大化100／50／0得分`
             : (rank === 3
                 ? '这一步用于提前稀释第三倾向欠账，并把校准成本留在二觉'
                 : '这一步用于调整平衡相位，为后续一觉保留更靠前的倾向');
@@ -13534,9 +13684,12 @@ function renderSleepTypeRecommendationHtml(result) {
     const recommendationLabel = result.mode === 'planned'
         ? `${result.plannedSession} · 连续排程首步`
         : (result.mode === 'calibration' ? '二觉校准推荐' : '一觉直接推荐');
-    const recommendationTitle = result.plannedFake ? '建议安排：假睡' : `建议争取：${primaryMeta.fullLabel}`;
+    const plannedRisk = result.plannedRiskAssessment;
+    const recommendationTitle = result.plannedFake
+        ? '建议安排：假睡'
+        : `${plannedRisk?.riskLevel === 'high' ? '风险下的保守选择' : '保守建议控制'}：${primaryMeta.fullLabel}`;
     const recommendationSubtitle = result.mode === 'planned'
-        ? `${result.plannedFake ? '固定判定无特征' : `模型预计判定：${SLEEP_TYPE_RESULT_META[result.plannedPredictedResult]}`} · 与下方第1步完全一致 · 已有 ${result.completeCount}/30 次完整比例`
+        ? `${result.plannedFake ? '固定判定无特征' : `基准模型判定：${SLEEP_TYPE_RESULT_META[result.plannedPredictedResult]}${result.plannedSession === '一觉' ? ` · 保守下限${plannedRisk?.minScore ?? getSleepTypeOneSleepScore(result.plannedPredictedResult, result.state)}分` : ''}`} · 与下方第1步完全一致 · 已有 ${result.completeCount}/30 次完整比例`
         : `备用：${SLEEP_TYPE_META[result.backup].fullLabel} · 已有 ${result.completeCount}/30 次完整比例`;
     const averageCards = SLEEP_TYPE_KEYS.map(type => {
         const before = result.stats.averages[type];
@@ -13549,6 +13702,7 @@ function renderSleepTypeRecommendationHtml(result) {
             <div class="rounded-2xl bg-white border border-violet-100 px-3 py-2 text-[9px] font-black text-violet-700"><div>参考目标结构</div><div class="font-mono mt-1">${SLEEP_TYPE_KEYS.map(type => `${SLEEP_TYPE_META[type].label}${formatSleepTypePercent(profile[type])}`).join(' · ')}</div></div>
         </div>
         <div class="mt-3 rounded-2xl bg-white/80 border border-white px-3 py-2 text-[10px] font-bold text-slate-600 leading-relaxed">${getSleepTypeRecommendationExplanation(result)}</div>
+        ${result.mode === 'planned' && plannedRisk?.modelCount > 1 ? `<div class="mt-2 rounded-xl ${plannedRisk.riskLevel === 'high' ? 'bg-rose-50 border-rose-100 text-rose-700' : (plannedRisk.riskLevel === 'medium' ? 'bg-amber-50 border-amber-100 text-amber-700' : 'bg-emerald-50 border-emerald-100 text-emerald-700')} border px-3 py-2 text-[8px] font-black">近似纠偏相位交叉检查：${Object.entries(plannedRisk.resultCounts || {}).filter(([, count]) => count > 0).map(([type, count]) => `${SLEEP_TYPE_RESULT_META[type]}${count}`).join(' / ')}。</div>` : ''}
         <div class="grid grid-cols-3 gap-2 mt-3">${averageCards}</div>
         <div class="mt-2 text-[8px] font-bold text-slate-400"><i class="fa-solid fa-triangle-exclamation"></i> ${result.mode === 'planned' ? '这里与连续排程共用同一个结论；' : ''}推荐的是“适合争取的睡眠结构”，不是保证游戏最终判定；无特征的隐藏阈值尚未公开。</div>
     </div>`;
@@ -13578,7 +13732,7 @@ function renderSleepTypePlannerModal() {
             : '未填写三种比例';
         const auditRow = backtest.byKey.get(getSleepTypeRecordKey(record.date, record.session));
         return `<div class="rounded-2xl border border-slate-200 bg-white p-3 flex items-center justify-between gap-2">
-            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-black text-slate-800">${escapeHtml(record.date)} · ${escapeHtml(record.session)}</span>${getSleepTypeResultBadge(record.result)}${getSleepTypeBacktestBadge(auditRow)}<span class="text-[8px] font-black text-slate-400">${record.source === 'research' ? '由睡眠研究同步' : '独立录入'}</span></div><div class="text-[9px] font-bold text-slate-500 mt-1">${percentageText}${auditRow?.testable ? ` · 基础${SLEEP_TYPE_RESULT_META[auditRow.basicType]} · 平衡模型后${SLEEP_TYPE_RESULT_META[auditRow.deterministic?.result]}${auditRow.deterministic?.balanceGuardTriggered ? '（强制平衡介入）' : ''}` : ''}</div></button>
+            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-black text-slate-800">${escapeHtml(record.date)} · ${escapeHtml(record.session)}</span>${getSleepTypeResultBadge(record.result)}${getSleepTypeBacktestBadge(auditRow)}<span class="text-[8px] font-black text-slate-400">${record.source === 'research' ? '由睡眠研究同步' : '独立录入'}</span></div><div class="text-[9px] font-bold text-slate-500 mt-1">${percentageText}${auditRow?.testable ? ` · 基础${SLEEP_TYPE_RESULT_META[auditRow.basicType]}${auditRow.walkForwardReady ? ` · 睡前模型${SLEEP_TYPE_RESULT_META[auditRow.walkForward?.result]}` : ' · 尚无足够旧数据进行睡前验证'}` : ''}</div></button>
             <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="shrink-0 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 h-8 text-[9px] font-black"><i class="fa-solid fa-pen"></i> 修改</button>
             <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="deleteSleepTypeRecord(this.dataset.date, this.dataset.session, event)" class="shrink-0 w-8 h-8 rounded-xl bg-rose-50 text-rose-600 border border-rose-100"><i class="fa-solid fa-trash-can"></i></button>
         </div>`;
@@ -13594,7 +13748,7 @@ function renderSleepTypePlannerModal() {
             ${renderSleepTypeRecommendationHtml(recommendation)}
             <section class="rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-violet-50 p-4">
                 <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3 mb-3">
-                    <div><h4 class="text-sm font-black text-indigo-950"><i class="fa-solid fa-route text-indigo-600"></i> 连续多觉排程</h4><p class="text-[9px] font-bold text-indigo-600 mt-0.5">从已录入历史反推平衡周期；优化整段结果，同时让一觉比二觉更优先满足你的类型倾向。</p></div>
+                    <div><h4 class="text-sm font-black text-indigo-950"><i class="fa-solid fa-route text-indigo-600"></i> 连续多觉安全排程</h4><p class="text-[9px] font-bold text-indigo-600 mt-0.5">所有一觉、二觉共同计算纠偏；一觉按第一志愿100、第二志愿50、第三志愿0计分，二觉专门服务三类平衡。</p></div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 text-[9px] font-black">
                         <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600"><input type="checkbox" onchange="updateSleepTypePlanSetting('includeSecondSleep', this.checked)" ${sleepTypePlannerState.includeSecondSleep ? 'checked' : ''}> 计划中包含二觉</label>
                         <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600"><input type="checkbox" onchange="updateSleepTypePlanSetting('allowFakeSleepPlanning', this.checked)" ${sleepTypePlannerState.allowFakeSleepPlanning ? 'checked' : ''}> 允许规划假睡</label>
