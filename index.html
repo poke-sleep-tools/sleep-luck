@@ -15715,6 +15715,8 @@ function getDefaultMealPrepPlannerState() {
     return {
         capacity: 800,
         nextWeekType: 'random',
+        useStargazing: false,
+        stargazingHoursPerDay: 4,
         recipes: {
             curry: {
                 name: '目标咖喱',
@@ -15782,6 +15784,7 @@ function normalizeMealPrepPlannerState(raw = {}) {
         if (!key) return;
         const theoreticalRaw = source?.theoretical24h;
         const actualRaw = source?.actualValue;
+        const stargazingRaw = source?.stargazingHourly;
         production[key] = {
             theoretical24h: theoreticalRaw === '' || theoreticalRaw == null
                 ? ''
@@ -15789,12 +15792,17 @@ function normalizeMealPrepPlannerState(raw = {}) {
             actualValue: actualRaw === '' || actualRaw == null
                 ? ''
                 : Math.max(0, Math.min(99999, Number(actualRaw) || 0)),
-            actualUnit: source?.actualUnit === 'hour' ? 'hour' : 'day'
+            actualUnit: source?.actualUnit === 'hour' ? 'hour' : 'day',
+            stargazingHourly: stargazingRaw === '' || stargazingRaw == null
+                ? ''
+                : Math.max(0, Math.min(99999, Number(stargazingRaw) || 0))
         };
     });
     return {
         capacity: Math.max(1, Math.min(9999, Math.floor(Number(raw.capacity ?? def.capacity) || def.capacity))),
         nextWeekType: raw.nextWeekType === 'random' || MEAL_PREP_TYPES.includes(raw.nextWeekType) ? raw.nextWeekType : 'random',
+        useStargazing: raw.useStargazing === true,
+        stargazingHoursPerDay: Math.max(0, Math.min(24, Number(raw.stargazingHoursPerDay ?? def.stargazingHoursPerDay) || 0)),
         recipes,
         production,
         updatedAt: raw.updatedAt || ''
@@ -15858,21 +15866,39 @@ function getMealPrepIngredientNames(state = mealPrepPlannerState) {
     return names;
 }
 
-function getMealPrepProductionInfo(name, state = mealPrepPlannerState) {
+function getMealPrepProductionInfo(name, state = mealPrepPlannerState, stargazingTarget = '') {
     const source = state.production?.[name] || {};
     const hasActual = source.actualValue !== '' && source.actualValue != null;
     const hasTheory = source.theoretical24h !== '' && source.theoretical24h != null;
     const actualValue = hasActual ? Math.max(0, Number(source.actualValue) || 0) : null;
     const theoretical24h = hasTheory ? Math.max(0, Number(source.theoretical24h) || 0) : null;
-    const daily = hasActual
+    const baseDaily = hasActual
         ? actualValue * (source.actualUnit === 'hour' ? 24 : 1)
         : theoretical24h;
+    const stargazingRaw = source.stargazingHourly;
+    const hasStargazing = stargazingRaw !== '' && stargazingRaw != null && Number.isFinite(Number(stargazingRaw));
+    const stargazingHourly = hasStargazing ? Math.max(0, Number(stargazingRaw) || 0) : null;
+    const stargazingHours = state.useStargazing && stargazingTarget === name && hasStargazing
+        ? Math.max(0, Math.min(24, Number(state.stargazingHoursPerDay) || 0))
+        : 0;
+    // 观星产量表示“观星期间的总每小时产量”，因此会替换这些小时里的常态产量，
+    // 而不是与常态产量重复相加。其余时间仍按常态24小时产量折算。
+    const daily = baseDaily == null || !Number.isFinite(baseDaily)
+        ? baseDaily
+        : (stargazingHours > 0
+            ? baseDaily * ((24 - stargazingHours) / 24) + stargazingHourly * stargazingHours
+            : baseDaily);
     return {
         missing: daily == null || !Number.isFinite(daily),
         daily: daily == null || !Number.isFinite(daily) ? 0 : daily,
         hourly: daily == null || !Number.isFinite(daily) ? 0 : daily / 24,
+        baseDaily: baseDaily == null || !Number.isFinite(baseDaily) ? 0 : baseDaily,
         source: hasActual ? 'actual' : 'theoretical',
         hasActual,
+        hasStargazing,
+        stargazingHourly,
+        stargazingHours,
+        isStargazingTarget: stargazingHours > 0,
         theoretical24h,
         actualValue,
         actualUnit: source.actualUnit === 'hour' ? 'hour' : 'day'
@@ -15890,7 +15916,18 @@ function getMealPrepStartupStock(state = mealPrepPlannerState) {
     return stock;
 }
 
-function getMealPrepScenarioMetrics(stock, state = mealPrepPlannerState) {
+function getMealPrepStargazingCandidates(state = mealPrepPlannerState) {
+    if (!state.useStargazing || !(Number(state.stargazingHoursPerDay) > 0)) return [''];
+    const candidates = getMealPrepIngredientNames(state).filter(name => {
+        const value = state.production?.[name]?.stargazingHourly;
+        return value !== '' && value != null && Number.isFinite(Number(value));
+    });
+    // 开启观星代表玩家明确愿意执行：只要存在可用数据，就必须从中选择一种，
+    // 不再把“不观星”混入候选。关闭开关才表示完全不使用观星。
+    return candidates.length ? candidates : [''];
+}
+
+function getMealPrepScenarioMetrics(stock, state = mealPrepPlannerState, stargazingTarget = '') {
     const byType = {};
     getMealPrepActiveTypes(state).forEach(type => {
         const demand = getMealPrepRecipeDemandMap(state.recipes?.[type]);
@@ -15908,7 +15945,7 @@ function getMealPrepScenarioMetrics(stock, state = mealPrepPlannerState) {
             ingredients.forEach(name => {
                 const required = horizon * demand[name];
                 const shortage = Math.max(0, required - (Number(stock[name]) || 0));
-                const production = getMealPrepProductionInfo(name, state);
+                const production = getMealPrepProductionInfo(name, state, stargazingTarget);
                 const displayHours = shortage <= 0
                     ? 0
                     : (production.daily > 0 ? shortage / production.daily * 24 : Infinity);
@@ -15937,8 +15974,8 @@ function getMealPrepScenarioMetrics(stock, state = mealPrepPlannerState) {
     return byType;
 }
 
-function getMealPrepOptimizationTuple(stock, state = mealPrepPlannerState) {
-    const scenarios = getMealPrepScenarioMetrics(stock, state);
+function getMealPrepOptimizationTuple(stock, state = mealPrepPlannerState, stargazingTarget = '') {
+    const scenarios = getMealPrepScenarioMetrics(stock, state, stargazingTarget);
     const activeTypes = getMealPrepActiveTypes(state);
     // 前3顿最重要，但不能把800格机械地全部换成“三类各备满3顿”。
     // 把3/6/9顿的补货压力按 3/2/1 加权，并除以顿数统一量纲：
@@ -15963,7 +16000,16 @@ function getMealPrepOptimizationTuple(stock, state = mealPrepPlannerState) {
     ];
     tuple.push(-Math.min(...activeTypes.map(type => scenarios[type].directMeals)));
     tuple.push(-activeTypes.reduce((sum, type) => sum + scenarios[type].directMeals, 0));
-    return { tuple, scenarios };
+    return { tuple, scenarios, stargazingTarget };
+}
+
+function getMealPrepBestOptimization(stock, state = mealPrepPlannerState) {
+    let best = null;
+    getMealPrepStargazingCandidates(state).forEach(target => {
+        const candidate = getMealPrepOptimizationTuple(stock, state, target);
+        if (!best || compareMealPrepOptimizationTuples(candidate.tuple, best.tuple) < 0) best = candidate;
+    });
+    return best || getMealPrepOptimizationTuple(stock, state, '');
 }
 
 function compareMealPrepOptimizationTuples(a = [], b = []) {
@@ -16005,13 +16051,13 @@ function buildMealPrepRecommendation(state = mealPrepPlannerState) {
         )));
     });
     let used = startupTotal;
-    let current = getMealPrepOptimizationTuple(stock, normalized);
+    let current = getMealPrepBestOptimization(stock, normalized);
     while (used < normalized.capacity) {
         let best = null;
         ingredientNames.forEach(name => {
             if ((stock[name] || 0) >= (maximumUsefulStock[name] || 0)) return;
             stock[name] = (stock[name] || 0) + 1;
-            const candidate = getMealPrepOptimizationTuple(stock, normalized);
+            const candidate = getMealPrepBestOptimization(stock, normalized);
             stock[name] -= 1;
             if (!best || compareMealPrepOptimizationTuples(candidate.tuple, best.result.tuple) < 0) {
                 best = { name, result: candidate };
@@ -16039,6 +16085,7 @@ function buildMealPrepRecommendation(state = mealPrepPlannerState) {
         used,
         remainingCapacity: Math.max(0, normalized.capacity - used),
         scenarios: current.scenarios,
+        stargazingTarget: current.stargazingTarget || '',
         optimizationTuple: current.tuple
     };
 }
@@ -16069,13 +16116,13 @@ function renderMealPrepResultHtml(result) {
     const stockRows = result.ingredientNames.map(name => {
         const recommended = result.stock[name] || 0;
         const startup = result.startupStock[name] || 0;
-        const production = getMealPrepProductionInfo(name, result.state);
+        const production = getMealPrepProductionInfo(name, result.state, result.stargazingTarget);
         const extra = Math.max(0, recommended - startup);
         return `<tr class="border-t border-slate-100">
             <td class="px-3 py-2 font-black text-slate-800">${escapeHtml(name)}</td>
             <td class="px-3 py-2 text-right font-mono font-black text-orange-700">${formatTrainingNumber(recommended)}</td>
             <td class="px-3 py-2 text-right font-mono text-slate-500">${formatTrainingNumber(startup)}</td>
-            <td class="px-3 py-2 text-right font-mono text-sky-700">${production.daily.toFixed(production.daily % 1 ? 1 : 0)}/24h</td>
+            <td class="px-3 py-2 text-right font-mono ${production.isStargazingTarget ? 'text-violet-700 font-black' : 'text-sky-700'}">${production.daily.toFixed(production.daily % 1 ? 1 : 0)}/24h${production.isStargazingTarget ? '<div class="text-[8px]">含观星</div>' : ''}</td>
             <td class="px-3 py-2 text-[9px] font-bold text-slate-400">${extra ? `启动量外多囤 ${formatTrainingNumber(extra)}；用于降低周初临时补货压力` : `保留${isRandomMode ? '三类随机情景' : MEAL_PREP_TYPE_META[activeTypes[0]].label}第一顿所需启动量`}</td>
         </tr>`;
     }).join('');
@@ -16109,6 +16156,16 @@ function renderMealPrepResultHtml(result) {
         </div>`;
     }).join('');
 
+    let stargazingPlanHtml = '';
+    if (result.state.useStargazing && Number(result.state.stargazingHoursPerDay) > 0) {
+        if (result.stargazingTarget) {
+            const info = getMealPrepProductionInfo(result.stargazingTarget, result.state, result.stargazingTarget);
+            stargazingPlanHtml = `<div class="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-2"><div><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-star"></i> 建议观星：${escapeHtml(result.stargazingTarget)}</div><div class="text-[9px] font-bold text-violet-700 mt-0.5">每天把可承受的 ${formatTrainingNumber(info.stargazingHours)} 小时统一用于这一种食材；同一时间没有重复计算其他食材。</div></div><div class="shrink-0 text-right"><div class="text-[9px] font-bold text-violet-500">常态 → 采用产量</div><div class="text-sm font-mono font-black text-violet-900">${info.baseDaily.toFixed(info.baseDaily % 1 ? 1 : 0)} → ${info.daily.toFixed(info.daily % 1 ? 1 : 0)} /24h</div></div></div>`;
+        } else {
+            stargazingPlanHtml = '<div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[9px] font-bold text-amber-700"><i class="fa-solid fa-triangle-exclamation"></i> 已开启观星，但当前参与计算的食材还没有填写任何观星每小时产量，因此暂时无法安排观星目标。补填至少一种后会自动选择。</div>';
+        }
+    }
+
     return `<div class="space-y-3">
         <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
             <div class="rounded-2xl bg-orange-50 border border-orange-100 p-3"><div class="text-[9px] font-black text-orange-600">建议备料占用</div><div class="text-xl font-black font-mono text-orange-900">${formatTrainingNumber(result.used)} / ${formatTrainingNumber(result.state.capacity)}</div></div>
@@ -16116,9 +16173,10 @@ function renderMealPrepResultHtml(result) {
             <div class="rounded-2xl bg-sky-50 border border-sky-100 p-3"><div class="text-[9px] font-black text-sky-600">剩余自由空间</div><div class="text-xl font-black font-mono text-sky-900">${formatTrainingNumber(result.remainingCapacity)}</div></div>
             <div class="rounded-2xl bg-violet-50 border border-violet-100 p-3"><div class="text-[9px] font-black text-violet-600">优化重点</div><div class="text-xs font-black text-violet-900 mt-1">前3顿优先，兼顾前6/9顿</div></div>
         </div>
+        ${stargazingPlanHtml}
         <div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[760px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="text-right px-3 py-2">建议提前库存</th><th class="text-right px-3 py-2">第一顿启动量</th><th class="text-right px-3 py-2">采用产量</th><th class="text-left px-3 py-2">分配说明</th></tr></thead><tbody>${stockRows}</tbody></table></div>
         <div><div class="mb-2"><div class="text-xs font-black text-slate-800"><i class="fa-solid fa-list-check text-orange-500"></i> 当前方案下的详细缺口 · ${modeLabel}</div><div class="text-[9px] font-bold text-slate-400 mt-0.5">${isRandomMode ? '分别查看随机到三种料理时' : `查看确定为${MEAL_PREP_TYPE_META[activeTypes[0]].label}时`}，做够前3、6、9顿还缺哪些食材以及补齐难度。</div></div><div class="grid grid-cols-1 gap-2">${scenarioCards}</div></div>
-        <div class="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-[9px] font-bold text-slate-500 leading-relaxed">“小时当量”只用于比较某种食材临时补齐的难度，不代表预测你下周一定在该时间吃到料理，也不假设固定食材位。${isRandomMode ? '算法先硬性保留三类料理各1顿的启动库存，再综合压低三种等概率情景下前3、6、9顿的补货压力。' : `下周已确定为${MEAL_PREP_TYPE_META[activeTypes[0]].label}，算法只为这一类料理分配背包，不会再给另外两类预留食材。`} 前3顿权重最高。</div>
+        <div class="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-[9px] font-bold text-slate-500 leading-relaxed">“小时当量”只用于比较某种食材临时补齐的难度，不代表预测你下周一定在该时间吃到料理，也不假设固定食材位。${isRandomMode ? '算法先硬性保留三类料理各1顿的启动库存，再综合压低三种等概率情景下前3、6、9顿的补货压力。' : `下周已确定为${MEAL_PREP_TYPE_META[activeTypes[0]].label}，算法只为这一类料理分配背包，不会再给另外两类预留食材。`} 前3顿权重最高。${result.state.useStargazing ? ' 观星时间是每天共享预算，算法只会把它交给一个最有价值的食材，不会把同一段时间重复算给多种食材。' : ''}</div>
     </div>`;
 }
 
@@ -16140,13 +16198,14 @@ function renderMealPrepPlannerModal() {
         </div>`;
     }).join('');
     const productionRows = ingredientNames.map(name => {
-        const source = mealPrepPlannerState.production[name] || { theoretical24h: '', actualValue: '', actualUnit: 'day' };
+        const source = mealPrepPlannerState.production[name] || { theoretical24h: '', actualValue: '', actualUnit: 'day', stargazingHourly: '' };
         const info = getMealPrepProductionInfo(name, mealPrepPlannerState);
         return `<tr class="border-t border-slate-100">
             <td class="px-3 py-2 font-black text-slate-800">${escapeHtml(name)}</td>
             <td class="px-2 py-2"><input type="number" min="0" step="0.1" value="${escapeHtmlAttr(source.theoretical24h ?? '')}" onchange='updateMealPrepProduction(${JSON.stringify(name)}, "theoretical24h", this.value)' placeholder="必填" class="w-full min-w-[90px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-black"></td>
             <td class="px-2 py-2"><input type="number" min="0" step="0.1" value="${escapeHtmlAttr(source.actualValue ?? '')}" onchange='updateMealPrepProduction(${JSON.stringify(name)}, "actualValue", this.value)' placeholder="留空用理论值" class="w-full min-w-[110px] bg-violet-50 border border-violet-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-black text-violet-700"></td>
             <td class="px-2 py-2"><select onchange='updateMealPrepProduction(${JSON.stringify(name)}, "actualUnit", this.value)' class="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-black"><option value="day" ${source.actualUnit !== 'hour' ? 'selected' : ''}>每24小时</option><option value="hour" ${source.actualUnit === 'hour' ? 'selected' : ''}>每小时</option></select></td>
+            <td class="px-2 py-2"><input type="number" min="0" step="0.1" value="${escapeHtmlAttr(source.stargazingHourly ?? '')}" onchange='updateMealPrepProduction(${JSON.stringify(name)}, "stargazingHourly", this.value)' placeholder="可选" class="w-full min-w-[105px] bg-fuchsia-50 border border-fuchsia-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-black text-fuchsia-700"></td>
             <td class="px-3 py-2 text-[9px] font-black ${info.missing ? 'text-amber-600' : (info.hasActual ? 'text-violet-700' : 'text-sky-700')}">${info.missing ? '等待填写' : `${info.hasActual ? '采用实际覆盖' : '采用理论值'}：${info.daily.toFixed(info.daily % 1 ? 1 : 0)}/24h`}</td>
         </tr>`;
     }).join('');
@@ -16156,8 +16215,9 @@ function renderMealPrepPlannerModal() {
         <div class="overflow-y-auto p-4 md:p-5 space-y-4">
             <section class="rounded-2xl border border-orange-200 bg-orange-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-orange-900">可用于提前备料的空间</div><div class="text-[9px] font-bold text-orange-700 mt-0.5">填写真正能留给这次计划的格数；算法不要求一周吃满21顿。</div></div><label class="text-[10px] font-black text-orange-800 flex items-center gap-2">背包格数<input type="number" min="1" max="9999" value="${mealPrepPlannerState.capacity}" onchange="updateMealPrepCapacity(this.value)" class="w-28 bg-white border border-orange-200 rounded-xl px-3 py-2 text-sm font-mono font-black text-right"></label></section>
             <section class="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-calendar-week"></i> 下周料理类型</div><div class="text-[9px] font-bold text-violet-700 mt-0.5">活动已经预告类型时选择确定项；否则继续按三种各 1/3 规划。</div></div><select onchange="updateMealPrepNextWeekType(this.value)" class="w-full md:w-56 bg-white border border-violet-200 rounded-xl px-3 py-2 text-xs font-black text-violet-900"><option value="random" ${isRandomMode ? 'selected' : ''}>未知：三种等概率</option>${MEAL_PREP_TYPES.map(type => `<option value="${type}" ${mealPrepPlannerState.nextWeekType === type ? 'selected' : ''}>确定：${MEAL_PREP_TYPE_META[type].label}</option>`).join('')}</select></section>
+            <section class="rounded-2xl border border-fuchsia-200 bg-fuchsia-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-fuchsia-900"><i class="fa-solid fa-star"></i> 是否愿意观星</div><div class="text-[9px] font-bold text-fuchsia-700 mt-0.5">关闭表示完全不观星；开启表示愿意执行，算法一定会把每天的观星时间完整安排给一种最合适的食材。观星产量在下方逐项选填。</div></div><div class="flex items-center gap-3"><label class="flex items-center gap-2 text-[10px] font-black text-fuchsia-900 bg-white border border-fuchsia-200 rounded-xl px-3 py-2"><input type="checkbox" ${mealPrepPlannerState.useStargazing ? 'checked' : ''} onchange="updateMealPrepStargazingSetting('enabled', this.checked)" class="accent-fuchsia-600">愿意观星</label><label class="text-[10px] font-black text-fuchsia-900 flex items-center gap-2">每天<input type="number" min="0" max="24" step="0.5" value="${mealPrepPlannerState.stargazingHoursPerDay}" ${mealPrepPlannerState.useStargazing ? '' : 'disabled'} onchange="updateMealPrepStargazingSetting('hours', this.value)" class="w-20 bg-white disabled:bg-slate-100 border border-fuchsia-200 rounded-xl px-2 py-2 text-xs font-mono font-black text-right">小时</label></div></section>
             <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-book-open text-orange-500"></i> 三类目标料理</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">每类设置一道菜；${isRandomMode ? '同名食材会作为三种随机情景的共用备料。' : `当前只计算${MEAL_PREP_TYPE_META[mealPrepPlannerState.nextWeekType].label}，另外两套菜谱仍会保留。`}</p></div><div class="grid grid-cols-1 lg:grid-cols-3 gap-3">${recipeCards}</div></section>
-            <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-seedling text-emerald-500"></i> 食材产量与实际覆盖</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">理论值按平均24小时产量填写。实际覆盖可填观星、开卷等当前环境下的精确值；只要实际格不为空就优先采用，输入0也不会回退理论值。</p></div><div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[760px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="px-2 py-2">理论24h产量</th><th class="px-2 py-2">实际覆盖（可空）</th><th class="px-2 py-2">实际单位</th><th class="text-left px-3 py-2">本次采用</th></tr></thead><tbody>${productionRows}</tbody></table></div></section>
+            <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-seedling text-emerald-500"></i> 食材产量、实际覆盖与观星</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">理论值按平均24小时填写；实际覆盖是非观星环境下更准确的常态数据，填了就替代理论值。观星栏填写“观星期间每小时的总产量”，只在开启观星时参与计算。</p></div><div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[940px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="px-2 py-2">理论24h产量</th><th class="px-2 py-2">常态实际覆盖（可空）</th><th class="px-2 py-2">实际单位</th><th class="px-2 py-2">观星每小时产量（可空）</th><th class="text-left px-3 py-2">本次常态采用</th></tr></thead><tbody>${productionRows}</tbody></table></div></section>
             <div class="flex flex-col sm:flex-row gap-2"><button type="button" onclick="calculateAndRenderMealPrepPlanner(true)" class="flex-1 bg-orange-600 hover:bg-orange-500 text-white font-black text-xs py-3 rounded-xl shadow-sm"><i class="fa-solid fa-calculator"></i> 计算建议备料</button><button type="button" onclick="saveMealPrepPlannerState({saveCloudNow:true}); showToast('料理备料方案已保存并同步')" class="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-5 py-3 rounded-xl"><i class="fa-solid fa-cloud-arrow-up"></i> 保存方案</button></div>
             <div id="meal-prep-planner-results">${renderMealPrepResultHtml(buildMealPrepRecommendation(mealPrepPlannerState))}</div>
         </div>
@@ -16188,6 +16248,13 @@ function updateMealPrepCapacity(value) {
 
 function updateMealPrepNextWeekType(value) {
     mealPrepPlannerState.nextWeekType = value === 'random' || MEAL_PREP_TYPES.includes(value) ? value : 'random';
+    saveMealPrepPlannerState();
+    renderMealPrepPlannerModal();
+}
+
+function updateMealPrepStargazingSetting(field, value) {
+    if (field === 'enabled') mealPrepPlannerState.useStargazing = value === true || value === 'true';
+    if (field === 'hours') mealPrepPlannerState.stargazingHoursPerDay = Math.max(0, Math.min(24, Number(value) || 0));
     saveMealPrepPlannerState();
     renderMealPrepPlannerModal();
 }
@@ -16239,7 +16306,7 @@ function updateMealPrepProduction(name, field, value) {
     const key = String(name || '').trim();
     if (!key) return;
     mealPrepPlannerState.production ||= {};
-    const source = mealPrepPlannerState.production[key] ||= { theoretical24h: '', actualValue: '', actualUnit: 'day' };
+    const source = mealPrepPlannerState.production[key] ||= { theoretical24h: '', actualValue: '', actualUnit: 'day', stargazingHourly: '' };
     if (field === 'actualUnit') source.actualUnit = value === 'hour' ? 'hour' : 'day';
     else source[field] = value === '' ? '' : Math.max(0, Math.min(99999, Number(value) || 0));
     saveMealPrepPlannerState();
