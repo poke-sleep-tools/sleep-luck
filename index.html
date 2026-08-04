@@ -16003,15 +16003,6 @@ function getMealPrepOptimizationTuple(stock, state = mealPrepPlannerState, starg
     return { tuple, scenarios, stargazingTarget };
 }
 
-function getMealPrepBestOptimization(stock, state = mealPrepPlannerState) {
-    let best = null;
-    getMealPrepStargazingCandidates(state).forEach(target => {
-        const candidate = getMealPrepOptimizationTuple(stock, state, target);
-        if (!best || compareMealPrepOptimizationTuples(candidate.tuple, best.tuple) < 0) best = candidate;
-    });
-    return best || getMealPrepOptimizationTuple(stock, state, '');
-}
-
 function compareMealPrepOptimizationTuples(a = [], b = []) {
     const length = Math.max(a.length, b.length);
     for (let i = 0; i < length; i++) {
@@ -16020,6 +16011,48 @@ function compareMealPrepOptimizationTuples(a = [], b = []) {
         if (Math.abs(av - bv) > 1e-9) return av - bv;
     }
     return 0;
+}
+
+function buildMealPrepStockForFixedStargazingTarget(normalized, activeTypes, ingredientNames, startupStock, startupTotal, stargazingTarget = '') {
+    const stock = Object.fromEntries(ingredientNames.map(name => [name, startupStock[name] || 0]));
+    const maximumUsefulStock = {};
+    ingredientNames.forEach(name => {
+        maximumUsefulStock[name] = Math.max(...activeTypes.map(type => (
+            (getMealPrepRecipeDemandMap(normalized.recipes[type])[name] || 0) * Math.max(...MEAL_PREP_HORIZONS)
+        )));
+    });
+    let used = startupTotal;
+    let current = getMealPrepOptimizationTuple(stock, normalized, stargazingTarget);
+    while (used < normalized.capacity) {
+        let best = null;
+        ingredientNames.forEach(name => {
+            if ((stock[name] || 0) >= (maximumUsefulStock[name] || 0)) return;
+            stock[name] = (stock[name] || 0) + 1;
+            const candidate = getMealPrepOptimizationTuple(stock, normalized, stargazingTarget);
+            stock[name] -= 1;
+            if (!best || compareMealPrepOptimizationTuples(candidate.tuple, best.result.tuple) < 0) {
+                best = { name, result: candidate };
+            } else if (best && compareMealPrepOptimizationTuples(candidate.tuple, best.result.tuple) === 0) {
+                const candidateRate = getMealPrepProductionInfo(name, normalized, stargazingTarget).daily;
+                const bestRate = getMealPrepProductionInfo(best.name, normalized, stargazingTarget).daily;
+                if (candidateRate < bestRate || (candidateRate === bestRate && name.localeCompare(best.name, 'zh-CN') < 0)) {
+                    best = { name, result: candidate };
+                }
+            }
+        });
+        if (!best || compareMealPrepOptimizationTuples(best.result.tuple, current.tuple) >= 0) break;
+        stock[best.name] = (stock[best.name] || 0) + 1;
+        used += 1;
+        current = best.result;
+    }
+    return {
+        stock,
+        used,
+        remainingCapacity: Math.max(0, normalized.capacity - used),
+        scenarios: current.scenarios,
+        stargazingTarget: stargazingTarget || '',
+        optimizationTuple: current.tuple
+    };
 }
 
 function buildMealPrepRecommendation(state = mealPrepPlannerState) {
@@ -16043,50 +16076,32 @@ function buildMealPrepRecommendation(state = mealPrepPlannerState) {
         };
     }
 
-    const stock = Object.fromEntries(ingredientNames.map(name => [name, startupStock[name] || 0]));
-    const maximumUsefulStock = {};
-    ingredientNames.forEach(name => {
-        maximumUsefulStock[name] = Math.max(...activeTypes.map(type => (
-            (getMealPrepRecipeDemandMap(normalized.recipes[type])[name] || 0) * Math.max(...MEAL_PREP_HORIZONS)
-        )));
+    const stargazingCandidates = getMealPrepStargazingCandidates(normalized);
+    const completePlans = stargazingCandidates.map(target => buildMealPrepStockForFixedStargazingTarget(
+        normalized, activeTypes, ingredientNames, startupStock, startupTotal, target
+    ));
+    let selectedPlan = completePlans[0];
+    completePlans.slice(1).forEach(plan => {
+        if (compareMealPrepOptimizationTuples(plan.optimizationTuple, selectedPlan.optimizationTuple) < 0) selectedPlan = plan;
     });
-    let used = startupTotal;
-    let current = getMealPrepBestOptimization(stock, normalized);
-    while (used < normalized.capacity) {
-        let best = null;
-        ingredientNames.forEach(name => {
-            if ((stock[name] || 0) >= (maximumUsefulStock[name] || 0)) return;
-            stock[name] = (stock[name] || 0) + 1;
-            const candidate = getMealPrepBestOptimization(stock, normalized);
-            stock[name] -= 1;
-            if (!best || compareMealPrepOptimizationTuples(candidate.tuple, best.result.tuple) < 0) {
-                best = { name, result: candidate };
-            } else if (best && compareMealPrepOptimizationTuples(candidate.tuple, best.result.tuple) === 0) {
-                const candidateRate = getMealPrepProductionInfo(name, normalized).daily;
-                const bestRate = getMealPrepProductionInfo(best.name, normalized).daily;
-                if (candidateRate < bestRate || (candidateRate === bestRate && name.localeCompare(best.name, 'zh-CN') < 0)) {
-                    best = { name, result: candidate };
-                }
-            }
-        });
-        if (!best || compareMealPrepOptimizationTuples(best.result.tuple, current.tuple) >= 0) break;
-        stock[best.name] = (stock[best.name] || 0) + 1;
-        used += 1;
-        current = best.result;
-    }
     return {
         ok: true,
         state: normalized,
         activeTypes,
         ingredientNames,
-        stock,
+        stock: selectedPlan.stock,
         startupStock,
         startupTotal,
-        used,
-        remainingCapacity: Math.max(0, normalized.capacity - used),
-        scenarios: current.scenarios,
-        stargazingTarget: current.stargazingTarget || '',
-        optimizationTuple: current.tuple
+        used: selectedPlan.used,
+        remainingCapacity: selectedPlan.remainingCapacity,
+        scenarios: selectedPlan.scenarios,
+        stargazingTarget: selectedPlan.stargazingTarget,
+        stargazingCandidateCount: stargazingCandidates.filter(Boolean).length,
+        stargazingAlternatives: completePlans.map(plan => ({
+            target: plan.stargazingTarget,
+            tuple: [...plan.optimizationTuple]
+        })),
+        optimizationTuple: selectedPlan.optimizationTuple
     };
 }
 
@@ -16160,7 +16175,7 @@ function renderMealPrepResultHtml(result) {
     if (result.state.useStargazing && Number(result.state.stargazingHoursPerDay) > 0) {
         if (result.stargazingTarget) {
             const info = getMealPrepProductionInfo(result.stargazingTarget, result.state, result.stargazingTarget);
-            stargazingPlanHtml = `<div class="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-2"><div><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-star"></i> 建议观星：${escapeHtml(result.stargazingTarget)}</div><div class="text-[9px] font-bold text-violet-700 mt-0.5">每天把可承受的 ${formatTrainingNumber(info.stargazingHours)} 小时统一用于这一种食材；同一时间没有重复计算其他食材。</div></div><div class="shrink-0 text-right"><div class="text-[9px] font-bold text-violet-500">常态 → 采用产量</div><div class="text-sm font-mono font-black text-violet-900">${info.baseDaily.toFixed(info.baseDaily % 1 ? 1 : 0)} → ${info.daily.toFixed(info.daily % 1 ? 1 : 0)} /24h</div></div></div>`;
+            stargazingPlanHtml = `<div class="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-2"><div><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-star"></i> 建议观星：${escapeHtml(result.stargazingTarget)}</div><div class="text-[9px] font-bold text-violet-700 mt-0.5">已分别算完 ${formatTrainingNumber(result.stargazingCandidateCount || 1)} 套固定观星目标的完整背包方案，再选出整体最优解。每天把 ${formatTrainingNumber(info.stargazingHours)} 小时统一用于这一种食材。</div></div><div class="shrink-0 text-right"><div class="text-[9px] font-bold text-violet-500">常态 → 采用产量</div><div class="text-sm font-mono font-black text-violet-900">${info.baseDaily.toFixed(info.baseDaily % 1 ? 1 : 0)} → ${info.daily.toFixed(info.daily % 1 ? 1 : 0)} /24h</div></div></div>`;
         } else {
             stargazingPlanHtml = '<div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[9px] font-bold text-amber-700"><i class="fa-solid fa-triangle-exclamation"></i> 已开启观星，但当前参与计算的食材还没有填写任何观星每小时产量，因此暂时无法安排观星目标。补填至少一种后会自动选择。</div>';
         }
