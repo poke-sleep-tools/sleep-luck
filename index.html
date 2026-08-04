@@ -830,7 +830,7 @@
                     <button onclick="openBallPlannerModal()" id="ball-planner-main-btn" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-sky-100 text-sky-800 shadow-sm flex items-center gap-1 hover:bg-sky-200" title="记录精灵球库存、研究用球、活动/礼包计划和睡眠点数商店预算">
                         <i class="fa-solid fa-baseball text-sky-600"></i> 🎒 精灵球规划
                     </button>
-                    <button onclick="openMealPrepPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-orange-100 text-orange-800 shadow-sm flex items-center gap-1 hover:bg-orange-200" title="根据三类目标料理、背包容量与食材产速，推荐下一周开始前的提前备料库存">
+                    <button onclick="openMealPrepPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-orange-100 text-orange-800 shadow-sm flex items-center gap-1 hover:bg-orange-200" title="支持下周类型未知或活动已确定，根据目标料理、背包容量与食材产速推荐提前备料库存">
                         <i class="fa-solid fa-utensils text-orange-600"></i> 🍲 料理备料规划
                     </button>
                     <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="记录最近30次浅浅、安然、深深比例，并规划下一觉适合争取的睡眠类型">
@@ -15699,7 +15699,7 @@ function saveSleepTypeRecordFromPlanner() {
 }
 
 // ==========================================
-// 🍲 料理备料规划：三种随机料理情景下的周初库存优化
+// 🍲 料理备料规划：随机或已确定料理情景下的周初库存优化
 // ==========================================
 
 const MEAL_PREP_PLANNER_STATE_LOG_ID = 'meal_prep_planner_state_v1';
@@ -15714,6 +15714,7 @@ const MEAL_PREP_HORIZONS = [3, 6, 9];
 function getDefaultMealPrepPlannerState() {
     return {
         capacity: 800,
+        nextWeekType: 'random',
         recipes: {
             curry: {
                 name: '目标咖喱',
@@ -15793,6 +15794,7 @@ function normalizeMealPrepPlannerState(raw = {}) {
     });
     return {
         capacity: Math.max(1, Math.min(9999, Math.floor(Number(raw.capacity ?? def.capacity) || def.capacity))),
+        nextWeekType: raw.nextWeekType === 'random' || MEAL_PREP_TYPES.includes(raw.nextWeekType) ? raw.nextWeekType : 'random',
         recipes,
         production,
         updatedAt: raw.updatedAt || ''
@@ -15839,10 +15841,14 @@ function getMealPrepRecipeDemandMap(recipe = {}) {
     return demand;
 }
 
+function getMealPrepActiveTypes(state = mealPrepPlannerState) {
+    return MEAL_PREP_TYPES.includes(state?.nextWeekType) ? [state.nextWeekType] : [...MEAL_PREP_TYPES];
+}
+
 function getMealPrepIngredientNames(state = mealPrepPlannerState) {
     const names = [];
     const seen = new Set();
-    MEAL_PREP_TYPES.forEach(type => {
+    getMealPrepActiveTypes(state).forEach(type => {
         Object.keys(getMealPrepRecipeDemandMap(state.recipes?.[type])).forEach(name => {
             if (seen.has(name)) return;
             seen.add(name);
@@ -15875,7 +15881,7 @@ function getMealPrepProductionInfo(name, state = mealPrepPlannerState) {
 
 function getMealPrepStartupStock(state = mealPrepPlannerState) {
     const stock = {};
-    MEAL_PREP_TYPES.forEach(type => {
+    getMealPrepActiveTypes(state).forEach(type => {
         const demand = getMealPrepRecipeDemandMap(state.recipes?.[type]);
         Object.entries(demand).forEach(([name, amount]) => {
             stock[name] = Math.max(stock[name] || 0, amount);
@@ -15886,7 +15892,7 @@ function getMealPrepStartupStock(state = mealPrepPlannerState) {
 
 function getMealPrepScenarioMetrics(stock, state = mealPrepPlannerState) {
     const byType = {};
-    MEAL_PREP_TYPES.forEach(type => {
+    getMealPrepActiveTypes(state).forEach(type => {
         const demand = getMealPrepRecipeDemandMap(state.recipes?.[type]);
         const ingredients = Object.keys(demand);
         const directMeals = ingredients.length
@@ -15933,11 +15939,12 @@ function getMealPrepScenarioMetrics(stock, state = mealPrepPlannerState) {
 
 function getMealPrepOptimizationTuple(stock, state = mealPrepPlannerState) {
     const scenarios = getMealPrepScenarioMetrics(stock, state);
+    const activeTypes = getMealPrepActiveTypes(state);
     // 前3顿最重要，但不能把800格机械地全部换成“三类各备满3顿”。
     // 把3/6/9顿的补货压力按 3/2/1 加权，并除以顿数统一量纲：
     // 这样第一天的启动压力权重最高，同时慢产食材在第二、三天的断档风险也会被看见。
     const horizonWeights = { 3: 3, 6: 2, 9: 1 };
-    const scenarioScores = MEAL_PREP_TYPES.map(type => {
+    const scenarioScores = activeTypes.map(type => {
         let bottleneckScore = 0;
         let totalScore = 0;
         MEAL_PREP_HORIZONS.forEach(horizon => {
@@ -15954,8 +15961,8 @@ function getMealPrepOptimizationTuple(stock, state = mealPrepPlannerState) {
         Math.max(...scenarioScores.map(row => row.totalScore)),
         scenarioScores.reduce((sum, row) => sum + row.totalScore, 0) / scenarioScores.length
     ];
-    tuple.push(-Math.min(...MEAL_PREP_TYPES.map(type => scenarios[type].directMeals)));
-    tuple.push(-MEAL_PREP_TYPES.reduce((sum, type) => sum + scenarios[type].directMeals, 0));
+    tuple.push(-Math.min(...activeTypes.map(type => scenarios[type].directMeals)));
+    tuple.push(-activeTypes.reduce((sum, type) => sum + scenarios[type].directMeals, 0));
     return { tuple, scenarios };
 }
 
@@ -15971,6 +15978,7 @@ function compareMealPrepOptimizationTuples(a = [], b = []) {
 
 function buildMealPrepRecommendation(state = mealPrepPlannerState) {
     const normalized = normalizeMealPrepPlannerState(state);
+    const activeTypes = getMealPrepActiveTypes(normalized);
     const ingredientNames = getMealPrepIngredientNames(normalized);
     const missingProduction = ingredientNames.filter(name => getMealPrepProductionInfo(name, normalized).missing);
     if (missingProduction.length) {
@@ -15992,7 +16000,7 @@ function buildMealPrepRecommendation(state = mealPrepPlannerState) {
     const stock = Object.fromEntries(ingredientNames.map(name => [name, startupStock[name] || 0]));
     const maximumUsefulStock = {};
     ingredientNames.forEach(name => {
-        maximumUsefulStock[name] = Math.max(...MEAL_PREP_TYPES.map(type => (
+        maximumUsefulStock[name] = Math.max(...activeTypes.map(type => (
             (getMealPrepRecipeDemandMap(normalized.recipes[type])[name] || 0) * Math.max(...MEAL_PREP_HORIZONS)
         )));
     });
@@ -16023,6 +16031,7 @@ function buildMealPrepRecommendation(state = mealPrepPlannerState) {
     return {
         ok: true,
         state: normalized,
+        activeTypes,
         ingredientNames,
         stock,
         startupStock,
@@ -16046,11 +16055,17 @@ function renderMealPrepResultHtml(result) {
             return `<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-800"><i class="fa-solid fa-triangle-exclamation"></i> 请先填写这些食材的理论24小时产量，或者填写实际覆盖值：<strong>${result.missingProduction.map(escapeHtml).join('、')}</strong>。实际覆盖填写0时会按无法现产计算；只有留空才会使用理论值。</div>`;
         }
         if (result?.reason === 'capacity_too_small') {
-            return `<div class="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-800"><i class="fa-solid fa-box-open"></i> 当前三类料理各保证立即做1顿至少需要 <strong>${formatTrainingNumber(result.startupTotal)}</strong> 格，超过容量 <strong>${formatTrainingNumber(result.shortage)}</strong> 格。请增加可用容量，或调整料理配方。</div>`;
+            const activeTypes = getMealPrepActiveTypes(result.state);
+            const targetLabel = activeTypes.length === 3 ? '三类料理各保证立即做1顿' : `${MEAL_PREP_TYPE_META[activeTypes[0]].label}立即做1顿`;
+            return `<div class="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-800"><i class="fa-solid fa-box-open"></i> 当前模式下${targetLabel}至少需要 <strong>${formatTrainingNumber(result.startupTotal)}</strong> 格，超过容量 <strong>${formatTrainingNumber(result.shortage)}</strong> 格。请增加可用容量，或调整料理配方。</div>`;
         }
         return '<div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs font-bold text-slate-500">暂时无法计算，请检查输入。</div>';
     }
 
+    const activeTypes = result.activeTypes || getMealPrepActiveTypes(result.state);
+    const isRandomMode = activeTypes.length === MEAL_PREP_TYPES.length;
+    const modeLabel = isRandomMode ? '三类随机等概率' : `已确定：${MEAL_PREP_TYPE_META[activeTypes[0]].label}`;
+    const startupLabel = isRandomMode ? '三类第一顿启动量' : `${MEAL_PREP_TYPE_META[activeTypes[0]].label}第一顿启动量`;
     const stockRows = result.ingredientNames.map(name => {
         const recommended = result.stock[name] || 0;
         const startup = result.startupStock[name] || 0;
@@ -16061,10 +16076,10 @@ function renderMealPrepResultHtml(result) {
             <td class="px-3 py-2 text-right font-mono font-black text-orange-700">${formatTrainingNumber(recommended)}</td>
             <td class="px-3 py-2 text-right font-mono text-slate-500">${formatTrainingNumber(startup)}</td>
             <td class="px-3 py-2 text-right font-mono text-sky-700">${production.daily.toFixed(production.daily % 1 ? 1 : 0)}/24h</td>
-            <td class="px-3 py-2 text-[9px] font-bold text-slate-400">${extra ? `启动量外多囤 ${formatTrainingNumber(extra)}；用于降低周初临时补货压力` : '保留三类料理第一顿所需启动量'}</td>
+            <td class="px-3 py-2 text-[9px] font-bold text-slate-400">${extra ? `启动量外多囤 ${formatTrainingNumber(extra)}；用于降低周初临时补货压力` : `保留${isRandomMode ? '三类随机情景' : MEAL_PREP_TYPE_META[activeTypes[0]].label}第一顿所需启动量`}</td>
         </tr>`;
     }).join('');
-    const scenarioCards = MEAL_PREP_TYPES.map(type => {
+    const scenarioCards = activeTypes.map(type => {
         const meta = MEAL_PREP_TYPE_META[type];
         const scenario = result.scenarios[type];
         return `<div class="rounded-2xl border border-slate-200 bg-white p-3">
@@ -16097,13 +16112,13 @@ function renderMealPrepResultHtml(result) {
     return `<div class="space-y-3">
         <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
             <div class="rounded-2xl bg-orange-50 border border-orange-100 p-3"><div class="text-[9px] font-black text-orange-600">建议备料占用</div><div class="text-xl font-black font-mono text-orange-900">${formatTrainingNumber(result.used)} / ${formatTrainingNumber(result.state.capacity)}</div></div>
-            <div class="rounded-2xl bg-emerald-50 border border-emerald-100 p-3"><div class="text-[9px] font-black text-emerald-600">三类第一顿启动量</div><div class="text-xl font-black font-mono text-emerald-900">${formatTrainingNumber(result.startupTotal)}</div></div>
+            <div class="rounded-2xl bg-emerald-50 border border-emerald-100 p-3"><div class="text-[9px] font-black text-emerald-600">${startupLabel}</div><div class="text-xl font-black font-mono text-emerald-900">${formatTrainingNumber(result.startupTotal)}</div></div>
             <div class="rounded-2xl bg-sky-50 border border-sky-100 p-3"><div class="text-[9px] font-black text-sky-600">剩余自由空间</div><div class="text-xl font-black font-mono text-sky-900">${formatTrainingNumber(result.remainingCapacity)}</div></div>
             <div class="rounded-2xl bg-violet-50 border border-violet-100 p-3"><div class="text-[9px] font-black text-violet-600">优化重点</div><div class="text-xs font-black text-violet-900 mt-1">前3顿优先，兼顾前6/9顿</div></div>
         </div>
         <div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[760px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="text-right px-3 py-2">建议提前库存</th><th class="text-right px-3 py-2">第一顿启动量</th><th class="text-right px-3 py-2">采用产量</th><th class="text-left px-3 py-2">分配说明</th></tr></thead><tbody>${stockRows}</tbody></table></div>
-        <div><div class="mb-2"><div class="text-xs font-black text-slate-800"><i class="fa-solid fa-list-check text-orange-500"></i> 当前方案下的详细缺口</div><div class="text-[9px] font-bold text-slate-400 mt-0.5">分别查看随机到三种料理时，做够前3、6、9顿还缺哪些食材以及各自的补齐难度。</div></div><div class="grid grid-cols-1 gap-2">${scenarioCards}</div></div>
-        <div class="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-[9px] font-bold text-slate-500 leading-relaxed">“小时当量”只用于比较某种食材临时补齐的难度，不代表预测你下周一定在该时间吃到料理，也不假设固定食材位。算法先硬性保留三类料理各1顿的启动库存，再综合压低前3、6、9顿的补货压力，其中前3顿权重最高；三类料理按等概率处理。</div>
+        <div><div class="mb-2"><div class="text-xs font-black text-slate-800"><i class="fa-solid fa-list-check text-orange-500"></i> 当前方案下的详细缺口 · ${modeLabel}</div><div class="text-[9px] font-bold text-slate-400 mt-0.5">${isRandomMode ? '分别查看随机到三种料理时' : `查看确定为${MEAL_PREP_TYPE_META[activeTypes[0]].label}时`}，做够前3、6、9顿还缺哪些食材以及补齐难度。</div></div><div class="grid grid-cols-1 gap-2">${scenarioCards}</div></div>
+        <div class="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-[9px] font-bold text-slate-500 leading-relaxed">“小时当量”只用于比较某种食材临时补齐的难度，不代表预测你下周一定在该时间吃到料理，也不假设固定食材位。${isRandomMode ? '算法先硬性保留三类料理各1顿的启动库存，再综合压低三种等概率情景下前3、6、9顿的补货压力。' : `下周已确定为${MEAL_PREP_TYPE_META[activeTypes[0]].label}，算法只为这一类料理分配背包，不会再给另外两类预留食材。`} 前3顿权重最高。</div>
     </div>`;
 }
 
@@ -16112,11 +16127,14 @@ function renderMealPrepPlannerModal() {
     if (!modal) return;
     mealPrepPlannerState = normalizeMealPrepPlannerState(mealPrepPlannerState);
     const ingredientNames = getMealPrepIngredientNames(mealPrepPlannerState);
+    const activeTypes = getMealPrepActiveTypes(mealPrepPlannerState);
+    const isRandomMode = mealPrepPlannerState.nextWeekType === 'random';
     const recipeCards = MEAL_PREP_TYPES.map(type => {
         const meta = MEAL_PREP_TYPE_META[type];
         const recipe = mealPrepPlannerState.recipes[type];
-        return `<div class="rounded-2xl border border-${meta.color}-200 bg-${meta.color}-50/40 p-3">
-            <div class="flex items-center gap-2"><i class="fa-solid ${meta.icon} text-${meta.color}-500"></i><span class="text-xs font-black text-${meta.color}-800">${meta.label}</span><input value="${escapeHtmlAttr(recipe.name)}" onchange="updateMealPrepRecipeName('${type}', this.value)" class="min-w-0 flex-1 bg-white border border-${meta.color}-200 rounded-lg px-2 py-1.5 text-[10px] font-black" aria-label="${meta.label}料理名称"></div>
+        const active = activeTypes.includes(type);
+        return `<div class="rounded-2xl border border-${meta.color}-200 bg-${meta.color}-50/40 p-3 ${active ? '' : 'opacity-55'}">
+            <div class="flex items-center gap-2"><i class="fa-solid ${meta.icon} text-${meta.color}-500"></i><span class="text-xs font-black text-${meta.color}-800">${meta.label}</span>${active ? '' : '<span class="text-[8px] font-black text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5">本次不计算</span>'}<input value="${escapeHtmlAttr(recipe.name)}" onchange="updateMealPrepRecipeName('${type}', this.value)" class="min-w-0 flex-1 bg-white border border-${meta.color}-200 rounded-lg px-2 py-1.5 text-[10px] font-black" aria-label="${meta.label}料理名称"></div>
             <div class="space-y-1.5 mt-2">${recipe.ingredients.map((item, index) => `<div class="grid grid-cols-[1fr_74px_28px] gap-1.5 items-center"><input value="${escapeHtmlAttr(item.name)}" onchange="updateMealPrepIngredientField('${type}', ${index}, 'name', this.value)" placeholder="食材名" class="min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-bold"><input type="number" min="1" max="999" value="${item.amount}" onchange="updateMealPrepIngredientField('${type}', ${index}, 'amount', this.value)" class="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-black text-right" aria-label="${escapeHtmlAttr(item.name)}每顿数量"><button type="button" onclick="removeMealPrepIngredient('${type}', ${index})" class="w-7 h-7 rounded-lg bg-white border border-rose-100 text-rose-500 hover:bg-rose-50" aria-label="删除食材"><i class="fa-solid fa-xmark"></i></button></div>`).join('')}</div>
             <button type="button" onclick="addMealPrepIngredient('${type}')" class="w-full mt-2 rounded-lg border border-dashed border-${meta.color}-300 bg-white/70 py-1.5 text-[9px] font-black text-${meta.color}-700">+ 添加食材</button>
         </div>`;
@@ -16134,10 +16152,11 @@ function renderMealPrepPlannerModal() {
     }).join('');
 
     modal.innerHTML = `<div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
-        <div class="px-5 py-4 bg-gradient-to-r from-orange-600 via-amber-500 to-rose-500 text-white flex items-start justify-between gap-3"><div><h3 class="text-lg font-black"><i class="fa-solid fa-utensils"></i> 料理备料规划</h3><p class="text-[10px] text-white/80 font-bold mt-1">在不知道下周料理类型的情况下，把有限库存优先留给周初最难临时补齐的食材。</p></div><button type="button" onclick="closeMealPrepPlannerModal()" class="text-white/80 hover:text-white text-lg" aria-label="关闭料理备料规划"><i class="fa-solid fa-xmark"></i></button></div>
+        <div class="px-5 py-4 bg-gradient-to-r from-orange-600 via-amber-500 to-rose-500 text-white flex items-start justify-between gap-3"><div><h3 class="text-lg font-black"><i class="fa-solid fa-utensils"></i> 料理备料规划</h3><p class="text-[10px] text-white/80 font-bold mt-1">${isRandomMode ? '下周类型未知：平衡三种等概率情景的周初备料。' : `活动已确定下周为${MEAL_PREP_TYPE_META[mealPrepPlannerState.nextWeekType].label}：只优化这一类料理。`}</p></div><button type="button" onclick="closeMealPrepPlannerModal()" class="text-white/80 hover:text-white text-lg" aria-label="关闭料理备料规划"><i class="fa-solid fa-xmark"></i></button></div>
         <div class="overflow-y-auto p-4 md:p-5 space-y-4">
             <section class="rounded-2xl border border-orange-200 bg-orange-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-orange-900">可用于提前备料的空间</div><div class="text-[9px] font-bold text-orange-700 mt-0.5">填写真正能留给这次计划的格数；算法不要求一周吃满21顿。</div></div><label class="text-[10px] font-black text-orange-800 flex items-center gap-2">背包格数<input type="number" min="1" max="9999" value="${mealPrepPlannerState.capacity}" onchange="updateMealPrepCapacity(this.value)" class="w-28 bg-white border border-orange-200 rounded-xl px-3 py-2 text-sm font-mono font-black text-right"></label></section>
-            <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-book-open text-orange-500"></i> 三类目标料理</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">第一版每类只设置一道菜；同名食材会自动作为三种随机情景的共用备料。</p></div><div class="grid grid-cols-1 lg:grid-cols-3 gap-3">${recipeCards}</div></section>
+            <section class="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-calendar-week"></i> 下周料理类型</div><div class="text-[9px] font-bold text-violet-700 mt-0.5">活动已经预告类型时选择确定项；否则继续按三种各 1/3 规划。</div></div><select onchange="updateMealPrepNextWeekType(this.value)" class="w-full md:w-56 bg-white border border-violet-200 rounded-xl px-3 py-2 text-xs font-black text-violet-900"><option value="random" ${isRandomMode ? 'selected' : ''}>未知：三种等概率</option>${MEAL_PREP_TYPES.map(type => `<option value="${type}" ${mealPrepPlannerState.nextWeekType === type ? 'selected' : ''}>确定：${MEAL_PREP_TYPE_META[type].label}</option>`).join('')}</select></section>
+            <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-book-open text-orange-500"></i> 三类目标料理</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">每类设置一道菜；${isRandomMode ? '同名食材会作为三种随机情景的共用备料。' : `当前只计算${MEAL_PREP_TYPE_META[mealPrepPlannerState.nextWeekType].label}，另外两套菜谱仍会保留。`}</p></div><div class="grid grid-cols-1 lg:grid-cols-3 gap-3">${recipeCards}</div></section>
             <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-seedling text-emerald-500"></i> 食材产量与实际覆盖</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">理论值按平均24小时产量填写。实际覆盖可填观星、开卷等当前环境下的精确值；只要实际格不为空就优先采用，输入0也不会回退理论值。</p></div><div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[760px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="px-2 py-2">理论24h产量</th><th class="px-2 py-2">实际覆盖（可空）</th><th class="px-2 py-2">实际单位</th><th class="text-left px-3 py-2">本次采用</th></tr></thead><tbody>${productionRows}</tbody></table></div></section>
             <div class="flex flex-col sm:flex-row gap-2"><button type="button" onclick="calculateAndRenderMealPrepPlanner(true)" class="flex-1 bg-orange-600 hover:bg-orange-500 text-white font-black text-xs py-3 rounded-xl shadow-sm"><i class="fa-solid fa-calculator"></i> 计算建议备料</button><button type="button" onclick="saveMealPrepPlannerState({saveCloudNow:true}); showToast('料理备料方案已保存并同步')" class="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-5 py-3 rounded-xl"><i class="fa-solid fa-cloud-arrow-up"></i> 保存方案</button></div>
             <div id="meal-prep-planner-results">${renderMealPrepResultHtml(buildMealPrepRecommendation(mealPrepPlannerState))}</div>
@@ -16165,6 +16184,12 @@ function updateMealPrepCapacity(value) {
     mealPrepPlannerState.capacity = Math.max(1, Math.min(9999, Math.floor(Number(value) || 1)));
     saveMealPrepPlannerState();
     calculateAndRenderMealPrepPlanner(false);
+}
+
+function updateMealPrepNextWeekType(value) {
+    mealPrepPlannerState.nextWeekType = value === 'random' || MEAL_PREP_TYPES.includes(value) ? value : 'random';
+    saveMealPrepPlannerState();
+    renderMealPrepPlannerModal();
 }
 
 function updateMealPrepRecipeName(type, value) {
