@@ -1217,6 +1217,8 @@ const BALL_SHOP_PURCHASE_COSTS = { regularPoke: 150, premiumPoke: 100, premiumGr
 
 let ballPlannerState = getDefaultBallPlannerState();
 let ballDailyRewardStatsRange = 'all';
+let ballPlannerSyncPending = false;
+let ballPlannerSyncQueue = Promise.resolve({ ok: true });
 
 function getCurrentMonthKey() {
     const now = new Date();
@@ -1255,6 +1257,7 @@ function getDefaultBallPlannerState() {
         enabled: false,
         currentInventory: { poke: 0, great: 0, ultra: 0 },
         entries: [],
+        entryTombstones: {},
         templates: { bundle: [], event: [], dailyReward: [] },
         shop: {
             month: getCurrentMonthKey(),
@@ -1302,6 +1305,12 @@ function normalizeBallPlannerState(raw = {}) {
     state.enabled = !!state.enabled;
     state.currentInventory = normalizeBallCounts(state.currentInventory || {});
     state.entries = Array.isArray(state.entries) ? state.entries.map(normalizeBallPlannerEntry).filter(Boolean) : [];
+    state.entryTombstones = Object.entries(state.entryTombstones && typeof state.entryTombstones === 'object' ? state.entryTombstones : {})
+        .reduce((out, [id, timestamp]) => {
+            const parsed = Date.parse(timestamp);
+            if (id && Number.isFinite(parsed)) out[String(id)] = new Date(parsed).toISOString();
+            return out;
+        }, {});
     state.templates = Object.assign({ bundle: [], event: [], dailyReward: [] }, state.templates || {});
     state.templates.bundle = Array.isArray(state.templates.bundle) ? state.templates.bundle.map(normalizeBallTemplate).filter(Boolean) : [];
     state.templates.event = Array.isArray(state.templates.event) ? state.templates.event.map(normalizeBallTemplate).filter(Boolean) : [];
@@ -1381,6 +1390,98 @@ function isBallPlannerStateLog(log) {
     return !!(log && log.type === 'ball_planner_state');
 }
 
+function getBallPlannerSyncTime(value) {
+    const parsed = Date.parse(value || '');
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getDailyRewardAppliedBalls(entry) {
+    if (!entry || entry.sourceType !== 'dailyReward' || entry.inventoryApplied !== true) return normalizeBallCounts({});
+    return normalizeBallCounts(entry.balls || {});
+}
+
+function mergeBallPlannerDailyRewardTemplates(first = [], second = []) {
+    const map = new Map();
+    [...(Array.isArray(first) ? first : []), ...(Array.isArray(second) ? second : [])]
+        .map(normalizeBallTemplate)
+        .filter(template => template && template.sourceType === 'dailyReward')
+        .forEach(template => {
+            const key = String(template.id || `${template.templateName}|${JSON.stringify(template.balls)}|${template.diamonds}`);
+            if (!map.has(key)) map.set(key, template);
+        });
+    return Array.from(map.values());
+}
+
+// 精灵球规划仍使用旧版整份快照保存，但每日奖励必须按条目合并。
+// 这样电脑与手机各自新增的奖励不会因为“较新的整份快照”而互相覆盖。
+function mergeBallPlannerStates(firstRaw = {}, secondRaw = {}) {
+    const firstRawTime = getBallPlannerSyncTime(firstRaw?.updatedAt);
+    const secondRawTime = getBallPlannerSyncTime(secondRaw?.updatedAt);
+    const first = normalizeBallPlannerState(firstRaw || {});
+    const second = normalizeBallPlannerState(secondRaw || {});
+    const base = JSON.parse(JSON.stringify(secondRawTime >= firstRawTime ? second : first));
+
+    const tombstones = {};
+    [first.entryTombstones || {}, second.entryTombstones || {}].forEach(source => {
+        Object.entries(source).forEach(([id, timestamp]) => {
+            if (!tombstones[id] || getBallPlannerSyncTime(timestamp) > getBallPlannerSyncTime(tombstones[id])) {
+                tombstones[id] = timestamp;
+            }
+        });
+    });
+
+    const dailyMap = new Map();
+    [...first.entries, ...second.entries]
+        .filter(entry => entry && entry.sourceType === 'dailyReward')
+        .forEach(entry => {
+            const key = String(entry.id);
+            const old = dailyMap.get(key);
+            if (!old || getBallPlannerSyncTime(entry.updatedAt || entry.createdAt) >= getBallPlannerSyncTime(old.updatedAt || old.createdAt)) {
+                dailyMap.set(key, entry);
+            }
+        });
+
+    const mergedDailyEntries = Array.from(dailyMap.values()).filter(entry => {
+        const deletedAt = tombstones[String(entry.id)];
+        return !deletedAt || getBallPlannerSyncTime(entry.updatedAt || entry.createdAt) > getBallPlannerSyncTime(deletedAt);
+    });
+    const baseDailyMap = new Map(base.entries.filter(entry => entry.sourceType === 'dailyReward').map(entry => [String(entry.id), entry]));
+    const mergedDailyMap = new Map(mergedDailyEntries.map(entry => [String(entry.id), entry]));
+    const inventory = normalizeBallCounts(base.currentInventory || {});
+    const affectedIds = new Set([...baseDailyMap.keys(), ...mergedDailyMap.keys()]);
+    affectedIds.forEach(id => {
+        const oldBalls = getDailyRewardAppliedBalls(baseDailyMap.get(id));
+        const newBalls = getDailyRewardAppliedBalls(mergedDailyMap.get(id));
+        BALL_KEYS.forEach(key => {
+            inventory[key] = Math.max(0, Math.floor(Number(inventory[key]) || 0) + (newBalls[key] || 0) - (oldBalls[key] || 0));
+        });
+    });
+
+    base.currentInventory = inventory;
+    base.entries = base.entries
+        .filter(entry => entry.sourceType !== 'dailyReward')
+        .concat(mergedDailyEntries)
+        .sort((a, b) => getBallPlannerSyncTime(b.createdAt || b.updatedAt) - getBallPlannerSyncTime(a.createdAt || a.updatedAt));
+    base.entryTombstones = tombstones;
+    base.templates = Object.assign({ bundle: [], event: [], dailyReward: [] }, base.templates || {});
+    base.templates.dailyReward = mergeBallPlannerDailyRewardTemplates(first.templates?.dailyReward, second.templates?.dailyReward);
+    base.updatedAt = secondRawTime >= firstRawTime ? second.updatedAt : first.updatedAt;
+    return normalizeBallPlannerState(base);
+}
+
+function mergeBallPlannerStateLogs(existing, candidate) {
+    const existingTime = getHistoryLogMergeTime(existing);
+    const candidateTime = getHistoryLogMergeTime(candidate);
+    const baseLog = candidateTime >= existingTime ? candidate : existing;
+    const mergedTime = Math.max(existingTime, candidateTime);
+    return Object.assign({}, baseLog, {
+        id: BALL_PLANNER_STATE_LOG_ID,
+        type: 'ball_planner_state',
+        state: mergeBallPlannerStates(existing?.state || {}, candidate?.state || {}),
+        updatedAt: mergedTime ? new Date(mergedTime).toISOString() : (baseLog.updatedAt || new Date().toISOString())
+    });
+}
+
 function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
@@ -1412,7 +1513,82 @@ function saveBallPlannerStateToHistory(options = {}) {
     historyLogs = mergeHistoryLogs([], historyLogs);
     saveHistoryToLocal();
     updateBallPlannerButton();
-    if (options.saveCloudNow && currentCloudUser) saveHistoryToCloudNow();
+    if (options.saveCloudNow && currentCloudUser) return syncBallPlannerStateWithCloud();
+    return Promise.resolve({ ok: true, guest: !currentCloudUser });
+}
+
+function setBallPlannerSyncStatus(status, detail = '') {
+    const el = document.getElementById('ball-planner-sync-status');
+    if (!el) return;
+    if (!currentCloudUser) {
+        el.className = 'mt-2 inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10px] font-black text-slate-500';
+        el.innerHTML = '<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在当前设备';
+        return;
+    }
+    const configs = {
+        syncing: ['border-sky-200 bg-sky-50 text-sky-700', 'fa-cloud-arrow-up fa-bounce', '正在同步账号数据，请暂时不要关闭网页'],
+        success: ['border-emerald-200 bg-emerald-50 text-emerald-700', 'fa-cloud-circle-check', '已同步到账号，手机和电脑会使用同一份记录'],
+        error: ['border-amber-200 bg-amber-50 text-amber-700', 'fa-triangle-exclamation', detail || '账号同步失败，记录目前仅保存在本机']
+    };
+    const config = configs[status] || configs.success;
+    el.className = `mt-2 flex flex-wrap items-center gap-2 rounded-xl border px-2.5 py-1.5 text-[10px] font-black ${config[0]}`;
+    el.innerHTML = `<span><i class="fa-solid ${config[1]} mr-1"></i>${escapeHtml(config[2])}</span>${status === 'error' ? '<button type="button" onclick="retryBallPlannerSync()" class="rounded-lg border border-amber-200 bg-white px-2 py-1 text-amber-700">重新同步</button>' : ''}`;
+}
+
+async function performBallPlannerCloudSync() {
+    if (!currentCloudUser) return { ok: true, guest: true };
+    ballPlannerSyncPending = true;
+    clearTimeout(saveHistoryTimer);
+    saveHistoryTimer = null;
+    setBallPlannerSyncStatus('syncing');
+    try {
+        const { data, error: readError } = await supabaseClient
+            .from('player_boxes')
+            .select('history_logs')
+            .eq('user_id', currentCloudUser.id)
+            .maybeSingle();
+        if (readError) throw readError;
+
+        const remoteLogs = data && Array.isArray(data.history_logs) ? data.history_logs : [];
+        historyLogs = mergeHistoryLogs(remoteLogs, Array.isArray(historyLogs) ? historyLogs : []);
+        loadBallPlannerStateFromHistory();
+        localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+
+        const { error: writeError } = await supabaseClient
+            .from('player_boxes')
+            .upsert({
+                user_id: currentCloudUser.id,
+                history_logs: historyLogs,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id' });
+        if (writeError) throw writeError;
+        setBallPlannerSyncStatus('success');
+        return { ok: true, guest: false };
+    } catch (error) {
+        console.error('精灵球规划跨设备同步失败：', error);
+        setBallPlannerSyncStatus('error', '账号同步失败，记录目前仅保存在本机');
+        return { ok: false, error };
+    } finally {
+        ballPlannerSyncPending = false;
+    }
+}
+
+function syncBallPlannerStateWithCloud() {
+    clearTimeout(saveHistoryTimer);
+    saveHistoryTimer = null;
+    const task = ballPlannerSyncQueue.catch(() => ({ ok: false })).then(() => performBallPlannerCloudSync());
+    ballPlannerSyncQueue = task;
+    return task;
+}
+
+async function retryBallPlannerSync() {
+    const result = await syncBallPlannerStateWithCloud();
+    if (result.ok) {
+        renderBallPlannerModal();
+        showToast('精灵球规划已重新同步到账号');
+    } else {
+        showToast('重新同步失败，请检查网络后再试');
+    }
 }
 
 function updateBallPlannerButton() {
@@ -2042,7 +2218,7 @@ function renderBallPlannerTrendChartHtml(f = getBallPlannerForecast()) {
     </div>`;
 }
 
-function openBallPlannerModal() {
+async function openBallPlannerModal() {
     const old = document.getElementById('ball-planner-modal');
     if (old) old.remove();
     loadBallPlannerStateFromHistory();
@@ -2054,10 +2230,13 @@ function openBallPlannerModal() {
         <div class="pr-8">
             <h3 class="text-base font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-baseball text-sky-500"></i> 精灵球库存与规划中心</h3>
             <p class="text-[11px] text-slate-500 font-bold mt-1">当前库存由手动校准、睡眠研究用球扣除、每日奖励/活动/礼包实录、以及睡眠点数商店实际购买自动增减；未领取计划和每日奖励期望只影响预计库存。</p>
+            <div id="ball-planner-sync-status"></div>
         </div>
-        <div id="ball-planner-content"></div>
+        <div id="ball-planner-content"><div class="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-8 text-center text-xs font-black text-sky-700"><i class="fa-solid fa-cloud-arrow-down fa-bounce mr-2"></i>${currentCloudUser ? '正在读取账号中的最新记录…' : '正在读取本机记录…'}</div></div>
     </div>`;
     document.body.appendChild(modal);
+    if (currentCloudUser) await syncBallPlannerStateWithCloud();
+    else setBallPlannerSyncStatus('local');
     renderBallPlannerModal();
 }
 
@@ -2173,7 +2352,7 @@ function renderBallPlannerModal() {
                 <label>蓝球<input type="number" id="ball-daily-great" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
                 <label>黑/黄球<input type="number" id="ball-daily-ultra" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
                 <label>钻石/非球数量<input type="number" id="ball-daily-diamonds" value="0" class="mt-1 w-full bg-white border border-amber-100 rounded-xl px-2 py-2 text-xs font-mono font-black"></label>
-                <button onclick="addBallDailyRewardEntry()" class="self-end bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl py-2.5 text-xs font-black">记录每日奖励</button>
+                <button id="ball-daily-save-btn" onclick="addBallDailyRewardEntry()" class="self-end bg-amber-500 hover:bg-amber-400 disabled:bg-slate-300 disabled:text-slate-500 text-slate-950 rounded-xl py-2.5 text-xs font-black">记录每日奖励</button>
             </div>
             <div id="ball-daily-reward-stats">${renderBallDailyRewardStatsHtml(ballDailyRewardStatsRange)}</div>
         </div>
@@ -2378,7 +2557,7 @@ function applyBallDailyRewardTemplate() {
     if (d) d.value = Number(t.diamonds) || 0;
 }
 
-function addBallDailyRewardEntry() {
+async function addBallDailyRewardEntry() {
     const balls = normalizeBallCounts({
         poke: document.getElementById('ball-daily-poke')?.value,
         great: document.getElementById('ball-daily-great')?.value,
@@ -2387,6 +2566,12 @@ function addBallDailyRewardEntry() {
     const diamonds = Math.max(0, Math.floor(Number(document.getElementById('ball-daily-diamonds')?.value) || 0));
     const rewardName = String(document.getElementById('ball-daily-name')?.value || '').trim() || '每日奖励';
     if (!BALL_KEYS.some(k => balls[k] > 0) && diamonds <= 0) { alert('请至少填写一种球，或填写一个非球数量（例如钻石 15）。'); return; }
+    const saveButton = document.getElementById('ball-daily-save-btn');
+    if (saveButton?.disabled) return;
+    if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.innerHTML = '<i class="fa-solid fa-cloud-arrow-up fa-bounce mr-1"></i>正在保存';
+    }
     const date = normalizeSleepResearchDateValue(document.getElementById('ball-daily-date')?.value || getTodayLocalDateString());
     const selectedTemplateId = document.getElementById('ball-daily-template')?.value || '';
     const selectedTemplate = selectedTemplateId === 'custom' ? null : getAllDailyRewardTemplates().find(t => String(t.id) === String(selectedTemplateId));
@@ -2422,9 +2607,19 @@ function addBallDailyRewardEntry() {
     });
     applyBallPlannerEntryFullDelta(null, entry);
     ballPlannerState.entries.unshift(entry);
-    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    if (ballPlannerState.entryTombstones) delete ballPlannerState.entryTombstones[String(entry.id)];
+    const syncResult = await saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
-    showToast('已记录每日奖励');
+    if (!currentCloudUser || syncResult.guest) {
+        setBallPlannerSyncStatus('local');
+        showToast('已记录每日奖励（仅保存在当前设备）');
+    } else if (syncResult.ok) {
+        setBallPlannerSyncStatus('success');
+        showToast('已记录每日奖励，并同步到账号');
+    } else {
+        setBallPlannerSyncStatus('error', '每日奖励已保存在本机，但尚未同步到账号');
+        showToast('每日奖励已保存在本机；账号同步失败，请稍后重试');
+    }
 }
 
 function deleteBallExtraSleepPoint(id) {
@@ -2592,14 +2787,22 @@ function setBallEntryStatus(id, status) {
     renderBallPlannerModal();
 }
 
-function deleteBallEntry(id) {
+async function deleteBallEntry(id) {
     const item = (ballPlannerState.entries || []).find(e => String(e.id) === String(id));
     const label = item?.sourceType === 'dailyReward' ? '每日奖励记录' : (item?.sourceType === 'shopPurchase' ? '睡眠点数商店购买记录' : '活动/礼包计划');
     if (!confirm(`确定删除这条${label}吗？如果它曾自动增加库存，系统会同步扣回。`)) return;
     if (item) applyBallPlannerEntryFullDelta(item, null);
+    if (item?.sourceType === 'dailyReward') {
+        if (!ballPlannerState.entryTombstones || typeof ballPlannerState.entryTombstones !== 'object') ballPlannerState.entryTombstones = {};
+        ballPlannerState.entryTombstones[String(id)] = new Date().toISOString();
+    }
     ballPlannerState.entries = (ballPlannerState.entries || []).filter(e => String(e.id) !== String(id));
-    saveBallPlannerStateToHistory({ saveCloudNow: true });
+    const syncResult = await saveBallPlannerStateToHistory({ saveCloudNow: true });
     renderBallPlannerModal();
+    if (currentCloudUser && !syncResult.ok) {
+        setBallPlannerSyncStatus('error', '删除操作已保存在本机，但尚未同步到账号');
+        showToast('本机已删除；账号同步失败，请稍后重试');
+    }
 }
 
 function renderBallEntryList() {
@@ -3614,6 +3817,9 @@ function getHistoryLogMergeTime(log) {
 
 function chooseNewerHistoryLog(existing, candidate) {
     if (!existing) return candidate;
+    if (isBallPlannerStateLog(existing) && isBallPlannerStateLog(candidate)) {
+        return mergeBallPlannerStateLogs(existing, candidate);
+    }
     const existingTime = getHistoryLogMergeTime(existing);
     const candidateTime = getHistoryLogMergeTime(candidate);
     if (candidateTime > existingTime) return candidate;
@@ -21559,7 +21765,7 @@ let captureFinalizePendingV42 = false;
 let captureFinalizeRetryV42 = null;
 
 window.addEventListener('beforeunload', event => {
-    if (!captureFinalizePendingV42) return;
+    if (!captureFinalizePendingV42 && !ballPlannerSyncPending) return;
     event.preventDefault();
     event.returnValue = '';
 });
