@@ -16883,6 +16883,8 @@ function updateMealPrepCapacity(value) {
 function updateMealPrepNextWeekType(value) {
     mealPrepPlannerState.nextWeekType = value === 'random' || MEAL_PREP_TYPES.includes(value) ? value : 'random';
     saveMealPrepPlannerState();
+    // 备料规划与周料理模拟共用同一个“下周料理类型”，修改后旧模拟结果立即失效。
+    if (typeof markWeeklyCookingSimulationPending === 'function') markWeeklyCookingSimulationPending();
     renderMealPrepPlannerModal();
 }
 
@@ -16952,6 +16954,8 @@ function calculateAndRenderMealPrepPlanner(persist = false) {
     if (!container) return;
     if (persist) saveMealPrepPlannerState();
     container.innerHTML = renderMealPrepResultHtml(buildMealPrepRecommendation(mealPrepPlannerState));
+    // 推荐库存由周料理实时读取；重新计算备料后，不能继续把旧周模拟当作当前结果。
+    if (persist && typeof markWeeklyCookingSimulationPending === 'function') markWeeklyCookingSimulationPending();
 }
 
 // ==========================================
@@ -22796,7 +22800,7 @@ function getWeeklyCookingAllIngredientNames(recipesByType) {
     return Array.from(names);
 }
 
-function getWeeklyCookingStartingStock(state, ingredientNames) {
+function getWeeklyCookingMealPrepRecommendedStock(ingredientNames) {
     let recommended = {};
     try {
         const plan = buildMealPrepRecommendation(mealPrepPlannerState);
@@ -22805,8 +22809,18 @@ function getWeeklyCookingStartingStock(state, ingredientNames) {
     const stock = {};
     ingredientNames.forEach(name => {
         const canonicalName=canonicalizeMealPrepIngredientName(name);
+        stock[canonicalName]=Math.max(0,Number(recommended[canonicalName] ?? recommended[name])||0);
+    });
+    return stock;
+}
+
+function getWeeklyCookingStartingStock(state, ingredientNames) {
+    const recommended = getWeeklyCookingMealPrepRecommendedStock(ingredientNames);
+    const stock = {};
+    ingredientNames.forEach(name => {
+        const canonicalName=canonicalizeMealPrepIngredientName(name);
         const override = state.stockOverride?.[canonicalName] ?? state.stockOverride?.[name];
-        stock[canonicalName] = override === '' || override == null ? Math.max(0, Number(recommended[canonicalName] ?? recommended[name]) || 0) : Math.max(0, Number(override) || 0);
+        stock[canonicalName] = override === '' || override == null ? recommended[canonicalName] : Math.max(0, Number(override) || 0);
     });
     return stock;
 }
@@ -22832,9 +22846,9 @@ function getWeeklyCookingSleepHours(start, end) {
 
 function getWeeklyCookingProductionFactor(state, roster) {
     const collection = getWeeklyCookingCollectionFactor(state);
-    const inaccessibleHours = (state.sleep.firstAccessible ? 0 : getWeeklyCookingSleepHours(state.sleep.firstStart, state.sleep.firstEnd))
-        + (state.sleep.sessionsPerDay === 2 && !state.sleep.secondAccessible ? getWeeklyCookingSleepHours(state.sleep.secondStart, state.sleep.secondEnd) : 0);
-    const access = Math.max(0.82, 1 - inaccessibleHours / 24 * 0.12);
+    // 无法上线期间帮忙仍会累积；离线本身不再直接扣产量，影响改由收菜时点、
+    // 技能储存上限和低频收菜的溢出折损统一承担。
+    const access = 1;
     const totalSleepScore = Math.min(100, Number(state.sleep.firstScore || 0) + Number(state.sleep.secondScore || 0));
     const sleep = 0.88 + totalSleepScore / 100 * 0.12;
     const dailyHealing = roster.filter(row => row.skill.key === 'healer')
@@ -23119,6 +23133,11 @@ function getWeeklyCookingNatureEnergyRecoveryFactor(row) {
     return parts.up==='energy'?1.2:(parts.down==='energy'?0.88:1);
 }
 
+function isWeeklyCookingSkillSpecialty(row) {
+    const value=String(row?.specialty||'').toLowerCase();
+    return value==='skill'||value==='skills'||value==='special_skill'||value.includes('技能');
+}
+
 function getWeeklyCookingMealEnergyRecovery(energy) {
     const value=Number(energy)||0;
     if(value<=10)return 9;if(value<=20)return 8;if(value<=30)return 7;if(value<=40)return 6;
@@ -23132,15 +23151,37 @@ function getWeeklyCookingClockHour(value) {
 }
 
 function getWeeklyCookingSleepEvents(state) {
-    const definitions=[{key:'first',score:Number(state.sleep.firstScore)||0,start:state.sleep.firstStart,end:state.sleep.firstEnd,accessible:!!state.sleep.firstAccessible}];
-    if(state.sleep.sessionsPerDay===2)definitions.push({key:'second',score:Number(state.sleep.secondScore)||0,start:state.sleep.secondStart,end:state.sleep.secondEnd,accessible:!!state.sleep.secondAccessible});
+    const definitions=[{key:'first',start:state.sleep.firstStart,end:state.sleep.firstEnd,accessible:!!state.sleep.firstAccessible}];
+    if(state.sleep.sessionsPerDay===2)definitions.push({key:'second',start:state.sleep.secondStart,end:state.sleep.secondEnd,accessible:!!state.sleep.secondAccessible});
+    // 分数=有效睡眠时间÷8.5小时×100；全天有效睡眠最多8.5小时，但实际睡眠可以更长。
+    // 超出的时长不再增加分数，却仍完整限制上线与收菜。
+    let remainingScore=100;
+    // 分数分配永远按“一觉→二觉”，不能按钟点排序；二觉即使跨到00:00也不能抢走一觉的额度。
+    definitions.forEach(def=>{
+        def.durationHours=getWeeklyCookingSleepHours(def.start,def.end);
+        def.rawDurationScore=Math.max(0,def.durationHours/8.5*100);
+        def.score=Math.min(remainingScore,def.rawDurationScore);
+        remainingScore=Math.max(0,remainingScore-def.score);
+    });
     const events=[];
-    for(let day=0;day<8;day++)definitions.forEach(def=>{
+    // 从前一天开始建立事件，才能覆盖“周日23:00→周一09:15”这类跨午夜睡眠。
+    for(let day=-1;day<8;day++)definitions.forEach(def=>{
         const start=day*24+getWeeklyCookingClockHour(def.start);
         let end=day*24+getWeeklyCookingClockHour(def.end);if(end<=start)end+=24;
         events.push({...def,day,startTick:Math.round(start*6),endTick:Math.round(end*6),team:[]});
     });
     return events;
+}
+
+// 所有需要玩家上线的行为必须共用这一处判断，避免收菜、技能、换队、开饭各写一套后产生漏网路径。
+function getWeeklyCookingLockedSleepEventAtTick(state, timeTick, sleepEvents = null) {
+    const tick = Math.round(Number(timeTick) || 0);
+    const events = Array.isArray(sleepEvents) ? sleepEvents : getWeeklyCookingSleepEvents(state);
+    return events.find(event => event.accessible === false && event.startTick <= tick && tick < event.endTick) || null;
+}
+
+function isWeeklyCookingOperationLockedAtHour(state, absoluteHour, sleepEvents = null) {
+    return !!getWeeklyCookingLockedSleepEventAtTick(state, Math.round((Number(absoluteHour) || 0) * 6), sleepEvents);
 }
 
 function getWeeklyCookingExpectedMealMultiplier(day, critStack) {
@@ -23235,6 +23276,14 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
     const averageEnergy = candidates.reduce((sum,row) => sum + (Number(energyById[row.id]) || 0), 0) / Math.max(1,candidates.length);
     const energyPerIngredient = target ? target.objectiveValue / Math.max(1,target.total) : 1;
     const campHelpFactor = getWeeklyCookingCampHelpFactor(state);
+    // 不能只看“下一顿是否已备齐”。下一顿够吃后，空余站场时间仍应为本周后续餐次备料。
+    // 每种食材只取当前料理类型已选菜谱中的最大单顿需求；食谱完全不用的食材依然保持 0 价值。
+    const absoluteHour=Math.max(0,Number(plannerContext.absoluteHour)||0);
+    const remainingMealEstimate=Math.max(1,Math.min(21,Math.ceil(Math.max(0,7*24-absoluteHour)/8)));
+    const reserveNeedPerIngredient={};
+    (recipes||[]).forEach(recipe=>(recipe.ingredients||[]).forEach(item=>{
+        reserveNeedPerIngredient[item.name]=Math.max(Number(reserveNeedPerIngredient[item.name])||0,Number(item.amount)||0);
+    }));
     const scored = candidates.map(row => {
         const estimate = typeof window.calculateCookingPokemonEstimate === 'function' ? window.calculateCookingPokemonEstimate(row.item) : null;
         const energy = Number(energyById[row.id]) || 0;
@@ -23246,9 +23295,23 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
             ingredients[canonical] = Number(value || 0) / 1.5 * energyFactor * blockScale * campHelpFactor;
         });
         let foodScore = 0;
+        let reserveFoodScore = 0;
+        const relevantFoodContributions = {};
         if (target) target.recipe.ingredients.forEach(item => {
             const shortage = Math.max(0, Number(item.amount || 0) * 1.35 - (Number(stock[item.name]) || 0));
-            foodScore += Math.min(shortage, Number(ingredients[item.name]) || 0) * energyPerIngredient;
+            const usefulAmount = Math.min(shortage, Number(ingredients[item.name]) || 0);
+            if (usefulAmount > 0) relevantFoodContributions[item.name] = usefulAmount;
+            foodScore += usefulAmount * energyPerIngredient;
+        });
+        Object.entries(reserveNeedPerIngredient).forEach(([name,perMealNeed])=>{
+            const reserveTarget=Math.max(0,Number(perMealNeed)||0)*remainingMealEstimate;
+            const reserveGap=Math.max(0,reserveTarget-(Number(stock[name])||0));
+            const usefulAmount=Math.min(reserveGap,Number(ingredients[name])||0);
+            if(usefulAmount>0) {
+                relevantFoodContributions[name]=(relevantFoodContributions[name]||0)+usefulAmount;
+                // 后续储备价值低于眼前缺口，但绝不能因为下一顿已齐就直接变成 0。
+                reserveFoodScore+=usefulAmount*energyPerIngredient*0.22;
+            }
         });
         const expectedTriggers = (Number(row.rawDailyTriggers) || 0) / 1.5 * energyFactor * blockScale * getWeeklyCookingCollectionFactor(state) * campHelpFactor;
         const skillValue = getWeeklyCookingSkillValue(row.skill.key, row.mainSkillLevel);
@@ -23263,20 +23326,25 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
         }
         if (row.skill.key === 'healer' && averageEnergy < 85) skillScore = expectedTriggers * skillValue * (85 - averageEnergy) * 5;
         if (row.skill.key === 'dream' && state.objective === 'shards') skillScore = expectedTriggers * skillValue * 2;
-        const fallbackScore = Object.values(ingredients).reduce((sum,value) => sum + value,0) * Math.max(0.05,energyPerIngredient*0.08);
         const energyPenalty = energy <= 0 ? 0.45 : (energy < 30 ? 0.72 : 1);
-        const score = (foodScore + skillScore + fallbackScore) * energyPenalty;
-        let reason = '补充常规食材产量';
-        if (skillScore > foodScore && row.skill.key === 'pot') reason = `目标料理还差${Math.ceil(target?.potGap || 0)}格锅容量`;
-        else if (skillScore > foodScore && ['tasty','assist'].includes(row.skill.key)) reason = `当前暴击累计${critStack.toFixed(1)}%，继续叠至约${desiredCritStack}%`;
-        else if (skillScore > foodScore && row.skill.key === 'healer') reason = `队伍平均活力约${averageEnergy.toFixed(0)}，需要回复`;
-        else if (foodScore > 0 && target) {
-            const bestFood = Object.entries(ingredients).sort((a,b) => b[1]-a[1])[0];
-            reason = bestFood ? `为下一餐${target.recipe.name}补${bestFood[0]}` : `为下一餐${target.recipe.name}备料`;
+        // 只有能转化为本周目标收益的产出才计分。食谱完全用不到的食材不会下锅，价值必须为 0。
+        const score = (foodScore + reserveFoodScore + skillScore) * energyPenalty;
+        let reason = '当前没有可量化的料理贡献';
+        const totalFoodScore=foodScore+reserveFoodScore;
+        if (skillScore > totalFoodScore && row.skill.key === 'pot') reason = `目标料理还差${Math.ceil(target?.potGap || 0)}格锅容量`;
+        else if (skillScore > totalFoodScore && ['tasty','assist'].includes(row.skill.key)) reason = `当前暴击累计${critStack.toFixed(1)}%，继续叠至约${desiredCritStack}%`;
+        else if (skillScore > totalFoodScore && row.skill.key === 'healer') reason = `队伍平均活力约${averageEnergy.toFixed(0)}，需要回复`;
+        else if (skillScore > totalFoodScore && row.skill.key === 'dream') reason = '为梦碎目标发动主技能';
+        else if ((foodScore>0||reserveFoodScore>0) && target) {
+            const bestFood = Object.entries(relevantFoodContributions).sort((a,b) => b[1]-a[1])[0];
+            reason = foodScore>0
+                ? (bestFood ? `为下一餐${target.recipe.name}补${bestFood[0]}` : `为下一餐${target.recipe.name}备料`)
+                : (bestFood ? `为本周后续餐次储备${bestFood[0]}` : '为本周后续餐次备料');
         }
-        return { row, estimate, energy, energyFactor, ingredients, expectedTriggers, skillValue, foodScore, skillScore, score, reason };
+        return { row, estimate, energy, energyFactor, ingredients, expectedTriggers, skillValue, foodScore, reserveFoodScore, skillScore, score, reason };
     }).sort((a,b) => b.score - a.score || String(a.row.id).localeCompare(String(b.row.id)));
-    return { selected:scored.slice(0,5), target, desiredCritStack, nextSlot };
+    // 最多选五只仍有本周料理收益的个体；食谱完全用不到的产物不会仅为了凑人数而入队。
+    return { selected:scored.filter(entry => entry.score > 1e-9).slice(0,5), target, desiredCritStack, nextSlot };
 }
 
 function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates, random, recordDetails = false, critPolicy = {normal:40,sunday:55}) {
@@ -23288,7 +23356,7 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
     const initialStock = Object.assign({},stock);
     const energyById = Object.fromEntries(candidates.map(row => [row.id,100]));
     const baseProductionFactor = getWeeklyCookingProductionFactor(state, []);
-    const availabilityFactor = baseProductionFactor.collection * baseProductionFactor.access;
+    const availabilityFactor = baseProductionFactor.collection;
     const perPokemon = Object.fromEntries(candidates.map(row => [row.id,{ row, days:Array.from({length:7},(_,day)=>({day,activeHours:0,skillTriggers:0,skillAmount:0,ingredients:{},startEnergy:100,endEnergy:100,reasons:[]})) }]));
     const meals = [], daily = [], decisionLog = [], flowEvents = [];
     const mealSlotHours = [6,12,18];
@@ -23331,7 +23399,46 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
     const projectedIngredientRates=getWeeklyCookingProjectedIngredientRates(candidates,state);
     const otherStrengthPerTick=Math.max(0,Number(state.otherDailyStrength)||0)*(1+bonus/100)/144;
     const sleepRecoveryUsed=Object.fromEntries(candidates.map(row=>[row.id,0]));
-    let currentDecision=null,lockedSleepEvent=null;
+    const pendingIngredientsById=Object.fromEntries(candidates.map(row=>[row.id,{}]));
+    // 帮忙只累计“可能触发技能的机会”；真正的技能判定和效果一律等到收菜时结算。
+    const pendingSkillLambdaById=Object.fromEntries(candidates.map(row=>[row.id,0]));
+    const collectionTicks=new Set();
+    if(state.collectionMode==='hourly') {
+        for(let tick=0;tick<=simulationEndTick;tick+=6)collectionTicks.add(tick);
+    } else {
+        const count=Math.max(1,Math.min(24,Math.floor(Number(state.collectionsPerDay)||1)));
+        for(let day=0;day<8;day++)for(let index=0;index<count;index++)collectionTicks.add(Math.round(day*144+index*144/count));
+    }
+    let currentDecision=null,collectionDue=false;
+    const collectCurrentTeam=(timeTick,detailDay)=>{
+        // 双重保险：即使今后有新的调用路径忘记在外层判断，睡眠锁内也绝不结算收菜和技能。
+        if(getWeeklyCookingLockedSleepEventAtTick(state,timeTick,sleepEvents))return false;
+        if(!(lastTeam||[]).length)return;
+        const absoluteHour=timeTick/6;
+        let collectedHealing=0;
+        (lastTeam||[]).forEach(choice=>{
+            const id=choice.row.id;
+            const detail=perPokemon[id]?.days?.[detailDay];
+            const ingredientBuffer=pendingIngredientsById[id]||{};
+            Object.entries(ingredientBuffer).forEach(([name,value])=>{stock[name]=(stock[name]||0)+Number(value||0);});
+            pendingIngredientsById[id]={};
+            const pendingLambda=Math.max(0,Number(pendingSkillLambdaById[id])||0);
+            pendingSkillLambdaById[id]=0;
+            const skillCap=isWeeklyCookingSkillSpecialty(choice.row)?2:1;
+            const triggers=Math.min(skillCap,sampleWeeklyCookingPoisson(pendingLambda,random));
+            if(!triggers||!detail)return;
+            const potBeforeSkill=potCarry,stackBeforeSkill=critStack,shardsBeforeSkill=skillShards;
+            detail.skillTriggers+=triggers;
+            if(choice.row.skill.key==='pot'){const amount=triggers*choice.skillValue;potCarry+=amount;detail.skillAmount+=amount;}
+            else if(choice.row.skill.key==='tasty'){const amount=triggers*choice.skillValue;critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+amount);detail.skillAmount+=amount;}
+            else if(choice.row.skill.key==='assist'){const value=WEEKLY_COOKING_ASSIST_TASTY_VALUES[Math.min(WEEKLY_COOKING_ASSIST_TASTY_VALUES.length,choice.row.mainSkillLevel)-1]||0;const amount=triggers*value;critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+amount);detail.skillAmount+=amount;}
+            else if(choice.row.skill.key==='healer'){const amount=triggers*choice.skillValue;collectedHealing+=amount;detail.skillAmount+=amount;}
+            else if(choice.row.skill.key==='dream'){const amount=triggers*choice.skillValue;skillShards+=amount;detail.skillAmount+=amount;}
+            if(recordDetails)flowEvents.push({kind:'skill',collection:true,day:detailDay,absoluteHour,timeLabel:formatAbsoluteHour(absoluteHour),actor:choice.row.nickname,species:choice.row.species,skillKey:choice.row.skill.key,skillLabel:choice.row.skill.label,triggerCount:triggers,skillValue:choice.skillValue,potBefore:potBeforeSkill,potAfter:potCarry,effectivePotBefore:Math.ceil((state.basePot+Math.floor(potBeforeSkill))*(state.goodCamp?1.5:1)),effectivePotAfter:Math.ceil((state.basePot+Math.floor(potCarry))*(state.goodCamp?1.5:1)),stackBefore:stackBeforeSkill,stackAfter:critStack,healing:choice.row.skill.key==='healer'?triggers*choice.skillValue:0,shards:skillShards-shardsBeforeSkill});
+        });
+        if(collectedHealing>0){dailyHealingTotal+=collectedHealing;(lastTeam||[]).forEach(choice=>{energyById[choice.row.id]=Math.min(150,(Number(energyById[choice.row.id])||0)+collectedHealing);});}
+        return true;
+    };
     for(let timeTick=0;timeTick<=simulationEndTick;timeTick++) {
         const absoluteHour=timeTick/6;
         if(timeTick>0&&absoluteHour<=7*24)cumulative+=otherStrengthPerTick;
@@ -23349,7 +23456,6 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
                 encounterTotal+=count;dayResearchEncounters[event.day]+=count;shardResearch+=Math.round(count*Math.sqrt(Math.max(0,drowsy))/8);
             }
             event.team=(lastTeam||[]).slice();
-            if(!event.accessible)lockedSleepEvent=event;
         });
         sleepEvents.filter(event=>event.endTick===timeTick).forEach(event=>{
             const sleepTeam=event.team||[];
@@ -23367,19 +23473,35 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
                     energyById[id]=Math.min(100,(Number(energyById[id])||0)+Math.max(0,event.score)*0.05*natureFactor);
                 }
             });
-            if(lockedSleepEvent===event)lockedSleepEvent=null;
         });
+        const scheduledCollection=collectionTicks.has(timeTick);
+        const lockedSleepEvent=getWeeklyCookingLockedSleepEventAtTick(state,timeTick,sleepEvents);
+        const isLockedSleep=!!lockedSleepEvent;
+        if(scheduledCollection&&isLockedSleep)collectionDue=true;
+        const isCollectionMoment=!isLockedSleep&&(scheduledCollection||collectionDue);
+        if(isCollectionMoment){collectCurrentTeam(timeTick,Math.min(6,Math.max(0,Math.floor(absoluteHour/24))));collectionDue=false;currentDecision=null;}
         mealSlots.filter(slot=>!slot.resolved&&slot.latest<absoluteHour).forEach(resolveMissedSlot);
         const pending=mealSlots.find(slot=>!slot.resolved&&slot.latest>=absoluteHour);
         if(absoluteHour<simulationEndHour&&pending) {
             const detailDay=Math.min(6,Math.max(0,Math.floor(absoluteHour/24)));
             const nextSlot=`周${dayNames[pending.day]}${mealSlotNames[pending.slot]}窗口`;
             const plannerContext={absoluteHour,cumulative,island,sleepEvents,projectedIngredientRates};
-            if(lockedSleepEvent?.team?.length)currentDecision={selected:lockedSleepEvent.team,target:null,desiredCritStack:pending.day===6?critPolicy.sunday:critPolicy.normal,nextSlot};
-            else if(!currentDecision||timeTick%6===0)currentDecision=chooseWeeklyCookingDynamicTeam(type,state,recipes,candidates,stock,energyById,critStack,potCarry,pending.day,nextSlot,1,critPolicy,plannerContext);
+            if(isLockedSleep) {
+                // 周一00:00可能正处于前一天延续的睡眠；这时只能继承睡前队伍，不能生成一次“睡眠中换队”。
+                if(!lockedSleepEvent?.team?.length) {
+                    if(!(lastTeam||[]).length) {
+                        const inheritedDecision=chooseWeeklyCookingDynamicTeam(type,state,recipes,candidates,stock,energyById,critStack,potCarry,pending.day,nextSlot,1,critPolicy,plannerContext);
+                        lastTeam=inheritedDecision.selected;
+                        previousSignature=lastTeam.map(choice=>choice.row.id).sort().join('|');
+                    }
+                    lockedSleepEvent.team=(lastTeam||[]).slice();
+                }
+                currentDecision={selected:(lockedSleepEvent?.team||lastTeam||[]),target:null,desiredCritStack:pending.day===6?critPolicy.sunday:critPolicy.normal,nextSlot};
+            }
+            else if(!currentDecision||isCollectionMoment)currentDecision=chooseWeeklyCookingDynamicTeam(type,state,recipes,candidates,stock,energyById,critStack,potCarry,pending.day,nextSlot,1,critPolicy,plannerContext);
             const decision=currentDecision;
             const signature=decision.selected.map(choice=>choice.row.id).sort().join('|');
-            if(recordDetails&&signature!==previousSignature&&timeTick%6===0) {
+            if(recordDetails&&!isLockedSleep&&signature!==previousSignature) {
                 decisionLog.push({day:detailDay,slot:pending.slot,nextSlot:`${nextSlot} · ${formatAbsoluteHour(absoluteHour)}`,blockHours:1,critResult:lastMealResult?(lastMealResult.tasty?'上次料理暴击，累计已清零':`上次未暴击，保留${critStack.toFixed(1)}%`):'等待合适开饭时点',stack:critStack,target:decision.target?.recipe?.name||'暂无可行料理',team:decision.selected.map(choice=>({id:choice.row.id,nickname:choice.row.nickname,species:choice.row.species,reason:choice.reason}))});
                 const oldIds=new Set((lastTeam||[]).map(choice=>String(choice.row.id)));
                 const newIds=new Set(decision.selected.map(choice=>String(choice.row.id)));
@@ -23388,7 +23510,6 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
                 flowEvents.push({kind:'team',day:detailDay,absoluteHour,timeLabel:formatAbsoluteHour(absoluteHour),target:decision.target?.recipe?.name||'暂无可行料理',incoming,outgoing,team:decision.selected.map(choice=>({nickname:choice.row.nickname,species:choice.row.species,reason:choice.reason}))});
             }
             previousSignature=signature;lastTeam=decision.selected;
-            let tickHealing=0;
             decision.selected.forEach(choice=>{
                 const id=choice.row.id;
                 const energyStart=Number(energyById[id])||0;
@@ -23397,25 +23518,16 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
                 const actualEnergyFactor=getWeeklyCookingEnergyHelpMultiplier(averageEnergy);
                 const energyRatio=actualEnergyFactor/Math.max(0.01,choice.energyFactor);
                 const detail=perPokemon[id].days[detailDay];
-                Object.entries(choice.ingredients).forEach(([name,value])=>{const amount=value/6*energyRatio*availabilityFactor;stock[name]=(stock[name]||0)+amount;detail.ingredients[name]=(detail.ingredients[name]||0)+amount;});
-                const lambda=Math.max(0,choice.expectedTriggers/6*energyRatio*baseProductionFactor.access);
-                const triggers=sampleWeeklyCookingPoisson(lambda,random);
-                detail.activeHours+=1/6;detail.skillTriggers+=triggers;if(timeTick%6===0)detail.reasons.push(choice.reason);
-                const potBeforeSkill=potCarry,stackBeforeSkill=critStack,shardsBeforeSkill=skillShards;
-                if(choice.row.skill.key==='pot'){const amount=triggers*choice.skillValue;potCarry+=amount;detail.skillAmount+=amount;}
-                else if(choice.row.skill.key==='tasty'){const amount=triggers*choice.skillValue;critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+amount);detail.skillAmount+=amount;}
-                else if(choice.row.skill.key==='assist'){const value=WEEKLY_COOKING_ASSIST_TASTY_VALUES[Math.min(WEEKLY_COOKING_ASSIST_TASTY_VALUES.length,choice.row.mainSkillLevel)-1]||0;const amount=triggers*value;critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+amount);detail.skillAmount+=amount;}
-                else if(choice.row.skill.key==='healer'){const amount=triggers*choice.skillValue;tickHealing+=amount;detail.skillAmount+=amount;}
-                else if(choice.row.skill.key==='dream'){const amount=triggers*choice.skillValue;skillShards+=amount;detail.skillAmount+=amount;}
-                if(recordDetails&&triggers>0) {
-                    flowEvents.push({kind:'skill',day:detailDay,absoluteHour,timeLabel:formatAbsoluteHour(absoluteHour),actor:choice.row.nickname,species:choice.row.species,skillKey:choice.row.skill.key,skillLabel:choice.row.skill.label,triggerCount:triggers,skillValue:choice.skillValue,potBefore:potBeforeSkill,potAfter:potCarry,effectivePotBefore:Math.ceil((state.basePot+Math.floor(potBeforeSkill))*(state.goodCamp?1.5:1)),effectivePotAfter:Math.ceil((state.basePot+Math.floor(potCarry))*(state.goodCamp?1.5:1)),stackBefore:stackBeforeSkill,stackAfter:critStack,healing:choice.row.skill.key==='healer'?triggers*choice.skillValue:0,shards:skillShards-shardsBeforeSkill});
-                }
+                Object.entries(choice.ingredients).forEach(([name,value])=>{const amount=value/6*energyRatio*availabilityFactor;pendingIngredientsById[id][name]=(pendingIngredientsById[id][name]||0)+amount;detail.ingredients[name]=(detail.ingredients[name]||0)+amount;});
+                const lambda=Math.max(0,choice.expectedTriggers/6*energyRatio);
+                pendingSkillLambdaById[id]=(Number(pendingSkillLambdaById[id])||0)+lambda;
+                detail.activeHours+=1/6;if(isCollectionMoment)detail.reasons.push(choice.reason);
                 energyById[id]=energyEndBeforeHeal;
             });
-            if(tickHealing>0){dailyHealingTotal+=tickHealing;decision.selected.forEach(choice=>{energyById[choice.row.id]=Math.min(150,(Number(energyById[choice.row.id])||0)+tickHealing);});}
         }
         const availableSlots=mealSlots.filter(slot=>!slot.resolved&&slot.earliest<=absoluteHour&&slot.latest>=absoluteHour);
-        if(availableSlots.length) {
+        // 标记为无法上线的睡眠期间既不能收菜，也不能换队或开饭。
+        if(availableSlots.length&&!isLockedSleep) {
             const slot=availableSlots[0];
             const availablePot=Math.ceil((state.basePot+Math.floor(potCarry))*(state.goodCamp?1.5:1));
             const recipe=chooseWeeklyCookingRecipe(type,recipes,stock,availablePot,state,slot.day,{absoluteHour,cumulative,island,sleepEvents,critStack,critPolicy,projectedIngredientRates});
@@ -23455,7 +23567,8 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
     const dailyProduction={};individualDetails.forEach(row=>Object.entries(row.ingredientsPerDay).forEach(([name,value])=>{dailyProduction[name]=(dailyProduction[name]||0)+value;}));
     const activeIds=new Set(individualDetails.map(row=>row.id));
     const activeRoster=candidates.filter(row=>activeIds.has(row.id)).map(row=>{const detail=individualDetails.find(item=>item.id===row.id);return Object.assign({},row,{activeHours:detail.activeHours,rotationScale:detail.rotationScale,dailyTriggers:detail.skillTriggers});});
-    return {type,island,bonus,initialStock,stock,dailyProduction,roster:activeRoster,individualDetails,decisionLog,flowEvents,meals,daily,cookedMeals,missedMeals:21-cookedMeals,tastyMeals,averageCritChance:cookedMeals?totalMealCritChance/cookedMeals:0,missedIngredients,expectedStrength:cumulative,expectedEncounters:encounterTotal,expectedShards:shardResearch+skillShards,researchShards:shardResearch,skillShards,productionFactor:{total:availabilityFactor,collection:baseProductionFactor.collection,access:baseProductionFactor.access,sleep:1,healer:1,dailyHealing:dailyHealingTotal/7},skill:getWeeklyCookingSkillSummary(activeRoster)};
+    const operationLockWindows=sleepEvents.filter(event=>event.accessible===false).map(event=>({key:event.key,day:event.day,startTick:event.startTick,endTick:event.endTick}));
+    return {type,island,bonus,initialStock,stock,dailyProduction,roster:activeRoster,individualDetails,decisionLog,flowEvents,operationLockWindows,meals,daily,cookedMeals,missedMeals:21-cookedMeals,tastyMeals,averageCritChance:cookedMeals?totalMealCritChance/cookedMeals:0,missedIngredients,expectedStrength:cumulative,expectedEncounters:encounterTotal,expectedShards:shardResearch+skillShards,researchShards:shardResearch,skillShards,productionFactor:{total:availabilityFactor,collection:baseProductionFactor.collection,access:baseProductionFactor.access,sleep:1,healer:1,dailyHealing:dailyHealingTotal/7},skill:getWeeklyCookingSkillSummary(activeRoster)};
 }
 
 function simulateWeeklyCookingDynamicScenario(type,state,recipesByType,candidates) {
@@ -23680,7 +23793,14 @@ function renderWeeklyCookingMealCalendar(scenario) {
 
 function renderWeeklyCookingFlowTimeline(scenario) {
     const dayNames=['周一','周二','周三','周四','周五','周六','周日'];
-    const events=(scenario?.flowEvents||[]).slice().sort((a,b)=>Number(a.absoluteHour||0)-Number(b.absoluteHour||0));
+    const lockWindows=Array.isArray(scenario?.operationLockWindows)
+        ? scenario.operationLockWindows
+        : getWeeklyCookingSleepEvents(weeklyCookingState).filter(event=>event.accessible===false).map(event=>({startTick:event.startTick,endTick:event.endTick}));
+    // 兼容旧快照：旧结果里即便残留睡眠中事件，也不能继续把它们展示为有效策略。
+    const events=(scenario?.flowEvents||[]).filter(event=>{
+        const tick=Math.round((Number(event.absoluteHour)||0)*6);
+        return !lockWindows.some(window=>window.startTick<=tick&&tick<window.endTick);
+    }).slice().sort((a,b)=>Number(a.absoluteHour||0)-Number(b.absoluteHour||0));
     const teamEvents=events.filter(event=>event.kind==='team').length;
     const skillTriggers=events.filter(event=>event.kind==='skill').reduce((sum,event)=>sum+Number(event.triggerCount||0),0);
     const mealEvents=events.filter(event=>event.kind==='meal').length;
@@ -23693,12 +23813,12 @@ function renderWeeklyCookingFlowTimeline(scenario) {
             return `<div class="relative pl-8 pb-3"><span class="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-[9px] text-white ring-4 ring-indigo-50"><i class="fa-solid fa-right-left"></i></span><div class="rounded-xl border border-indigo-100 bg-indigo-50/60 p-2"><div class="flex flex-wrap items-center justify-between gap-1"><span class="text-[9px] font-black text-indigo-900">${initial?'确认当前队伍':'发生换队'}</span><span class="text-[8px] font-black text-indigo-500">${escapeHtml(event.timeLabel||'')}</span></div>${outgoing?`<div class="mt-1 text-[8px] font-bold text-rose-600"><i class="fa-solid fa-arrow-down"></i> 下场：${outgoing}</div>`:''}${incoming?`<div class="mt-1 text-[8px] font-bold text-emerald-700"><i class="fa-solid fa-arrow-up"></i> 上场：${incoming}</div>`:''}<div class="mt-1 text-[8px] font-bold text-slate-500">当前5人：${current||'暂无'} · 目标：${escapeHtml(event.target||'')}</div></div></div>`;
         }
         if(event.kind==='skill') {
-            let effect=`发动 ${Number(event.triggerCount)||0} 次`;
+            let effect=`本次收菜结算发动 ${Number(event.triggerCount)||0} 次`;
             if(event.skillKey==='pot') effect+=`，扩锅累计 ${Number(event.potBefore||0).toFixed(0)}→${Number(event.potAfter||0).toFixed(0)} 格，有效锅 ${Number(event.effectivePotBefore||0)}→${Number(event.effectivePotAfter||0)} 格`;
             else if(['tasty','assist'].includes(event.skillKey)) effect+=`，技能暴击累计 ${Number(event.stackBefore||0).toFixed(0)}%→${Number(event.stackAfter||0).toFixed(0)}%`;
             else if(event.skillKey==='healer') effect+=`，本次为队伍回复约 ${Number(event.healing||0).toFixed(0)} 活力`;
             else if(event.skillKey==='dream') effect+=`，获得约 ${formatWeeklyCookingNumber(event.shards)} 梦碎`;
-            return `<div class="relative pl-8 pb-3"><span class="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-violet-600 text-[9px] text-white ring-4 ring-violet-50"><i class="fa-solid fa-wand-magic-sparkles"></i></span><div class="rounded-xl border border-violet-100 bg-violet-50/60 p-2"><div class="flex flex-wrap items-center justify-between gap-1"><span class="text-[9px] font-black text-violet-900">${escapeHtml(event.actor)} · ${escapeHtml(event.skillLabel)}</span><span class="text-[8px] font-black text-violet-500">${escapeHtml(event.timeLabel||'')}</span></div><div class="mt-1 text-[8px] font-bold text-violet-700">${effect}</div></div></div>`;
+            return `<div class="relative pl-8 pb-3"><span class="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-violet-600 text-[9px] text-white ring-4 ring-violet-50"><i class="fa-solid fa-hand-pointer"></i></span><div class="rounded-xl border border-violet-100 bg-violet-50/60 p-2"><div class="flex flex-wrap items-center justify-between gap-1"><span class="text-[9px] font-black text-violet-900">收菜 · ${escapeHtml(event.actor)} · ${escapeHtml(event.skillLabel)}</span><span class="text-[8px] font-black text-violet-500">${escapeHtml(event.timeLabel||'')}</span></div><div class="mt-1 text-[8px] font-bold text-violet-700">${effect}</div></div></div>`;
         }
         const visibleChance=Math.max(0,Number(event.critChance||0)-WEEKLY_COOKING_TASTY_BASE_CHANCE);
         return `<div class="relative pl-8 pb-3"><span class="absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full ${event.tasty?'bg-fuchsia-600':'bg-orange-500'} text-[9px] text-white ring-4 ${event.tasty?'ring-fuchsia-50':'ring-orange-50'}"><i class="fa-solid fa-bowl-food"></i></span><div class="rounded-xl border ${event.tasty?'border-fuchsia-200 bg-fuchsia-50/60':'border-orange-100 bg-orange-50/60'} p-2"><div class="flex flex-wrap items-center justify-between gap-1"><span class="text-[9px] font-black ${event.tasty?'text-fuchsia-900':'text-orange-900'}">${escapeHtml(event.slotName||'料理')}：${escapeHtml(event.name||'')}</span><span class="text-[8px] font-black ${event.tasty?'text-fuchsia-500':'text-orange-500'}">${escapeHtml(event.timeLabel||'')}</span></div><div class="mt-1 text-[8px] font-bold text-slate-600">锅容量 ${Number(event.availablePot)||0} · 开饭前扩锅累计 ${Number(event.potCarryBefore||0).toFixed(0)} 格 · 游戏显示暴击率 ${visibleChance.toFixed(0)}% · ${event.tasty?`暴击 ×${Number(event.multiplier)||1}`:'未暴击'} · 本顿 ${formatWeeklyCookingNumber(event.strength)} 能量</div></div></div>`;
@@ -23776,12 +23896,22 @@ function renderWeeklyCookingRecipeEditorHtml() {
 
 function renderWeeklyCookingStockHtml() {
     const recipes = getWeeklyCookingRecipes(weeklyCookingState);
-    const names = getWeeklyCookingAllIngredientNames(recipes);
+    const activeTypes=getMealPrepActiveTypes(mealPrepPlannerState);
+    const activeRecipes=Object.fromEntries(activeTypes.map(type=>[type,recipes[type]||[]]));
+    const names = getWeeklyCookingAllIngredientNames(activeRecipes);
+    const recommended = getWeeklyCookingMealPrepRecommendedStock(names);
     const stock = getWeeklyCookingStartingStock(weeklyCookingState, names);
-    return `<div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full text-[10px]"><thead><tr class="bg-slate-900 text-white"><th class="px-3 py-2 text-left">食材</th><th class="px-3 py-2 text-right">周一初始库存</th><th class="px-3 py-2 text-right">当前采用24h产量</th></tr></thead><tbody>${names.map(name => {
+    const typeLabel=mealPrepPlannerState.nextWeekType==='random'?'三种料理等概率':`确定为${MEAL_PREP_TYPE_META[mealPrepPlannerState.nextWeekType]?.label||''}`;
+    const manualCount=names.filter(name=>{
+        const value=weeklyCookingState.stockOverride?.[canonicalizeMealPrepIngredientName(name)] ?? weeklyCookingState.stockOverride?.[name];
+        return value!==''&&value!=null;
+    }).length;
+    return `<div class="mb-2 flex flex-col gap-2 rounded-xl border border-violet-200 bg-violet-50/70 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"><div><div class="text-[10px] font-black text-violet-900"><i class="fa-solid fa-link"></i> 已与料理备料规划联动：${escapeHtml(typeLabel)}</div><div class="mt-0.5 text-[8px] font-bold text-violet-600">推荐囤货会直接作为周一初始库存；${manualCount?`当前有 ${manualCount} 项采用手动覆盖。`:'当前全部采用备料推荐。'}</div></div><button type="button" onclick="resetWeeklyCookingStockToMealPrep()" class="rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-[9px] font-black text-violet-700"><i class="fa-solid fa-rotate-left"></i> 全部恢复备料推荐</button></div><div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full text-[10px]"><thead><tr class="bg-slate-900 text-white"><th class="px-3 py-2 text-left">食材</th><th class="px-3 py-2 text-right">周一初始库存</th><th class="px-3 py-2 text-left">库存来源</th><th class="px-3 py-2 text-right">当前采用24h产量</th></tr></thead><tbody>${names.map(name => {
         const info = getMealPrepProductionInfo(name, mealPrepPlannerState);
-        const override = weeklyCookingState.stockOverride[name];
-        return `<tr class="border-t border-slate-100"><td class="px-3 py-2 font-black text-slate-700">${escapeHtml(name)}</td><td class="px-3 py-2 text-right"><input type="number" min="0" value="${override === '' || override == null ? '' : override}" placeholder="${Math.round(stock[name] || 0)}" onchange='updateWeeklyCookingStock(${JSON.stringify(name)}, this.value)' class="w-24 rounded-lg border border-slate-200 px-2 py-1 text-right font-black"></td><td class="px-3 py-2 text-right font-mono font-black ${info.missing ? 'text-rose-500' : 'text-sky-700'}">${info.missing ? '未填写' : `${info.daily.toFixed(info.daily % 1 ? 1 : 0)}/24h`}</td></tr>`;
+        const canonicalName=canonicalizeMealPrepIngredientName(name);
+        const override = weeklyCookingState.stockOverride?.[canonicalName] ?? weeklyCookingState.stockOverride?.[name];
+        const isManual=override!==''&&override!=null;
+        return `<tr class="border-t border-slate-100"><td class="px-3 py-2 font-black text-slate-700">${escapeHtml(name)}</td><td class="px-3 py-2 text-right"><input type="number" min="0" value="${Math.round(stock[canonicalName] || 0)}" onchange='updateWeeklyCookingStock(${JSON.stringify(name)}, this.value)' class="w-24 rounded-lg border ${isManual?'border-amber-300 bg-amber-50':'border-emerald-200 bg-emerald-50'} px-2 py-1 text-right font-black"></td><td class="px-3 py-2"><span class="inline-flex rounded-full px-2 py-1 text-[8px] font-black ${isManual?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}">${isManual?'手动覆盖':`备料推荐 ${Math.round(recommended[canonicalName]||0)}`}</span></td><td class="px-3 py-2 text-right font-mono font-black ${info.missing ? 'text-rose-500' : 'text-sky-700'}">${info.missing ? '未填写' : `${info.daily.toFixed(info.daily % 1 ? 1 : 0)}/24h`}</td></tr>`;
     }).join('')}</tbody></table></div>`;
 }
 
@@ -23813,7 +23943,7 @@ function renderWeeklyCookingSimulatorModal() {
     modal.innerHTML = `<div class="bg-white w-full sm:max-w-7xl h-full sm:h-[94vh] sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col"><div class="px-5 py-4 bg-gradient-to-r from-slate-950 via-indigo-900 to-rose-700 text-white flex items-start justify-between gap-3"><div><h3 class="text-lg font-black"><i class="fa-solid fa-calendar-week"></i> 周料理模拟</h3><p class="text-[10px] text-white/70 font-bold mt-1">按具体钟点换队；每餐允许提前3小时或延后18小时，扩锅、暴击率、睡眠恢复与收菜频率共同进入模拟。</p></div><button onclick="closeWeeklyCookingSimulatorModal()" class="text-white/80 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button></div><div id="weekly-cooking-scroll-body" class="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
         <div class="rounded-2xl border ${weeklyCookingState.goodCamp ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900' : 'border-slate-200 bg-slate-50 text-slate-700'} px-3 py-2 text-[10px] font-bold"><i class="fa-solid fa-fire-burner"></i> 当前有效基础锅容量：<b>${effectiveBasePot}</b>${weeklyCookingState.goodCamp ? `（游戏原值 ${weeklyCookingState.basePot} × 好露营券 1.5）` : ''}；计入周一已有扩锅后为 <b>${effectiveStartingPot}</b>。基础锅输入框始终填写未开券时的原值。</div>
         <section class="grid grid-cols-1 lg:grid-cols-3 gap-3"><div class="lg:col-span-2 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-3"><div class="flex flex-col md:flex-row gap-3 md:items-end"><label class="text-[10px] font-black text-indigo-900 flex-1">本周岛屿<select onchange="updateWeeklyCookingSetting('selectedIsland', this.value)" class="mt-1 w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-black">${WEEKLY_COOKING_ISLANDS.map(item => `<option value="${item.id}" ${item.id === weeklyCookingState.selectedIsland ? 'selected' : ''}>${item.label} · 当前${weeklyCookingState.islandBonuses[item.id]}%</option>`).join('')}</select></label><label class="text-[10px] font-black text-indigo-900">基础锅容量<input type="number" min="1" value="${weeklyCookingState.basePot}" onchange="updateWeeklyCookingSetting('basePot', this.value)" class="mt-1 w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-black text-right"></label><label class="flex items-center gap-2 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-[10px] font-black text-indigo-900"><input type="checkbox" ${weeklyCookingState.goodCamp ? 'checked' : ''} onchange="updateWeeklyCookingSetting('goodCamp', this.checked)" class="accent-indigo-600">开启好露营券</label><label class="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[10px] font-black text-orange-900"><input type="checkbox" ${weeklyCookingState.cookingWeekBoost ? 'checked' : ''} onchange="updateWeeklyCookingSetting('cookingWeekBoost', this.checked)" class="accent-orange-600">料理周：料理能量×1.5</label></div><details class="mt-3 rounded-xl border border-indigo-100 bg-white p-2"><summary class="cursor-pointer text-[10px] font-black text-indigo-700">管理所有岛屿加成（${currentCloudUser ? '修改后自动同步账号' : '当前设备保存'}）</summary><div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">${WEEKLY_COOKING_ISLANDS.map(item => `<label class="text-[8px] font-black text-slate-500">${item.label}<div class="mt-1 flex items-center"><input type="number" min="0" max="999" value="${weeklyCookingState.islandBonuses[item.id]}" onchange="updateWeeklyCookingIslandBonus('${item.id}', this.value)" class="min-w-0 w-full rounded-lg border border-slate-200 px-2 py-1 text-right text-[10px] font-black"><span class="ml-1">%</span></div></label>`).join('')}</div></details></div><div class="rounded-2xl border border-rose-200 bg-rose-50/50 p-3 space-y-2"><label class="text-[10px] font-black text-rose-900">优化目标<select onchange="updateWeeklyCookingSetting('objective', this.value)" class="mt-1 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-black"><option value="strength" ${weeklyCookingState.objective === 'strength' ? 'selected' : ''}>最终最高分</option><option value="shards" ${weeklyCookingState.objective === 'shards' ? 'selected' : ''}>总梦碎最高</option><option value="encounters" ${weeklyCookingState.objective === 'encounters' ? 'selected' : ''}>遇见数量最高</option></select></label><label class="text-[10px] font-black text-rose-900">其他队伍每日能量（加成前）<input type="number" min="0" value="${weeklyCookingState.otherDailyStrength}" onchange="updateWeeklyCookingSetting('otherDailyStrength', this.value)" class="mt-1 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-black text-right"></label><label class="text-[10px] font-black text-rose-900">周一已有扩锅<input type="number" min="0" value="${weeklyCookingState.startingPotBoost}" onchange="updateWeeklyCookingSetting('startingPotBoost', this.value)" class="mt-1 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-black text-right"></label></div></section>
-        <section class="rounded-2xl border border-sky-200 bg-sky-50/50 p-3"><div class="text-xs font-black text-sky-900"><i class="fa-solid fa-bed"></i> 睡眠与上线规则</div><div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 mt-2"><label class="text-[9px] font-black text-sky-800">每天几觉<select onchange="updateWeeklyCookingSleep('sessionsPerDay', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"><option value="1" ${weeklyCookingState.sleep.sessionsPerDay === 1 ? 'selected' : ''}>一觉</option><option value="2" ${weeklyCookingState.sleep.sessionsPerDay === 2 ? 'selected' : ''}>两觉</option></select></label><label class="text-[9px] font-black text-sky-800">一觉分数<input type="number" min="0" max="100" value="${weeklyCookingState.sleep.firstScore}" onchange="updateWeeklyCookingSleep('firstScore', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black text-right"></label><label class="text-[9px] font-black text-sky-800">一觉开始<input type="time" value="${weeklyCookingState.sleep.firstStart}" onchange="updateWeeklyCookingSleep('firstStart', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="text-[9px] font-black text-sky-800">一觉结束<input type="time" value="${weeklyCookingState.sleep.firstEnd}" onchange="updateWeeklyCookingSleep('firstEnd', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="flex items-center gap-2 rounded-lg border border-sky-200 bg-white px-2 py-2 text-[9px] font-black text-sky-800 self-end"><input type="checkbox" ${weeklyCookingState.sleep.firstAccessible ? 'checked' : ''} onchange="updateWeeklyCookingSleep('firstAccessible', this.checked)" class="accent-sky-600">一觉可上线</label><label class="text-[9px] font-black text-sky-800">收菜方式<select onchange="updateWeeklyCookingSetting('collectionMode', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"><option value="hourly" ${weeklyCookingState.collectionMode === 'hourly' ? 'selected' : ''}>随时/每小时</option><option value="limited" ${weeklyCookingState.collectionMode === 'limited' ? 'selected' : ''}>低频上线</option></select></label><label class="text-[9px] font-black text-sky-800">每天收菜次数<input type="number" min="1" max="24" value="${weeklyCookingState.collectionsPerDay}" ${weeklyCookingState.collectionMode === 'hourly' ? 'disabled' : ''} onchange="updateWeeklyCookingSetting('collectionsPerDay', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white disabled:bg-slate-100 px-2 py-2 text-[10px] font-black text-right"></label></div>${weeklyCookingState.sleep.sessionsPerDay === 2 ? `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mt-2"><label class="text-[9px] font-black text-sky-800">二觉分数<input type="number" min="0" max="${100 - weeklyCookingState.sleep.firstScore}" value="${weeklyCookingState.sleep.secondScore}" onchange="updateWeeklyCookingSleep('secondScore', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black text-right"></label><label class="text-[9px] font-black text-sky-800">二觉开始<input type="time" value="${weeklyCookingState.sleep.secondStart}" onchange="updateWeeklyCookingSleep('secondStart', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="text-[9px] font-black text-sky-800">二觉结束<input type="time" value="${weeklyCookingState.sleep.secondEnd}" onchange="updateWeeklyCookingSleep('secondEnd', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="flex items-center gap-2 rounded-lg border border-sky-200 bg-white px-2 py-2 text-[9px] font-black text-sky-800 self-end"><input type="checkbox" ${weeklyCookingState.sleep.secondAccessible ? 'checked' : ''} onchange="updateWeeklyCookingSleep('secondAccessible', this.checked)" class="accent-sky-600">二觉可上线</label></div>` : ''}</section>
+        <section class="rounded-2xl border border-sky-200 bg-sky-50/50 p-3"><div class="text-xs font-black text-sky-900"><i class="fa-solid fa-bed"></i> 睡眠与上线规则</div><div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 mt-2"><label class="text-[9px] font-black text-sky-800">每天几觉<select onchange="updateWeeklyCookingSleep('sessionsPerDay', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"><option value="1" ${weeklyCookingState.sleep.sessionsPerDay === 1 ? 'selected' : ''}>一觉</option><option value="2" ${weeklyCookingState.sleep.sessionsPerDay === 2 ? 'selected' : ''}>两觉</option></select></label><label class="text-[9px] font-black text-sky-800">一觉有效分数（自动）<input type="number" value="${weeklyCookingState.sleep.firstScore}" readonly class="mt-1 w-full rounded-lg border border-sky-100 bg-sky-100/70 px-2 py-2 text-[10px] font-black text-right text-sky-700"></label><label class="text-[9px] font-black text-sky-800">一觉开始<input type="time" value="${weeklyCookingState.sleep.firstStart}" onchange="updateWeeklyCookingSleep('firstStart', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="text-[9px] font-black text-sky-800">一觉结束<input type="time" value="${weeklyCookingState.sleep.firstEnd}" onchange="updateWeeklyCookingSleep('firstEnd', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="flex items-center gap-2 rounded-lg border border-sky-200 bg-white px-2 py-2 text-[9px] font-black text-sky-800 self-end"><input type="checkbox" ${weeklyCookingState.sleep.firstAccessible ? 'checked' : ''} onchange="updateWeeklyCookingSleep('firstAccessible', this.checked)" class="accent-sky-600">一觉可上线</label><label class="text-[9px] font-black text-sky-800">收菜方式<select onchange="updateWeeklyCookingSetting('collectionMode', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"><option value="hourly" ${weeklyCookingState.collectionMode === 'hourly' ? 'selected' : ''}>随时/每小时</option><option value="limited" ${weeklyCookingState.collectionMode === 'limited' ? 'selected' : ''}>低频上线</option></select></label><label class="text-[9px] font-black text-sky-800">每天收菜次数<input type="number" min="1" max="24" value="${weeklyCookingState.collectionsPerDay}" ${weeklyCookingState.collectionMode === 'hourly' ? 'disabled' : ''} onchange="updateWeeklyCookingSetting('collectionsPerDay', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white disabled:bg-slate-100 px-2 py-2 text-[10px] font-black text-right"></label></div>${weeklyCookingState.sleep.sessionsPerDay === 2 ? `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mt-2"><label class="text-[9px] font-black text-sky-800">二觉有效分数（自动）<input type="number" value="${weeklyCookingState.sleep.secondScore}" readonly class="mt-1 w-full rounded-lg border border-sky-100 bg-sky-100/70 px-2 py-2 text-[10px] font-black text-right text-sky-700"></label><label class="text-[9px] font-black text-sky-800">二觉开始<input type="time" value="${weeklyCookingState.sleep.secondStart}" onchange="updateWeeklyCookingSleep('secondStart', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="text-[9px] font-black text-sky-800">二觉结束<input type="time" value="${weeklyCookingState.sleep.secondEnd}" onchange="updateWeeklyCookingSleep('secondEnd', this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-2 py-2 text-[10px] font-black"></label><label class="flex items-center gap-2 rounded-lg border border-sky-200 bg-white px-2 py-2 text-[9px] font-black text-sky-800 self-end"><input type="checkbox" ${weeklyCookingState.sleep.secondAccessible ? 'checked' : ''} onchange="updateWeeklyCookingSleep('secondAccessible', this.checked)" class="accent-sky-600">二觉可上线</label></div>` : ''}</section>
         <section><div class="flex items-center justify-between gap-2 mb-2"><div><div class="text-xs font-black text-slate-800"><i class="fa-solid fa-boxes-stacked text-indigo-500"></i> 候选宝可梦</div><div class="text-[9px] font-bold text-slate-400">主技能类型和基础触发率来自页面内置资料；系统会结合等级、性格、已生效副技能自动计算。勾选只是加入候选池，系统可以让无收益候选不上场，并按料理需要分配其他成员的站场时间。</div></div><button onclick="document.getElementById('weekly-cooking-simulator-modal')?.remove();openGraduationDexModal()" class="px-3 py-2 rounded-xl bg-indigo-50 text-indigo-700 text-[9px] font-black">打开出货库</button></div>${renderWeeklyCookingRosterHtml()}</section>
         <section><div class="mb-2"><div class="text-xs font-black text-slate-800"><i class="fa-solid fa-book-open text-orange-500"></i> 一周可选料理</div><div class="text-[9px] font-bold text-slate-400">每类第一道来自料理备料规划；这里可以追加多道。请填写游戏当前显示的单顿能量，未填时仅用食材数×100占位。</div></div><div class="grid grid-cols-1 xl:grid-cols-3 gap-3">${renderWeeklyCookingRecipeEditorHtml()}</div></section>
         <section><div class="flex items-center justify-between mb-2"><div><div class="text-xs font-black text-slate-800"><i class="fa-solid fa-basket-shopping text-emerald-500"></i> 周一库存与生产</div><div class="text-[9px] font-bold text-slate-400">留空库存会采用料理备料规划推荐值；24h产量仍在料理备料规划中维护。</div></div><button onclick="closeWeeklyCookingSimulatorModal();openMealPrepPlannerModal()" class="px-3 py-2 rounded-xl bg-orange-50 text-orange-700 text-[9px] font-black">打开备料规划</button></div>${renderWeeklyCookingStockHtml()}</section>
@@ -23838,8 +23968,13 @@ function updateWeeklyCookingIslandBonus(islandId, value) {
 
 function updateWeeklyCookingSleep(field, value) {
     if (field.endsWith('Accessible')) weeklyCookingState.sleep[field] = !!value;
-    else if (['sessionsPerDay','firstScore','secondScore'].includes(field)) weeklyCookingState.sleep[field] = Number(value) || 0;
+    else if (field === 'sessionsPerDay') weeklyCookingState.sleep[field] = Number(value) || 1;
     else weeklyCookingState.sleep[field] = value;
+    if (['sessionsPerDay','firstStart','firstEnd','secondStart','secondEnd'].includes(field)) {
+        const events=getWeeklyCookingSleepEvents(weeklyCookingState).filter(event=>event.day===0);
+        weeklyCookingState.sleep.firstScore=Math.round(Number(events.find(event=>event.key==='first')?.score)||0);
+        weeklyCookingState.sleep.secondScore=weeklyCookingState.sleep.sessionsPerDay===2?Math.round(Number(events.find(event=>event.key==='second')?.score)||0):0;
+    }
     weeklyCookingState = normalizeWeeklyCookingState(weeklyCookingState);
     saveWeeklyCookingState();
     renderWeeklyCookingSimulatorModal();
@@ -23926,9 +24061,20 @@ function updateWeeklyCookingRecipeIngredient(type, recipeIndex, ingredientIndex,
 }
 
 function updateWeeklyCookingStock(name, value) {
+    const scrollTop=document.getElementById('weekly-cooking-scroll-body')?.scrollTop||0;
     const canonicalName=canonicalizeMealPrepIngredientName(name);
     weeklyCookingState.stockOverride[canonicalName] = value === '' ? '' : Math.max(0, Number(value) || 0);
-    saveWeeklyCookingState(); markWeeklyCookingSimulationPending();
+    saveWeeklyCookingState();
+    renderWeeklyCookingSimulatorModal();
+    requestAnimationFrame(()=>{const body=document.getElementById('weekly-cooking-scroll-body');if(body)body.scrollTop=scrollTop;});
+}
+
+function resetWeeklyCookingStockToMealPrep() {
+    const scrollTop=document.getElementById('weekly-cooking-scroll-body')?.scrollTop||0;
+    weeklyCookingState.stockOverride={};
+    saveWeeklyCookingState();
+    renderWeeklyCookingSimulatorModal();
+    requestAnimationFrame(()=>{const body=document.getElementById('weekly-cooking-scroll-body');if(body)body.scrollTop=scrollTop;});
 }
 
 let weeklyCookingSimulationJobId = 0;
@@ -24507,19 +24653,8 @@ async function calculateAndRenderWeeklyCooking() {
     const originalUpdateSleep = window.updateWeeklyCookingSleep;
     if (typeof originalUpdateSleep === 'function') {
         window.updateWeeklyCookingSleep = function(field, value) {
-            originalUpdateSleep(field, value);
-            const lower = String(field || '').toLowerCase();
-            const kind = lower.includes('end') ? 'end' : (lower.includes('score') || lower.includes('start') ? 'score' : '');
-            if (!kind) return;
-            if (lower.startsWith('first')) syncFlatSleepSession(window.weeklyCookingState.sleep, 'first', kind);
-            if (lower.startsWith('second')) syncFlatSleepSession(window.weeklyCookingState.sleep, 'second', kind);
-            const sessions = findSleepSessions(window.weeklyCookingState);
-            let targets = sessions;
-            if (lower.includes('first') || lower.includes('one') || /(^|\D)1(\D|$)/.test(lower)) targets = sessions.slice(0,1);
-            if (lower.includes('second') || lower.includes('two') || /(^|\D)2(\D|$)/.test(lower)) targets = sessions.slice(1,2);
-            targets.forEach(item => syncSleepSession(item.value, kind));
-            if (typeof saveWeeklyCookingState === 'function') saveWeeklyCookingState();
-            if (typeof renderWeeklyCookingSimulatorModal === 'function') renderWeeklyCookingSimulatorModal();
+            // 起止时间单向计算恢复分数；绝不再用分数反推结束时间。
+            return originalUpdateSleep(field, value);
         };
     }
 
@@ -24542,7 +24677,10 @@ async function calculateAndRenderWeeklyCooking() {
                 if (anchor) {
                     const note = document.createElement('div');
                     note.className = 'sleep-auto-calc-note rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[9px] font-bold text-sky-700 mt-2';
-                    note.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> 填开始时间＋睡眠分数会自动算结束时间；改动结束时间则会按8小时30分＝100分反算睡眠分数。';
+                    const daySleepEvents=typeof getWeeklyCookingSleepEvents==='function'?getWeeklyCookingSleepEvents(window.weeklyCookingState).filter(event=>event.day===0):[];
+                    const sleepSummary=daySleepEvents.map(event=>`${event.key==='first'?'一觉':'二觉'}持续${Number(event.durationHours||0).toFixed(1)}h、恢复${Number(event.score||0).toFixed(0)}分`).join('；');
+                    const lockedSummary=daySleepEvents.filter(event=>event.accessible===false).map(event=>`${event.key==='first'?'一觉':'二觉'} ${event.start}–${event.end}`).join('、');
+                    note.innerHTML = `<i class="fa-solid fa-circle-info"></i> ${sleepSummary}。分数＝有效睡眠时间÷8.5小时×100，并固定先分配给一觉、再把剩余额度分给二觉，两觉合计最多100分；实际睡眠可以超过8.5小时，超出的部分不再加分。${lockedSummary?`<span class="text-rose-700">当前强制禁止操作：${lockedSummary}，期间不收菜、不结算技能、不换队、不开饭。</span>`:'当前两段睡眠均允许上线操作。'}结束时间只由玩家填写，系统不会用分数反推。`;
                     anchor.appendChild(note);
                 }
             }
