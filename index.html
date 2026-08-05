@@ -10417,6 +10417,8 @@ function openSingleDailyCheckInModal(options = {}) {
                 <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
             </div>
 
+            <div id="checkin-pokemon-image-preview" class="hidden"></div>
+
             <div class="grid grid-cols-1 gap-2">
                 <div class="min-w-0">
                     <label class="block text-[10px] font-bold text-slate-500 mb-1">记录日期</label>
@@ -10541,7 +10543,7 @@ function openSingleDailyCheckInModal(options = {}) {
                 </select>
                 <label class="mt-2 flex items-center justify-between gap-2 bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-2 text-[11px] font-black text-yellow-800">
                     <span><i class="fa-solid fa-sparkles text-yellow-500"></i> 这只是闪光宝可梦</span>
-                    <input type="checkbox" id="checkin-shiny" class="w-4 h-4 accent-yellow-500">
+                    <input type="checkbox" id="checkin-shiny" onchange="updateCheckInPokemonImagePreview()" class="w-4 h-4 accent-yellow-500">
                 </label>
             </div>
         </div>
@@ -10565,7 +10567,167 @@ function openSingleDailyCheckInModal(options = {}) {
     refreshSubskillSlotsUI();
     refreshNaturePickerUI();
     refreshCheckInIngredientSelectors(false);
+    updateCheckInPokemonImagePreview();
     triggerLivePanelAudit();
+}
+
+// 🖼️ 统一宝可梦图片：玩家可在 PokéAPI Sprites 的完整图集中切换整套画风。
+// 主题只保存在本机偏好中，不写入宝可梦档案，因此旧出货记录会自动换肤。
+const POKEMON_SPRITE_THEME_KEY = 'pokemon_sprite_theme_v1';
+const POKEMON_SPRITE_THEMES = {
+    pixel: {
+        label: '经典像素',
+        description: '轻量、复古，适合盒子浏览',
+        folder: ''
+    },
+    home: {
+        label: 'HOME 立体图',
+        description: '立体感更强，适合精美展示',
+        folder: 'other/home/'
+    },
+    artwork: {
+        label: '官方插画',
+        description: '图鉴插画风格，画面更大',
+        folder: 'other/official-artwork/'
+    }
+};
+let pokemonSpriteTheme = 'pixel';
+try {
+    const savedPokemonSpriteTheme = localStorage.getItem(POKEMON_SPRITE_THEME_KEY);
+    if (POKEMON_SPRITE_THEMES[savedPokemonSpriteTheme]) pokemonSpriteTheme = savedPokemonSpriteTheme;
+} catch (_) {}
+
+const POKEMON_SPRITE_SPECIAL_IDS = {
+    '六尾(阿罗拉的样子)': 10103,
+    '六尾（阿罗拉的样子）': 10103,
+    '九尾(阿罗拉的样子)': 10104,
+    '九尾（阿罗拉的样子）': 10104,
+    '乌波(帕底亚的样子)': 10253,
+    '乌波（帕底亚的样子）': 10253,
+    '颤弦蝾螈(低调的样子)': 10185,
+    '颤弦蝾螈（低调的样子）': 10185,
+    // 兼容旧字典、异体字和全角字符写法。
+    '火暴兽': 157,
+    '论琴猫': 405,
+    '谜拟Q': 778
+};
+
+function getPokemonSpriteId(name) {
+    const raw = String(name || '').trim();
+    const standard = (typeof pokemonDictionary !== 'undefined' && pokemonDictionary[raw]?.standard) || raw;
+    const compact = standard.replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')');
+    if (POKEMON_SPRITE_SPECIAL_IDS[standard]) return POKEMON_SPRITE_SPECIAL_IDS[standard];
+    if (POKEMON_SPRITE_SPECIAL_IDS[compact]) return POKEMON_SPRITE_SPECIAL_IDS[compact];
+
+    const entry = typeof getPokemonIngredientDexEntry === 'function'
+        ? (getPokemonIngredientDexEntry(standard) || getPokemonIngredientDexEntry(raw))
+        : null;
+    let id = Number(entry?.pokedexId);
+    if (Number.isFinite(id) && id > 0 && id <= 1025) return id;
+
+    // 睡眠游戏的节庆装扮暂用原种图片；以后换专属图库时只需改这里。
+    if (/皮卡丘/.test(standard)) return 25;
+    if (/伊布/.test(standard)) return 133;
+    if (/海豹球/.test(standard)) return 363;
+    if (/南瓜精/.test(standard)) return 710;
+    if (/南瓜怪人/.test(standard)) return 711;
+    if (/颤弦蝾螈/.test(standard)) return 849;
+    return null;
+}
+
+function getPokemonSpriteUrl(name, isShiny = false, themeKey = pokemonSpriteTheme) {
+    const id = getPokemonSpriteId(name);
+    if (!id) return '';
+    const theme = POKEMON_SPRITE_THEMES[themeKey] || POKEMON_SPRITE_THEMES.pixel;
+    return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${theme.folder}${isShiny ? 'shiny/' : ''}${id}.png`;
+}
+
+function getPokemonSpriteThemeOptionsHtml() {
+    return Object.entries(POKEMON_SPRITE_THEMES).map(([key, theme]) =>
+        `<option value="${key}"${key === pokemonSpriteTheme ? ' selected' : ''}>${theme.label}</option>`
+    ).join('');
+}
+
+function refreshPokemonSpriteThemeControls() {
+    document.querySelectorAll('[data-pokemon-sprite-theme-select="1"]').forEach(select => {
+        select.value = pokemonSpriteTheme;
+    });
+}
+
+function setPokemonSpriteTheme(themeKey, silent = false) {
+    if (!POKEMON_SPRITE_THEMES[themeKey]) return;
+    pokemonSpriteTheme = themeKey;
+    try { localStorage.setItem(POKEMON_SPRITE_THEME_KEY, themeKey); } catch (_) {}
+    refreshPokemonSpriteThemeControls();
+    updateCheckInPokemonImagePreview();
+
+    if (document.getElementById('graduation-dex-modal')) renderGraduationDexList();
+    const detailModal = document.getElementById('graduation-dex-box-detail-modal');
+    const detailId = detailModal?.dataset?.graduationDexId || '';
+    if (detailId) openGraduationDexBoxDetail(detailId);
+
+    if (!silent && typeof showToast === 'function') {
+        showToast(`宝可梦图片已切换为「${POKEMON_SPRITE_THEMES[themeKey].label}」`);
+    }
+}
+
+function handlePokemonSpriteError(img) {
+    if (!img) return;
+    let fallbacks = [];
+    try { fallbacks = JSON.parse(img.dataset.fallbackSrcs || '[]'); } catch (_) {}
+    const fallbackIndex = Math.max(0, Number(img.dataset.fallbackIndex) || 0);
+    if (fallbackIndex < fallbacks.length) {
+        img.dataset.fallbackIndex = String(fallbackIndex + 1);
+        img.src = fallbacks[fallbackIndex];
+        return;
+    }
+    img.classList.add('hidden');
+    const placeholder = img.nextElementSibling;
+    if (placeholder) {
+        placeholder.classList.remove('hidden');
+        placeholder.classList.add('flex');
+    }
+}
+
+function getPokemonSpriteHtml(name, isShiny = false, imageClass = 'w-20 h-20 object-contain', placeholderClass = 'w-20 h-20') {
+    const url = getPokemonSpriteUrl(name, isShiny);
+    const fallbackUrls = [];
+    if (isShiny) fallbackUrls.push(getPokemonSpriteUrl(name, false));
+    if (pokemonSpriteTheme !== 'pixel') {
+        if (isShiny) fallbackUrls.push(getPokemonSpriteUrl(name, true, 'pixel'));
+        fallbackUrls.push(getPokemonSpriteUrl(name, false, 'pixel'));
+    }
+    const cleanFallbacks = [...new Set(fallbackUrls.filter(item => item && item !== url))];
+    const alt = escapeHtml(String(name || '宝可梦'));
+    const placeholder = `<span class="${placeholderClass} hidden items-center justify-center rounded-full bg-white/70 text-slate-300"><i class="fa-solid fa-circle-dot text-3xl"></i></span>`;
+    if (!url) return placeholder.replace(' hidden ', ' flex ');
+    return `<img src="${url}" data-fallback-srcs="${escapeHtmlAttr(JSON.stringify(cleanFallbacks))}" data-fallback-index="0" alt="${alt}" loading="lazy" decoding="async" onerror="handlePokemonSpriteError(this)" class="${imageClass}">${placeholder}`;
+}
+
+function updateCheckInPokemonImagePreview() {
+    const zone = document.getElementById('checkin-pokemon-image-preview');
+    const input = document.getElementById('checkin-name');
+    if (!zone || !input) return;
+    const raw = input.value.trim();
+    const standard = pokemonDictionary[raw]?.standard || raw;
+    if (!standard || !getPokemonSpriteId(standard)) {
+        zone.innerHTML = '';
+        zone.classList.add('hidden');
+        return;
+    }
+    const dictItem = pokemonDictionary[standard] || pokemonDictionary[raw] || {};
+    const typeText = dictItem.type === 'berry' ? '树果型' : (dictItem.type === 'food' ? '食材型' : (dictItem.type === 'skill' ? '技能型' : '特殊技能型'));
+    zone.innerHTML = `
+        <div class="relative overflow-hidden rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-sky-50 px-4 py-2.5 flex items-center gap-3">
+            <div class="absolute -right-5 -top-8 w-24 h-24 rounded-full bg-indigo-100/60"></div>
+            <div class="relative w-16 h-16 flex items-center justify-center shrink-0">${getPokemonSpriteHtml(standard, !!document.getElementById('checkin-shiny')?.checked, 'w-16 h-16 object-contain drop-shadow-sm', 'w-14 h-14')}</div>
+            <div class="relative min-w-0">
+                <div class="text-[9px] font-black tracking-widest uppercase text-indigo-400">本次录入预览</div>
+                <div class="text-sm font-black text-slate-800 truncate">${escapeHtml(standard)}</div>
+                <div class="text-[10px] font-bold text-slate-400 mt-0.5">${typeText} · 保存前请核对面板</div>
+            </div>
+        </div>`;
+    zone.classList.remove('hidden');
 }
 
 // 🚀 局部新增：打卡弹窗专属模糊输入联想流
@@ -10574,6 +10736,7 @@ function handleCheckInNameInput() {
     const suggestEl = document.getElementById('checkin-suggestion-box');
     if (!inputEl || !suggestEl) return;
 
+    updateCheckInPokemonImagePreview();
     let query = inputEl.value.trim().toLowerCase();
     if (!query) {
         suggestEl.innerHTML = '';
@@ -10626,6 +10789,7 @@ function selectCheckInSuggestion(name) {
     if (!inputEl || !suggestEl) return;
 
     inputEl.value = name;
+    updateCheckInPokemonImagePreview();
     suggestEl.classList.add('hidden');
     applyRecommendedLockModeForName(name, 'checkin-lock');
     updateCheckInResultOptionsForName(name);
@@ -11891,6 +12055,7 @@ function applyPokemonScreenshotRecognition() {
     const nameEl = document.getElementById('checkin-name');
     if (!nameEl) return;
     nameEl.value = name;
+    updateCheckInPokemonImagePreview();
     refreshCheckInIngredientSelectors(false);
     [1, 2, 3].forEach(index => {
         const value = document.getElementById(`pokemon-screenshot-slot${index}`)?.value;
@@ -17720,6 +17885,139 @@ function openGraduationDexModal() {
     }
 }
 
+const GRADUATION_DEX_VIEW_MODE_KEY = 'graduation_dex_view_mode_v1';
+let graduationDexViewMode = (() => {
+    try { return localStorage.getItem(GRADUATION_DEX_VIEW_MODE_KEY) === 'detail' ? 'detail' : 'box'; }
+    catch (_) { return 'box'; }
+})();
+
+function setGraduationDexViewMode(mode) {
+    graduationDexViewMode = mode === 'detail' ? 'detail' : 'box';
+    try { localStorage.setItem(GRADUATION_DEX_VIEW_MODE_KEY, graduationDexViewMode); } catch (_) {}
+    updateGraduationDexViewModeButtons();
+    renderGraduationDexList();
+}
+
+function updateGraduationDexViewModeButtons() {
+    const boxBtn = document.getElementById('graduation-view-box');
+    const detailBtn = document.getElementById('graduation-view-detail');
+    if (boxBtn) boxBtn.className = `px-3 py-2 rounded-xl text-[10px] font-black transition flex items-center gap-1.5 ${graduationDexViewMode === 'box' ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-500 border border-slate-200'}`;
+    if (detailBtn) detailBtn.className = `px-3 py-2 rounded-xl text-[10px] font-black transition flex items-center gap-1.5 ${graduationDexViewMode === 'detail' ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-500 border border-slate-200'}`;
+}
+
+function getGraduationDexVisualTheme(item, cur) {
+    if (isFuturePotentialGraduationEntry(item)) return { card: 'border-fuchsia-200 bg-gradient-to-b from-fuchsia-50 to-white', glow: 'bg-fuchsia-100', badge: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200' };
+    if (isWorkerGraduationEntry(item)) return { card: 'border-sky-200 bg-gradient-to-b from-sky-50 to-white', glow: 'bg-sky-100', badge: 'bg-sky-100 text-sky-700 border-sky-200' };
+    return {
+        tied: { card: 'border-amber-200 bg-gradient-to-b from-amber-50 to-white', glow: 'bg-amber-100', badge: 'bg-amber-100 text-amber-700 border-amber-200' },
+        grad: { card: 'border-emerald-200 bg-gradient-to-b from-emerald-50 to-white', glow: 'bg-emerald-100', badge: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+        bigGrad: { card: 'border-purple-200 bg-gradient-to-b from-purple-50 to-white', glow: 'bg-purple-100', badge: 'bg-purple-100 text-purple-700 border-purple-200' },
+        goldGrad: { card: 'border-rose-200 bg-gradient-to-b from-rose-50 to-white', glow: 'bg-rose-100', badge: 'bg-rose-100 text-rose-700 border-rose-200' }
+    }[cur.result] || { card: 'border-slate-200 bg-gradient-to-b from-slate-50 to-white', glow: 'bg-slate-100', badge: 'bg-slate-100 text-slate-600 border-slate-200' };
+}
+
+function renderGraduationDexBoxGrid(items) {
+    return items.map(item => {
+        const cap = getGraduationCapture(item);
+        const cur = getGraduationCurrent(item);
+        const displayNickname = getGraduationDexNickname(item);
+        const speciesName = cur.name || cap.name || '未知宝可梦';
+        const trainingLevel = Number(cur.trainingLevel) || 0;
+        const targetLevel = Number(cur.trainingTargetLevel) || 0;
+        const shiny = Boolean(cur.isShiny || cap.isShiny);
+        const theme = getGraduationDexVisualTheme(item, cur);
+        const nicknameDiffers = displayNickname && displayNickname !== speciesName;
+        return `
+        <button type="button" onclick='openGraduationDexBoxDetail(${JSON.stringify(item.id)})' class="group relative min-w-0 rounded-2xl border ${theme.card} p-2.5 sm:p-3 text-center shadow-sm hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] transition overflow-hidden" aria-label="查看${escapeHtml(displayNickname)}的完整档案">
+            <span class="absolute -right-5 -top-7 w-20 h-20 rounded-full ${theme.glow} opacity-70 group-hover:scale-125 transition duration-300"></span>
+            ${trainingLevel > 0 ? `<span class="absolute left-2 top-2 z-10 px-1.5 py-0.5 rounded-md bg-slate-900/80 text-white text-[8px] font-black">Lv.${trainingLevel}</span>` : ''}
+            ${shiny ? `<span class="absolute right-2 top-2 z-10 w-6 h-6 rounded-full bg-yellow-300 text-yellow-900 shadow flex items-center justify-center" title="闪光"><i class="fa-solid fa-sparkles text-[10px]"></i></span>` : ''}
+            <span class="relative mx-auto h-20 sm:h-24 flex items-center justify-center">${getPokemonSpriteHtml(speciesName, shiny, 'w-20 h-20 sm:w-24 sm:h-24 object-contain drop-shadow-md group-hover:scale-110 transition duration-200', 'w-16 h-16 sm:w-20 sm:h-20')}</span>
+            <span class="block mt-1 text-[11px] sm:text-xs font-black text-slate-800 truncate">${escapeHtml(displayNickname || speciesName)}</span>
+            ${nicknameDiffers ? `<span class="block text-[9px] text-slate-400 font-bold truncate">${escapeHtml(speciesName)}</span>` : `<span class="block text-[9px] text-slate-400 font-bold">${targetLevel > trainingLevel && targetLevel > 0 ? `目标 Lv.${targetLevel}` : '点击查看档案'}</span>`}
+            <span class="inline-flex mt-1.5 px-2 py-0.5 rounded-full border text-[8px] sm:text-[9px] font-black ${theme.badge}">${getGraduationDexEntryResultName(item, cur)}</span>
+        </button>`;
+    }).join('');
+}
+
+function closeGraduationDexBoxDetail() {
+    document.getElementById('graduation-dex-box-detail-modal')?.remove();
+}
+
+function openGraduationDexBoxDetail(id) {
+    normalizeGraduationDex();
+    const item = graduationDex.find(entry => String(entry.id) === String(id));
+    if (!item) return;
+    const cap = getGraduationCapture(item);
+    const cur = getGraduationCurrent(item);
+    const displayNickname = getGraduationDexNickname(item);
+    const speciesName = cur.name || cap.name || '未知宝可梦';
+    const shiny = Boolean(cur.isShiny || cap.isShiny);
+    const theme = getGraduationDexVisualTheme(item, cur);
+    const curNatureName = ALL_AUDIT_NATURES[cur.nature]?.name || '无性格修正';
+    const capNatureName = ALL_AUDIT_NATURES[cap.nature]?.name || '无性格修正';
+    const curFoodBadge = getFoodBadgeText(cur.foodCombo, cur.track, speciesName);
+    const capFoodBadge = getFoodBadgeText(cap.foodCombo, cap.track, cap.name);
+    const trainingLevel = Number(cur.trainingLevel) || 0;
+    const targetLevel = Number(cur.trainingTargetLevel) || 0;
+    const expToNext = Number(cur.trainingExpToNext) || 0;
+    const candyGroup = cur.candyGroup || getDefaultCandyGroup(speciesName);
+    const sourceText = item.source === 'daily' ? '每日打卡自动归档' : (item.source === 'worker' ? '打工个体补录' : (item.source === 'future' ? '未来可期个体补录' : '手动补录'));
+    const skillChips = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'].map((slot, index) => `<span class="px-2 py-1 rounded-lg bg-white border border-slate-200 text-[10px] font-bold text-slate-600">Lv.${[10,25,50,75,100][index]} ${getSubskillDisplayName(cur.subskills?.[slot])}</span>`).join('');
+    const capSkillChips = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'].map((slot, index) => `<span class="px-2 py-1 rounded-lg bg-slate-50 border border-slate-200 text-[9px] font-bold text-slate-500">Lv.${[10,25,50,75,100][index]} ${getSubskillDisplayName(cap.subskills?.[slot])}</span>`).join('');
+
+    closeGraduationDexBoxDetail();
+    const modal = document.createElement('div');
+    modal.id = 'graduation-dex-box-detail-modal';
+    modal.dataset.graduationDexId = String(id);
+    modal.className = 'fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fadeIn';
+    modal.onclick = event => { if (event.target === modal) closeGraduationDexBoxDetail(); };
+    modal.innerHTML = `
+        <div class="bg-white w-full sm:max-w-2xl max-h-[92vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl shadow-2xl border border-white relative">
+            <button onclick="closeGraduationDexBoxDetail()" class="absolute right-4 top-4 z-20 w-9 h-9 rounded-full bg-white/90 border border-slate-200 text-slate-500 shadow flex items-center justify-center"><i class="fa-solid fa-xmark"></i></button>
+            <div class="relative overflow-hidden ${theme.card} border-b p-5 sm:p-6 flex items-center gap-4">
+                <span class="absolute -right-10 -top-16 w-48 h-48 rounded-full ${theme.glow} opacity-70"></span>
+                <div class="relative w-28 h-28 sm:w-36 sm:h-36 shrink-0 flex items-center justify-center">${getPokemonSpriteHtml(speciesName, shiny, 'w-28 h-28 sm:w-36 sm:h-36 object-contain drop-shadow-xl', 'w-24 h-24 sm:w-28 sm:h-28')}</div>
+                <div class="relative min-w-0 pr-7">
+                    <div class="flex flex-wrap gap-1.5 items-center mb-1.5">
+                        <span class="px-2 py-0.5 rounded-full border text-[9px] font-black ${theme.badge}">${getGraduationDexEntryResultName(item, cur)}</span>
+                        ${shiny ? `<span class="px-2 py-0.5 rounded-full bg-yellow-300 text-yellow-900 text-[9px] font-black"><i class="fa-solid fa-sparkles"></i> 闪光</span>` : ''}
+                    </div>
+                    <h3 class="text-xl sm:text-2xl font-black text-slate-900 truncate">${escapeHtml(displayNickname)}</h3>
+                    <p class="text-xs font-bold text-slate-500 mt-0.5">${escapeHtml(speciesName)}${trainingLevel > 0 ? ` · Lv.${trainingLevel}` : ''}</p>
+                    ${targetLevel > trainingLevel && targetLevel > 0 ? `<p class="text-[10px] font-black text-emerald-600 mt-1">培养目标 Lv.${targetLevel}</p>` : ''}
+                </div>
+            </div>
+            <div class="p-4 sm:p-6 space-y-4">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3"><div class="text-[9px] font-black text-slate-400">性格</div><div class="text-xs font-black text-slate-700 mt-1">${curNatureName}</div></div>
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3"><div class="text-[9px] font-black text-slate-400">食材</div><div class="text-xs font-black text-slate-700 mt-1">${curFoodBadge || '未记录'}</div></div>
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3"><div class="text-[9px] font-black text-slate-400">糖果组</div><div class="text-xs font-black text-slate-700 mt-1 truncate">${escapeHtml(candyGroup)}</div></div>
+                    <div class="rounded-xl bg-indigo-50 border border-indigo-100 p-3"><div class="text-[9px] font-black text-indigo-400">距离下一级</div><div class="text-xs font-black text-indigo-700 mt-1">${trainingLevel > 0 && trainingLevel < 70 ? `${formatTrainingNumber(expToNext)} EXP` : '未记录'}</div></div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-black text-slate-400 mb-2">当前副技能</div>
+                    <div class="flex flex-wrap gap-1.5">${skillChips}</div>
+                </div>
+                ${cur.note ? `<div class="rounded-xl bg-amber-50 border border-amber-100 p-3 text-[11px] font-bold text-amber-800"><i class="fa-solid fa-note-sticky mr-1"></i>${escapeHtml(cur.note)}</div>` : ''}
+                <details class="rounded-2xl bg-slate-50 border border-slate-200 p-3">
+                    <summary class="cursor-pointer text-[11px] font-black text-slate-600">捕捉时原始档案 · ${escapeHtml(cap.name || '未知')} · ${escapeHtml(cap.date || '未记录日期')} ${escapeHtml(cap.session || '')}</summary>
+                    <div class="mt-3 text-[10px] font-bold text-slate-500 space-y-2">
+                        <div>来源：${sourceText} · 性格：${capNatureName}${capFoodBadge ? ` · 食材：${capFoodBadge}` : ''}</div>
+                        <div class="flex flex-wrap gap-1.5">${capSkillChips}</div>
+                    </div>
+                </details>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    <button onclick='closeGraduationDexBoxDetail();openTrainingProgressModal(${JSON.stringify(item.id)})' class="px-3 py-2.5 rounded-xl bg-indigo-600 text-white text-[10px] font-black"><i class="fa-solid fa-arrow-trend-up"></i> 等级经验</button>
+                    <button onclick='closeGraduationDexBoxDetail();openEditGraduationDexModal(${JSON.stringify(item.id)}, "current")' class="px-3 py-2.5 rounded-xl bg-amber-100 text-amber-800 text-[10px] font-black"><i class="fa-solid fa-pen"></i> 编辑当前</button>
+                    <button onclick='closeGraduationDexBoxDetail();openEditGraduationDexModal(${JSON.stringify(item.id)}, "capture")' class="px-3 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-[10px] font-black"><i class="fa-solid fa-clock-rotate-left"></i> 捕捉时</button>
+                    <button onclick='closeGraduationDexBoxDetail();deleteGraduationDexEntry(${JSON.stringify(item.id)}, event)' class="px-3 py-2.5 rounded-xl bg-rose-50 text-rose-600 text-[10px] font-black"><i class="fa-solid fa-trash-can"></i> 删除</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+}
+
 function renderGraduationDexModalShell() {
     const old = document.getElementById('graduation-dex-modal');
     if (old) old.remove();
@@ -17771,12 +18069,26 @@ function renderGraduationDexModalShell() {
                 <option value="worker">打工</option>
                 <option value="future">未来可期</option>
             </select>
+            <label class="bg-gradient-to-r from-violet-50 to-sky-50 border border-violet-200 rounded-xl px-3 py-1.5 flex items-center gap-2 shrink-0" title="整套切换录入预览、盒子和详情页中的宝可梦图片">
+                <i class="fa-solid fa-palette text-violet-500 text-xs"></i>
+                <span class="text-[9px] font-black text-violet-700 whitespace-nowrap">图片风格</span>
+                <select data-pokemon-sprite-theme-select="1" onchange="setPokemonSpriteTheme(this.value)" class="bg-transparent text-[10px] font-black text-slate-700 focus:outline-none cursor-pointer">
+                    ${getPokemonSpriteThemeOptionsHtml()}
+                </select>
+            </label>
+            <div class="grid grid-cols-2 gap-1 bg-slate-50 border border-slate-200 rounded-xl p-1 shrink-0">
+                <button id="graduation-view-box" type="button" onclick="setGraduationDexViewMode('box')"><i class="fa-solid fa-border-all"></i> 盒子</button>
+                <button id="graduation-view-detail" type="button" onclick="setGraduationDexViewMode('detail')"><i class="fa-solid fa-list"></i> 详细</button>
+            </div>
         </div>
 
-        <div id="graduation-dex-list" class="overflow-y-auto pr-1 flex flex-col gap-3"></div>
+        <div id="graduation-dex-list" class="overflow-y-auto pr-1"></div>
+        <div class="text-center text-[8px] font-bold text-slate-300">宝可梦图片由 PokéAPI Sprites 提供；Pokémon 相关图像版权归其权利人所有。本工具为非官方、非商业用途。</div>
     </div>`;
 
     document.body.appendChild(modal);
+    refreshPokemonSpriteThemeControls();
+    updateGraduationDexViewModeButtons();
     renderGraduationDexList();
 }
 
@@ -17835,12 +18147,21 @@ function renderGraduationDexList() {
     });
 
     if (items.length === 0) {
+        list.className = 'overflow-y-auto pr-1';
         list.innerHTML = `
         <div class="text-center py-10 text-slate-400 text-xs font-bold bg-slate-50 rounded-2xl border border-dashed border-slate-200">
             还没有符合条件的出货个体档案。可以点右上角【补录出货面板】开始补录。
         </div>`;
         return;
     }
+
+    if (graduationDexViewMode === 'box') {
+        list.className = 'overflow-y-auto pr-1 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 sm:gap-3 content-start';
+        list.innerHTML = renderGraduationDexBoxGrid(items);
+        return;
+    }
+
+    list.className = 'overflow-y-auto pr-1 flex flex-col gap-3';
 
     list.innerHTML = items.map(item => {
         const cap = getGraduationCapture(item);
@@ -17979,6 +18300,98 @@ function ensureGraduationNicknameInput(initialValue = '') {
     if (nickInput) nickInput.value = initialValue || '';
 }
 
+function getPokemonEvolutionDexEntry(name) {
+    const raw = String(name || '').trim();
+    const standard = (typeof pokemonDictionary !== 'undefined' && pokemonDictionary[raw]?.standard) || raw;
+    const direct = typeof getPokemonIngredientDexEntry === 'function'
+        ? (getPokemonIngredientDexEntry(standard) || getPokemonIngredientDexEntry(raw))
+        : null;
+    if (direct) return direct;
+
+    // 兼容旧字典中的异体字：资料库合并时会留下 ingredientDataId / pokedexId。
+    const dictEntry = (typeof pokemonDictionary !== 'undefined' && (pokemonDictionary[raw] || pokemonDictionary[standard])) || null;
+    const ingredientDataId = String(dictEntry?.ingredientDataId || '');
+    if (ingredientDataId) {
+        const byDataId = POKEMON_INGREDIENT_DEX.find(entry => String(entry.id) === ingredientDataId);
+        if (byDataId) return byDataId;
+    }
+    const pokedexId = Number(dictEntry?.pokedexId);
+    return Number.isFinite(pokedexId)
+        ? (POKEMON_INGREDIENT_DEX.find(entry => Number(entry.pokedexId) === pokedexId) || null)
+        : null;
+}
+
+function getPokemonEvolutionLineForms(name) {
+    const current = getPokemonEvolutionDexEntry(name);
+    const lineId = Number(current?.evoLineId);
+    if (!current || !Number.isFinite(lineId)) return [];
+
+    return POKEMON_INGREDIENT_DEX
+        .filter(entry => Number(entry.evoLineId) === lineId)
+        .slice()
+        .sort((a, b) => Number(a.pokedexId) - Number(b.pokedexId) || String(a.id).localeCompare(String(b.id), 'zh-CN'));
+}
+
+function getEvolutionFormDisplayName(entry) {
+    if (!entry) return '';
+    const known = (typeof pokemonDictionary !== 'undefined' && (pokemonDictionary[entry.name] || pokemonDictionary[entry.traditionalName])) || null;
+    return known?.standard || entry.name || entry.traditionalName || '';
+}
+
+function ensureGraduationEvolutionFormSelector(initialName = '', mode = 'current') {
+    document.getElementById('checkin-evolution-form-zone')?.remove();
+    if (mode !== 'current') return;
+
+    const nameInput = document.getElementById('checkin-name');
+    const nameZone = nameInput?.closest('.relative');
+    if (!nameInput || !nameZone) return;
+
+    const currentEntry = getPokemonEvolutionDexEntry(initialName);
+    const forms = getPokemonEvolutionLineForms(initialName);
+    if (!currentEntry || forms.length <= 1) return;
+
+    const seen = new Set();
+    const options = forms.map(entry => {
+        const displayName = getEvolutionFormDisplayName(entry);
+        if (!displayName || seen.has(displayName)) return '';
+        seen.add(displayName);
+        const selected = String(entry.id) === String(currentEntry.id) ? ' selected' : '';
+        return `<option value="${escapeHtmlAttr(displayName)}"${selected}>${escapeHtml(displayName)}</option>`;
+    }).join('');
+
+    nameZone.insertAdjacentHTML('afterend', `
+        <div id="checkin-evolution-form-zone" class="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
+            <label class="block text-[10px] font-black text-emerald-700 mb-1.5"><i class="fa-solid fa-code-branch mr-1"></i>当前形态 · 同进化链快速切换</label>
+            <select id="checkin-evolution-form" onchange="handleGraduationEvolutionFormChange(this)" class="w-full bg-white border border-emerald-200 rounded-xl px-3 py-2 text-xs font-black text-slate-800 focus:outline-none focus:border-emerald-500">
+                ${options}
+            </select>
+            <p class="text-[9px] text-emerald-700/80 font-bold mt-1.5">只更新出货库中的当前形态；捕捉时档案和个体面板不会改变。</p>
+        </div>
+    `);
+}
+
+function handleGraduationEvolutionFormChange(select) {
+    const name = String(select?.value || '').trim();
+    const nameInput = document.getElementById('checkin-name');
+    if (!name || !nameInput) return;
+
+    const resultEl = document.getElementById('checkin-result');
+    const oldResult = resultEl?.value || '';
+    nameInput.value = name;
+    document.getElementById('checkin-suggestion-box')?.classList.add('hidden');
+
+    updateCheckInPokemonImagePreview();
+    refreshCheckInIngredientSelectors(true);
+    updateCheckInIngredientSummary();
+    updateCheckInResultOptionsForName(name);
+    window.userManuallyOverrodeResult = true;
+    if (resultEl && oldResult) resultEl.value = oldResult;
+    triggerLivePanelAudit();
+    window.userManuallyOverrodeResult = true;
+    if (resultEl && oldResult) resultEl.value = oldResult;
+    toggleCheckInFoodTrack();
+}
+
 function openGraduationBackfillModal(prefill = null) {
     // 复用每日打卡新版面板，但保存时只进入毕业库，不改大仓
     openSingleDailyCheckInModal();
@@ -18014,6 +18427,7 @@ function openGraduationBackfillModal(prefill = null) {
         if (trackEl && prefill.track) trackEl.value = prefill.track;
         const shinyEl = document.getElementById('checkin-shiny');
         if (shinyEl) shinyEl.checked = !!prefill.isShiny;
+        updateCheckInPokemonImagePreview();
 
         // 预填宝可梦名后，刷新推荐面板和双轨食材轨道显隐
         triggerLivePanelAudit();
@@ -18328,7 +18742,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     if (desc) {
         desc.textContent = mode === 'capture'
             ? '这里修改的是出货库里的原始捕捉档案。为了避免误改大仓，本操作不会自动重算历史抽卡库或 Box。'
-            : '当前状态只允许改当前名字、爱称，以及合法的 S→M 副技能升级；食材、性格、锁金和捕捉时副技能会自动锁定。';
+            : '当前状态可以从同一进化链快速选择当前形态，也可修改名字、爱称及合法的 S→M 副技能升级；捕捉档案不会改变。';
     }
 
     window.checkinSubskills = Object.assign(
@@ -18352,6 +18766,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     const trackEl = document.getElementById('checkin-food-track');
 
     if (nameEl) nameEl.value = state.name || '';
+    ensureGraduationEvolutionFormSelector(state.name || '', mode);
     if (dateEl) setCheckInDateValue(state.date || getTodayLocalDateString());
     if (sessionEl) sessionEl.value = state.session || '一觉';
     if (lockEl) lockEl.value = state.lockMode || 'two';
@@ -18374,6 +18789,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
     if (trackEl && state.track) trackEl.value = state.track;
     const shinyEl = document.getElementById('checkin-shiny');
     if (shinyEl) shinyEl.checked = !!state.isShiny;
+    updateCheckInPokemonImagePreview();
 
     refreshSubskillSlotsUI();
     triggerLivePanelAudit();
@@ -18463,7 +18879,7 @@ function applyCurrentStateEditRestrictions(item) {
     if (auditBox) {
         auditBox.insertAdjacentHTML('afterbegin', `
             <div class="bg-amber-50 border border-amber-200 text-amber-900 p-2 rounded-xl text-[10px] font-bold leading-relaxed">
-                当前状态只允许修改：① 当前宝可梦名字；② 未卡 M 的 S→M 副技能升级；③ 爱称。食材形态、性格、捕捉日期、锁金策略等会保持捕捉时档案不变。
+                当前状态允许修改：① 从同进化链选择当前形态或手动修改名字；② 未卡 M 的 S→M 副技能升级；③ 爱称。食材形态、性格、捕捉日期、锁金策略等会保持捕捉时档案不变。
             </div>
         `);
     }
@@ -19632,6 +20048,7 @@ function openEditHistoryLogModal(logId) {
     if (trackEl && item.track) trackEl.value = item.track;
     const shinyEl = document.getElementById('checkin-shiny');
     if (shinyEl) shinyEl.checked = !!item.isShiny;
+    updateCheckInPokemonImagePreview();
 
     refreshSubskillSlotsUI();
     triggerLivePanelAudit();
