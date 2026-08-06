@@ -17020,7 +17020,7 @@ function formatMealPrepHours(value) {
 function renderMealPrepResultHtml(result) {
     if (!result?.ok) {
         if (result?.reason === 'missing_production') {
-            return `<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-800"><i class="fa-solid fa-triangle-exclamation"></i> 请先填写这些食材的理论24小时产量，或者填写实际覆盖值：<strong>${result.missingProduction.map(escapeHtml).join('、')}</strong>。实际覆盖填写0时会按无法现产计算；只有留空才会使用理论值。</div>`;
+            return `<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-800"><i class="fa-solid fa-triangle-exclamation"></i> 请先填写这些食材的满体理论24小时产量，或者填写实际覆盖值：<strong>${result.missingProduction.map(escapeHtml).join('、')}</strong>。实际覆盖填写0时会按无法现产计算；只有留空才会使用理论值。</div>`;
         }
         if (result?.reason === 'capacity_too_small') {
             const activeTypes = getMealPrepActiveTypes(result.state);
@@ -17138,7 +17138,7 @@ function renderMealPrepPlannerModal() {
             <section class="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-calendar-week"></i> 下周料理类型</div><div class="text-[9px] font-bold text-violet-700 mt-0.5">活动已经预告类型时选择确定项；否则继续按三种各 1/3 规划。</div></div><select onchange="updateMealPrepNextWeekType(this.value)" class="w-full md:w-56 bg-white border border-violet-200 rounded-xl px-3 py-2 text-xs font-black text-violet-900"><option value="random" ${isRandomMode ? 'selected' : ''}>未知：三种等概率</option>${MEAL_PREP_TYPES.map(type => `<option value="${type}" ${mealPrepPlannerState.nextWeekType === type ? 'selected' : ''}>确定：${MEAL_PREP_TYPE_META[type].label}</option>`).join('')}</select></section>
             <section class="rounded-2xl border border-fuchsia-200 bg-fuchsia-50/60 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div class="text-xs font-black text-fuchsia-900"><i class="fa-solid fa-star"></i> 是否愿意观星</div><div class="text-[9px] font-bold text-fuchsia-700 mt-0.5">关闭表示完全不观星；开启表示愿意执行，算法一定会把每天的观星时间完整安排给一种最合适的食材。观星产量在下方逐项选填。</div></div><div class="flex items-center gap-3"><label class="flex items-center gap-2 text-[10px] font-black text-fuchsia-900 bg-white border border-fuchsia-200 rounded-xl px-3 py-2"><input type="checkbox" ${mealPrepPlannerState.useStargazing ? 'checked' : ''} onchange="updateMealPrepStargazingSetting('enabled', this.checked)" class="accent-fuchsia-600">愿意观星</label><label class="text-[10px] font-black text-fuchsia-900 flex items-center gap-2">每天<input type="number" min="0" max="24" step="0.5" value="${mealPrepPlannerState.stargazingHoursPerDay}" ${mealPrepPlannerState.useStargazing ? '' : 'disabled'} onchange="updateMealPrepStargazingSetting('hours', this.value)" class="w-20 bg-white disabled:bg-slate-100 border border-fuchsia-200 rounded-xl px-2 py-2 text-xs font-mono font-black text-right">小时</label></div></section>
             <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-book-open text-orange-500"></i> 三类目标料理</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">每类设置一道菜；${isRandomMode ? '同名食材会作为三种随机情景的共用备料。' : `当前只计算${MEAL_PREP_TYPE_META[mealPrepPlannerState.nextWeekType].label}，另外两套菜谱仍会保留。`}</p></div><div class="grid grid-cols-1 lg:grid-cols-3 gap-3">${recipeCards}</div></section>
-            <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-seedling text-emerald-500"></i> 食材产量、实际覆盖与观星</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">理论值按平均24小时填写；实际覆盖是非观星环境下更准确的常态数据，填了就替代理论值。观星栏填写“观星期间每小时的总产量”，只在开启观星时参与计算。</p></div><div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[940px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="px-2 py-2">理论24h产量</th><th class="px-2 py-2">常态实际覆盖（可空）</th><th class="px-2 py-2">实际单位</th><th class="px-2 py-2">观星每小时产量（可空）</th><th class="text-left px-3 py-2">本次常态采用</th></tr></thead><tbody>${productionRows}</tbody></table></div></section>
+            <section><div class="mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-seedling text-emerald-500"></i> 食材产量、实际覆盖与观星</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">理论值统一采用全天满体力的24小时效率；实际覆盖可填写玩家常态环境下更准确的数据，填了就替代理论值。观星栏填写“观星期间每小时的总产量”，只在开启观星时参与计算。</p></div><div class="overflow-x-auto rounded-2xl border border-slate-200"><table class="w-full min-w-[940px] text-[10px]"><thead class="bg-slate-900 text-white"><tr><th class="text-left px-3 py-2">食材</th><th class="px-2 py-2">满体理论24h产量</th><th class="px-2 py-2">常态实际覆盖（可空）</th><th class="px-2 py-2">实际单位</th><th class="px-2 py-2">观星每小时产量（可空）</th><th class="text-left px-3 py-2">本次常态采用</th></tr></thead><tbody>${productionRows}</tbody></table></div></section>
             <div class="grid grid-cols-2 sm:flex gap-2"><button type="button" onclick="calculateAndRenderMealPrepPlanner(true)" class="col-span-2 sm:flex-1 bg-orange-600 hover:bg-orange-500 text-white font-black text-xs py-3 rounded-xl shadow-sm"><i class="fa-solid fa-calculator"></i> 计算建议备料</button><button type="button" onclick="saveMealPrepPlanSnapshot()" class="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-4 py-3 rounded-xl"><i class="fa-solid fa-floppy-disk"></i> 保存快照</button><button type="button" onclick="loadMealPrepPlanSnapshot()" class="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-black text-xs px-4 py-3 rounded-xl"><i class="fa-solid fa-folder-open"></i> 加载快照</button><button type="button" onclick="exportPlannerResultImage('meal-prep-planner-results','料理备料方案')" class="col-span-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-4 py-3 rounded-xl"><i class="fa-solid fa-image"></i> 导出方案图片</button></div>
             <div id="meal-prep-planner-results">${renderMealPrepResultHtml(buildMealPrepRecommendation(mealPrepPlannerState))}</div>
         </div>
@@ -19540,8 +19540,17 @@ function openEditGraduationDexModal(id, mode = 'current') {
     const resultEl = document.getElementById('checkin-result');
     const natureEl = document.getElementById('checkin-nature');
     const trackEl = document.getElementById('checkin-food-track');
+    const recognizedLevelEl = document.getElementById('checkin-recognized-level');
 
     if (nameEl) nameEl.value = state.name || '';
+    // 等级由截图识别入口共用的隐藏字段承载。编辑既有档案时也必须把原值
+    // 回填，否则保存时空字符串会被读成 null，进而清掉当前培养等级。
+    if (recognizedLevelEl) {
+        const savedLevel = Number(state.trainingLevel);
+        recognizedLevelEl.value = Number.isFinite(savedLevel) && savedLevel >= 1
+            ? String(Math.min(100, Math.floor(savedLevel)))
+            : '';
+    }
     ensureGraduationEvolutionFormSelector(state.name || '', mode);
     if (dateEl) setCheckInDateValue(state.date || getTodayLocalDateString());
     if (sessionEl) sessionEl.value = state.session || '一觉';
@@ -19690,11 +19699,18 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
     } else {
         const cap = getGraduationCapture(item);
         const finalNickname = state.nickname || item.nickname || state.name || cap.name;
-        item.current = reconcileCurrentStateWithCapture(cap, Object.assign({}, item.current || {}, state, {
+        const previousCurrent = item.current || {};
+        const proposedCurrent = Object.assign({}, previousCurrent, state, {
             nickname: finalNickname,
-            note: item.current?.note || '',
+            note: previousCurrent.note || '',
             updatedAt: new Date().toISOString()
-        }));
+        });
+        // 普通编辑面板并不要求玩家重新填写培养进度。若本次没有明确等级，
+        // 必须保留原等级；不能让隐藏输入的空值覆盖已经保存的数据。
+        if (state.trainingLevel == null && previousCurrent.trainingLevel != null) {
+            proposedCurrent.trainingLevel = previousCurrent.trainingLevel;
+        }
+        item.current = reconcileCurrentStateWithCapture(cap, proposedCurrent);
         setGraduationDexNickname(item, finalNickname);
     }
 
@@ -23139,15 +23155,10 @@ function getWeeklyCookingSleepHours(start, end) {
 
 function getWeeklyCookingProductionFactor(state, roster) {
     const collection = getWeeklyCookingCollectionFactor(state);
-    // 无法上线期间帮忙仍会累积；离线本身不再直接扣产量，影响改由收菜时点、
-    // 技能储存上限和低频收菜的溢出折损统一承担。
-    const access = 1;
-    const totalSleepScore = Math.min(100, Number(state.sleep.firstScore || 0) + Number(state.sleep.secondScore || 0));
-    const sleep = 0.88 + totalSleepScore / 100 * 0.12;
-    const dailyHealing = roster.filter(row => row.skill.key === 'healer')
-        .reduce((sum, row) => sum + row.dailyTriggers * getWeeklyCookingSkillValue('healer', row.mainSkillLevel), 0);
-    const healer = 1 + Math.min(0.18, dailyHealing / 500);
-    return { total: collection * access * sleep * healer, collection, access, sleep, healer, dailyHealing };
+    // 体力、睡眠和奶妈不能再压缩成固定百分比：实际路线会以10分钟为一步，
+    // 按当时体力档、实际睡眠结束时点和收菜时真正触发的回复逐项结算。
+    // 此处只保留低频收菜造成的可收集产出折损，供旧报告字段及动态主流程共用。
+    return { total: collection, collection, access:1, sleep:1, healer:1, dailyHealing:0 };
 }
 
 function getWeeklyCookingSkillSummary(roster) {
@@ -23402,6 +23413,26 @@ function getWeeklyCookingEnergyHelpMultiplier(energy) {
     return 1;
 }
 
+const WEEKLY_COOKING_ENERGY_DRAIN_PER_TICK = 1;
+const WEEKLY_COOKING_ENERGY_TICKS_PER_HOUR = 6;
+const WEEKLY_COOKING_SLEEP_RECOVERY_BONUS = 0.14;
+const WEEKLY_COOKING_NORMAL_SLEEP_RECOVERY_CAP = 100;
+const WEEKLY_COOKING_BONUS_HOLDER_SLEEP_RECOVERY_CAP = 105;
+
+// 用正确体力分档计算一段未来时间内累计得到的“倍率小时”。
+// 它专门用于衡量奶妈回复能延长多少高效率时间，不再依赖110点等人工阈值。
+function getWeeklyCookingEnergyMultiplierHours(startEnergy, hours, immediateHealing = 0) {
+    let energy = Math.max(0, Math.min(150, (Number(startEnergy) || 0) + Math.max(0, Number(immediateHealing) || 0)));
+    const ticks = Math.max(0, Math.round((Number(hours) || 0) * WEEKLY_COOKING_ENERGY_TICKS_PER_HOUR));
+    let multiplierHours = 0;
+    for (let tick = 0; tick < ticks; tick++) {
+        const nextEnergy = Math.max(0, energy - WEEKLY_COOKING_ENERGY_DRAIN_PER_TICK);
+        multiplierHours += getWeeklyCookingEnergyHelpMultiplier((energy + nextEnergy) / 2) / WEEKLY_COOKING_ENERGY_TICKS_PER_HOUR;
+        energy = nextEnergy;
+    }
+    return multiplierHours;
+}
+
 function getWeeklyCookingEntryLevel(row) {
     return Math.max(1,Math.floor(Number(row?.cur?.trainingLevel??row?.cur?.currentLevel??row?.cur?.level??row?.item?.level)||1));
 }
@@ -23515,10 +23546,12 @@ function getWeeklyCookingProjectedIngredientRates(candidates,state) {
         Object.entries(estimate?.map||{}).forEach(([name,value])=>{
             const canonical=typeof window.canonicalCookingIngredientName==='function'?window.canonicalCookingIngredientName(name):name;
             if(!canonical)return;
-            (byIngredient[canonical]||(byIngredient[canonical]=[])).push(Math.max(0,Number(value)||0)/1.5*1.15*productionFactor/24);
+            // estimate.map 本身就是80～150活力档的满体24h产量；储备预估也统一采用
+            // 这一个公开基准，不再混入旧版1.15经验倍率。
+            (byIngredient[canonical]||(byIngredient[canonical]=[])).push(Math.max(0,Number(value)||0)*productionFactor/24);
         });
     });
-    return Object.fromEntries(Object.entries(byIngredient).map(([name,rates])=>[name,rates.sort((a,b)=>b-a).slice(0,5).reduce((sum,value)=>sum+value,0)*0.72]));
+    return Object.fromEntries(Object.entries(byIngredient).map(([name,rates])=>[name,rates.sort((a,b)=>b-a).slice(0,5).reduce((sum,value)=>sum+value,0)]));
 }
 
 function getWeeklyCookingSundayReserveCost(type,recipe,recipes,stock,state,context) {
@@ -23566,7 +23599,12 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
     const context={...plannerContext,day,critStack,critPolicy};
     const target = getWeeklyCookingDynamicTarget(type, recipes, stock, state, day, campPot,context);
     const desiredCritStack = day === 6 ? Number(critPolicy.sunday||0) : Number(critPolicy.normal||0);
-    const averageEnergy = candidates.reduce((sum,row) => sum + (Number(energyById[row.id]) || 0), 0) / Math.max(1,candidates.length);
+    // 奶妈判断应看当前实际站场队伍，而不是把 Box 中没有上场、体力很高的候选也平均进去。
+    const currentTeamIds = Array.isArray(plannerContext.currentTeamIds) ? plannerContext.currentTeamIds.map(String) : [];
+    const energyRows = currentTeamIds.length
+        ? candidates.filter(row => currentTeamIds.includes(String(row.id)))
+        : candidates;
+    const averageEnergy = energyRows.reduce((sum,row) => sum + (Number(energyById[row.id]) || 0), 0) / Math.max(1,energyRows.length);
     const energyPerIngredient = target ? target.objectiveValue / Math.max(1,target.total) : 1;
     const campHelpFactor = getWeeklyCookingCampHelpFactor(state);
     // 不能只看“下一顿是否已备齐”。下一顿够吃后，空余站场时间仍应为本周后续餐次备料。
@@ -23585,7 +23623,7 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
         const ingredients = {};
         Object.entries(estimate?.map || {}).forEach(([name,value]) => {
             const canonical = typeof window.canonicalCookingIngredientName === 'function' ? window.canonicalCookingIngredientName(name) : name;
-            ingredients[canonical] = Number(value || 0) / 1.5 * energyFactor * blockScale * campHelpFactor;
+            ingredients[canonical] = Number(value || 0) / WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER * energyFactor * blockScale * campHelpFactor;
         });
         let foodScore = 0;
         let reserveFoodScore = 0;
@@ -23606,7 +23644,7 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
                 reserveFoodScore+=usefulAmount*energyPerIngredient*0.22;
             }
         });
-        const expectedTriggers = (Number(row.rawDailyTriggers) || 0) / 1.5 * energyFactor * blockScale * getWeeklyCookingCollectionFactor(state) * campHelpFactor;
+        const expectedTriggers = (Number(row.rawDailyTriggers) || 0) / WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER * energyFactor * blockScale * getWeeklyCookingCollectionFactor(state) * campHelpFactor;
         const skillValue = getWeeklyCookingSkillValue(row.skill.key, row.mainSkillLevel);
         let skillScore = 0;
         if (row.skill.key === 'pot' && target?.potGap > 0) skillScore = Math.min(target.potGap, expectedTriggers * skillValue) / Math.max(1,target.potGap) * target.objectiveValue * 0.8;
@@ -23617,16 +23655,27 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
             const addedStrength=addedChance/100*(day===6?2:1)*(target?.stat.strength||0);
             skillScore=getWeeklyCookingObjectiveEnergyGain(state,addedStrength,context.absoluteHour,context.cumulative,context.island,context.sleepEvents);
         }
-        if (row.skill.key === 'healer' && averageEnergy < 85) skillScore = expectedTriggers * skillValue * (85 - averageEnergy) * 5;
+        if (row.skill.key === 'healer' && energyRows.length) {
+            // 估算本轮奶妈触发后，未来12小时可为当前队伍挽回多少“体力倍率小时”。
+            // 100～150虽然瞬时倍率相同，但额外体力会推迟跌出80点最高档，因此会自然产生价值。
+            const horizonHours = 12;
+            const expectedHealing = expectedTriggers * skillValue;
+            const baselineMultiplierHours = energyRows.reduce((sum,member) => sum + getWeeklyCookingEnergyMultiplierHours(energyById[member.id],horizonHours,0),0);
+            const healedMultiplierHours = energyRows.reduce((sum,member) => sum + getWeeklyCookingEnergyMultiplierHours(energyById[member.id],horizonHours,expectedHealing),0);
+            const maximumMultiplierHours = energyRows.length * horizonHours * WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER;
+            const recoveredEfficiencyShare = Math.max(0,healedMultiplierHours-baselineMultiplierHours) / Math.max(1,maximumMultiplierHours);
+            const objectiveScale = Math.max(1000, Number(target?.objectiveValue) || 10000);
+            skillScore = objectiveScale * recoveredEfficiencyShare;
+        }
         if (row.skill.key === 'dream' && state.objective === 'shards') skillScore = expectedTriggers * skillValue * 2;
-        const energyPenalty = energy <= 0 ? 0.45 : (energy < 30 ? 0.72 : 1);
         // 只有能转化为本周目标收益的产出才计分。食谱完全用不到的食材不会下锅，价值必须为 0。
-        const score = (foodScore + reserveFoodScore + skillScore) * energyPenalty;
+        // 食材和技能触发量已经乘过精确体力档倍率，不能再按低体力二次扣分。
+        const score = foodScore + reserveFoodScore + skillScore;
         let reason = '当前没有可量化的料理贡献';
         const totalFoodScore=foodScore+reserveFoodScore;
         if (skillScore > totalFoodScore && row.skill.key === 'pot') reason = `目标料理还差${Math.ceil(target?.potGap || 0)}格锅容量`;
         else if (skillScore > totalFoodScore && ['tasty','assist'].includes(row.skill.key)) reason = `当前暴击累计${critStack.toFixed(1)}%，继续叠至约${desiredCritStack}%`;
-        else if (skillScore > totalFoodScore && row.skill.key === 'healer') reason = `队伍平均活力约${averageEnergy.toFixed(0)}，需要回复`;
+        else if (skillScore > totalFoodScore && row.skill.key === 'healer') reason = `队伍平均活力约${averageEnergy.toFixed(0)}，回复可延长80点以上最高效率档`;
         else if (skillScore > totalFoodScore && row.skill.key === 'dream') reason = '为梦碎目标发动主技能';
         else if ((foodScore>0||reserveFoodScore>0) && target) {
             const bestFood = Object.entries(relevantFoodContributions).sort((a,b) => b[1]-a[1])[0];
@@ -23691,7 +23740,9 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
     const sleepEvents=getWeeklyCookingSleepEvents(state);
     const projectedIngredientRates=getWeeklyCookingProjectedIngredientRates(candidates,state);
     const otherStrengthPerTick=Math.max(0,Number(state.otherDailyStrength)||0)*(1+bonus/100)/144;
-    const sleepRecoveryUsed=Object.fromEntries(candidates.map(row=>[row.id,0]));
+    // 按“该觉所属的睡眠日”分别累计回复上限。不能在自然日00:00简单清零，
+    // 否则白天一觉与跨午夜结束的二觉会被错误地各拿一次100点额度。
+    const sleepRecoveryUsed=Object.fromEntries(candidates.map(row=>[row.id,{}]));
     const pendingIngredientsById=Object.fromEntries(candidates.map(row=>[row.id,{}]));
     // 帮忙只累计“可能触发技能的机会”；真正的技能判定和效果一律等到收菜时结算。
     const pendingSkillLambdaById=Object.fromEntries(candidates.map(row=>[row.id,0]));
@@ -23738,7 +23789,6 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
         if(timeTick>0&&timeTick%144===0&&timeTick<=864) {
             const finishedDay=timeTick/144-1;
             finalizeDay(finishedDay);
-            candidates.forEach(row=>{sleepRecoveryUsed[row.id]=0;});
             Object.values(perPokemon).forEach(data=>{data.days[finishedDay+1].startEnergy=Number(energyById[data.row.id])||0;});
         }
         sleepEvents.filter(event=>event.startTick===timeTick).forEach(event=>{
@@ -23753,17 +23803,25 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
         sleepEvents.filter(event=>event.endTick===timeTick).forEach(event=>{
             const sleepTeam=event.team||[];
             const sleepIds=new Set(sleepTeam.map(choice=>choice.row.id));
-            const teamBonus=1+sleepTeam.filter(choice=>hasWeeklyCookingEnergyRecoveryBonus(choice.row)).length*0.14;
+            const teamBonus=1+sleepTeam.filter(choice=>hasWeeklyCookingEnergyRecoveryBonus(choice.row)).length*WEEKLY_COOKING_SLEEP_RECOVERY_BONUS;
             candidates.forEach(row=>{
                 const id=row.id;
                 const natureFactor=getWeeklyCookingNatureEnergyRecoveryFactor(row);
                 if(sleepIds.has(id)) {
+                    const ownsRecoveryBonus=hasWeeklyCookingEnergyRecoveryBonus(row);
+                    const dailyRecoveryCap=ownsRecoveryBonus?WEEKLY_COOKING_BONUS_HOLDER_SLEEP_RECOVERY_CAP:WEEKLY_COOKING_NORMAL_SLEEP_RECOVERY_CAP;
                     const rawRecovery=Math.max(0,event.score)*natureFactor*teamBonus;
-                    const recovery=Math.min(rawRecovery,Math.max(0,100-(sleepRecoveryUsed[id]||0)));
-                    sleepRecoveryUsed[id]=(sleepRecoveryUsed[id]||0)+recovery;
-                    energyById[id]=Math.min(100,(Number(energyById[id])||0)+recovery);
+                    const usedForSleepDay=Number(sleepRecoveryUsed[id]?.[event.day])||0;
+                    const recovery=Math.min(rawRecovery,Math.max(0,dailyRecoveryCap-usedForSleepDay));
+                    sleepRecoveryUsed[id][event.day]=usedForSleepDay+recovery;
+                    const beforeRecovery=Number(energyById[id])||0;
+                    // 睡眠回复只能把普通成员补到100、奖励持有者补到105；若技能已把体力
+                    // 推到更高，则睡醒时绝不能反向把它压回100。
+                    energyById[id]=Math.max(beforeRecovery,Math.min(dailyRecoveryCap,beforeRecovery+recovery));
                 } else {
-                    energyById[id]=Math.min(100,(Number(energyById[id])||0)+Math.max(0,event.score)*0.05*natureFactor);
+                    const beforeRecovery=Number(energyById[id])||0;
+                    const boxedRecovery=Math.max(0,event.score)*0.05*natureFactor;
+                    energyById[id]=Math.max(beforeRecovery,Math.min(100,beforeRecovery+boxedRecovery));
                 }
             });
         });
@@ -23778,7 +23836,7 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
         if(absoluteHour<simulationEndHour&&pending) {
             const detailDay=Math.min(6,Math.max(0,Math.floor(absoluteHour/24)));
             const nextSlot=`周${dayNames[pending.day]}${mealSlotNames[pending.slot]}窗口`;
-            const plannerContext={absoluteHour,cumulative,island,sleepEvents,projectedIngredientRates};
+            const plannerContext={absoluteHour,cumulative,island,sleepEvents,projectedIngredientRates,currentTeamIds:(lastTeam||[]).map(choice=>String(choice.row.id))};
             if(isLockedSleep) {
                 // 周一00:00可能正处于前一天延续的睡眠；这时只能继承睡前队伍，不能生成一次“睡眠中换队”。
                 if(!lockedSleepEvent?.team?.length) {
@@ -23806,7 +23864,7 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
             decision.selected.forEach(choice=>{
                 const id=choice.row.id;
                 const energyStart=Number(energyById[id])||0;
-                const energyEndBeforeHeal=Math.max(0,energyStart-1);
+                const energyEndBeforeHeal=Math.max(0,energyStart-WEEKLY_COOKING_ENERGY_DRAIN_PER_TICK);
                 const averageEnergy=(energyStart+energyEndBeforeHeal)/2;
                 const actualEnergyFactor=getWeeklyCookingEnergyHelpMultiplier(averageEnergy);
                 const energyRatio=actualEnergyFactor/Math.max(0.01,choice.energyFactor);
@@ -23888,6 +23946,10 @@ function simulateWeeklyCookingDynamicScenario(type,state,recipesByType,candidate
 const WEEKLY_COOKING_TASTY_BASE_CHANCE = 10;
 const WEEKLY_COOKING_SUNDAY_TASTY_BONUS = 20;
 const WEEKLY_COOKING_TASTY_STACK_CAP = 70;
+// 面板理论产能统一按全天维持最高体力档计算。现行体力公式中，
+// 80～150活力的帮忙间隔为面板间隔×0.45，即产出效率为1/0.45。
+// 实际模拟会先移除该基准，再逐小时乘入当时的真实体力档位。
+const WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER = 1 / 0.45;
 function getWeeklyCookingActualTastyChance(day, skillStack = 0) {
     return Math.min(100, WEEKLY_COOKING_TASTY_BASE_CHANCE + (day === 6 ? WEEKLY_COOKING_SUNDAY_TASTY_BONUS : 0) + Math.min(WEEKLY_COOKING_TASTY_STACK_CAP, Math.max(0, Number(skillStack) || 0)));
 }
@@ -24018,7 +24080,7 @@ function renderWeeklyCookingPokemonDetails(scenario) {
     const cards = (scenario.individualDetails || []).map(row => {
         const ingredientSummary = Object.entries(row.ingredientsPerDay).filter(([,value]) => value > 0.01).map(([name,value]) => `${escapeHtml(name)} ${value.toFixed(1)}`).join('、') || '当前料理相关食材为0';
         const dayRows = row.days.map(day => `<tr class="border-t border-slate-100"><td class="px-2 py-1.5 font-black">周${dayNames[day.day]}</td><td class="px-2 py-1.5 text-right">${day.activeHours.toFixed(1)}h</td><td class="px-2 py-1.5 text-right">${day.skillTriggers.toFixed(2)}次</td><td class="px-2 py-1.5 text-right">${day.startEnergy.toFixed(0)}→${day.endEnergy.toFixed(0)}</td><td class="px-2 py-1.5 text-slate-500">${Object.entries(day.ingredients).filter(([,value]) => value > 0.01).map(([name,value]) => `${escapeHtml(name)} ${value.toFixed(1)}`).join('、') || '—'}</td></tr>`).join('');
-        return `<details class="rounded-xl border border-slate-200 bg-white"><summary class="cursor-pointer list-none px-3 py-2"><div class="flex items-center justify-between gap-2"><div><div class="text-[10px] font-black text-slate-800">${escapeHtml(row.nickname)} <span class="text-slate-400">· ${escapeHtml(row.species)}</span></div><div class="text-[8px] font-bold text-slate-400 mt-0.5">站场${row.activeHours.toFixed(1)}h/日 · ${escapeHtml(row.skill.label)} Lv.${row.mainSkillLevel} · ${row.skillTriggers.toFixed(2)}次/日</div></div><i class="fa-solid fa-chevron-down text-slate-300"></i></div></summary><div class="border-t border-slate-100 px-3 py-2"><div class="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[8px] font-bold"><div class="rounded-lg bg-emerald-50 px-2 py-1.5 text-emerald-700">每日食材：${ingredientSummary}</div><div class="rounded-lg bg-indigo-50 px-2 py-1.5 text-indigo-700">每日技能：${escapeHtml(describeWeeklyCookingSkillWork(row))}</div></div><div class="overflow-x-auto mt-2"><table class="min-w-[620px] w-full text-[8px]"><thead><tr class="bg-slate-50 text-slate-400"><th class="px-2 py-1.5 text-left">日期</th><th class="px-2 py-1.5 text-right">站场</th><th class="px-2 py-1.5 text-right">技能</th><th class="px-2 py-1.5 text-right">活力（开始→结束）</th><th class="px-2 py-1.5 text-left">预计食材</th></tr></thead><tbody>${dayRows}</tbody></table></div><div class="mt-1 text-[7px] font-bold text-slate-400">活力为规划模型值：按站场时间消耗、睡眠分数恢复和奶妈期望回复估算；实际技能触发存在波动。</div></div></details>`;
+        return `<details class="rounded-xl border border-slate-200 bg-white"><summary class="cursor-pointer list-none px-3 py-2"><div class="flex items-center justify-between gap-2"><div><div class="text-[10px] font-black text-slate-800">${escapeHtml(row.nickname)} <span class="text-slate-400">· ${escapeHtml(row.species)}</span></div><div class="text-[8px] font-bold text-slate-400 mt-0.5">站场${row.activeHours.toFixed(1)}h/日 · ${escapeHtml(row.skill.label)} Lv.${row.mainSkillLevel} · ${row.skillTriggers.toFixed(2)}次/日</div></div><i class="fa-solid fa-chevron-down text-slate-300"></i></div></summary><div class="border-t border-slate-100 px-3 py-2"><div class="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[8px] font-bold"><div class="rounded-lg bg-emerald-50 px-2 py-1.5 text-emerald-700">每日食材：${ingredientSummary}</div><div class="rounded-lg bg-indigo-50 px-2 py-1.5 text-indigo-700">每日技能：${escapeHtml(describeWeeklyCookingSkillWork(row))}</div></div><div class="overflow-x-auto mt-2"><table class="min-w-[620px] w-full text-[8px]"><thead><tr class="bg-slate-50 text-slate-400"><th class="px-2 py-1.5 text-left">日期</th><th class="px-2 py-1.5 text-right">站场</th><th class="px-2 py-1.5 text-right">技能</th><th class="px-2 py-1.5 text-right">活力（开始→结束）</th><th class="px-2 py-1.5 text-left">预计食材</th></tr></thead><tbody>${dayRows}</tbody></table></div><div class="mt-1 text-[7px] font-bold text-slate-400">活力按每10分钟下降1点、现行五档帮忙间隔、料理回血、睡眠日上限，以及收菜时实际结算的奶妈触发逐步模拟；技能触发仍存在随机波动。</div></div></details>`;
     }).join('');
     return `<details class="rounded-xl border border-slate-200 bg-white/80"><summary class="cursor-pointer px-3 py-2 text-[9px] font-black text-slate-700"><i class="fa-solid fa-clock-rotate-left text-indigo-500"></i> 查看动态换队与逐只宝可梦明细 · 使用${scenario.roster.length}只${unusedCount ? ` · ${unusedCount}只候选在代表路线中未上场` : ''}</summary><div class="border-t border-slate-100 p-2 space-y-2"><details class="rounded-xl border border-indigo-100 bg-indigo-50/50"><summary class="cursor-pointer px-3 py-2 text-[9px] font-black text-indigo-700">逐餐换队决策：暴击结果、下一目标与上场理由</summary><div class="border-t border-indigo-100 p-2 space-y-1">${decisionRows || '<div class="text-[8px] text-slate-400">暂无决策记录。</div>'}</div></details>${cards || '<div class="text-[9px] font-bold text-slate-400">本情景没有可用宝可梦。</div>'}</div></details>`;
 }
@@ -24047,7 +24109,7 @@ function renderWeeklyCookingStrategySummary(result, scenario=result.scenarios?.[
         :result.state.objective==='shards'
             ?'梦碎模式按每一觉的实际开始时间估算边际梦碎；越早加入的料理能量能影响越多次后续睡眠研究，技能梦碎也直接计入同一目标。'
             :'遇见模式按每一觉的实际开始时间估算跨越遇见档位的价值；其他能量和梦碎不单独加分。';
-    return `<div class="rounded-2xl border border-violet-200 bg-violet-50/70 p-3"><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-route"></i> ${escapeHtml(scenarioMeta.label)}策略概要</div><div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[9px] font-bold text-violet-800"><div class="rounded-xl bg-white p-2"><span class="font-black">开饭软目标：</span>在该情景的9组候选中，按“${({strength:'最终能量',shards:'总梦碎',encounters:'遇见数量'}[result.state.objective]||'最终目标')}”选中平日技能累计+${policy.normal}%（实际暴击率约${weekdayActual}%）、周日技能累计+${policy.sunday}%（实际约${sundayActual}%）。这是换队和等待开饭的软目标，不是必须达到的命令；若预设开饭时间、餐次衔接或截止时间更有利于最终目标，允许提前开饭或继续累计。${confidenceText}。</div><div class="rounded-xl bg-white p-2"><span class="font-black">换队：</span>缺食材时优先上能补该情景料理缺口的个体${hasPot?'；锅容量不足时换扩锅手':''}${hasTasty?'；技能累计未到软目标时倾向换料理暴击手':''}${hasHealer?'；平均活力偏低时换奶妈':''}。技能累计最多+70%；平日另有隐藏基础10%，周日再额外+20%。每组使用相同起始随机条件试算${WEEKLY_COOKING_POLICY_TRIAL_RUNS}次后比较。</div><div class="rounded-xl border border-violet-100 bg-white p-2 md:col-span-2"><span class="font-black">单目标时间价值：</span>${objectivePlanningText}</div>${ingredientLeaders.length?`<div class="rounded-xl bg-white p-2 md:col-span-2"><span class="font-black">主要食材产出：</span>${ingredientLeaders.map(row=>`${escapeHtml(row.name)}（${escapeHtml(row.foods)}）`).join('；')}</div>`:''}</div></div>`;
+    return `<div class="rounded-2xl border border-violet-200 bg-violet-50/70 p-3"><div class="text-xs font-black text-violet-900"><i class="fa-solid fa-route"></i> ${escapeHtml(scenarioMeta.label)}策略概要</div><div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[9px] font-bold text-violet-800"><div class="rounded-xl bg-white p-2"><span class="font-black">开饭软目标：</span>在该情景的9组候选中，按“${({strength:'最终能量',shards:'总梦碎',encounters:'遇见数量'}[result.state.objective]||'最终目标')}”选中平日技能累计+${policy.normal}%（实际暴击率约${weekdayActual}%）、周日技能累计+${policy.sunday}%（实际约${sundayActual}%）。这是换队和等待开饭的软目标，不是必须达到的命令；若预设开饭时间、餐次衔接或截止时间更有利于最终目标，允许提前开饭或继续累计。${confidenceText}。</div><div class="rounded-xl bg-white p-2"><span class="font-black">换队：</span>缺食材时优先上能补该情景料理缺口的个体${hasPot?'；锅容量不足时换扩锅手':''}${hasTasty?'；技能累计未到软目标时倾向换料理暴击手':''}${hasHealer?'；奶妈按未来12小时能挽回的体力倍率时间参与比较':''}。技能累计最多+70%；平日另有隐藏基础10%，周日再额外+20%。每组使用相同起始随机条件试算${WEEKLY_COOKING_POLICY_TRIAL_RUNS}次后比较。</div><div class="rounded-xl border border-violet-100 bg-white p-2 md:col-span-2"><span class="font-black">单目标时间价值：</span>${objectivePlanningText}</div>${ingredientLeaders.length?`<div class="rounded-xl bg-white p-2 md:col-span-2"><span class="font-black">主要食材产出：</span>${ingredientLeaders.map(row=>`${escapeHtml(row.name)}（${escapeHtml(row.foods)}）`).join('；')}</div>`:''}</div></div>`;
 }
 
 function formatWeeklyCookingCalendarStrength(value) {
@@ -24169,8 +24231,8 @@ function renderWeeklyCookingRosterHtml() {
         const triggers=(Number(estimate?.dailySkillTriggers)||0)*campFactor;
         const helps=(Number(estimate?.helpsPerDay)||0)*campFactor;
         const foodSummary=Object.entries(estimate?.map||{}).filter(([,value])=>Number(value)>0.01).map(([name,value])=>`${escapeHtml(name)} ${(Number(value)*campFactor).toFixed(1)}`).join('、');
-        const estimateText = estimate?.ok ? `基础触发率${Number(estimate.baseSkillPercent).toFixed(1)}% · ${helps.toFixed(1)}次帮忙/日${weeklyCookingState.goodCamp?' · 已计露营券速度增益':' · 常态'}` : (estimate?.reason || '固定资料尚未匹配');
-        return `<div class="rounded-xl border ${selected.has(String(item.id)) ? 'border-indigo-200 bg-indigo-50/60' : 'border-slate-200 bg-white'} p-2.5"><div class="flex items-start gap-2"><input type="checkbox" ${selected.has(String(item.id)) ? 'checked' : ''} onchange='toggleWeeklyCookingPokemon(${JSON.stringify(String(item.id))}, this.checked)' class="mt-1 accent-indigo-600"><div class="min-w-0 flex-1"><div class="text-[10px] font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))} <span class="text-slate-400">· ${escapeHtml(species)}</span></div><div class="text-[8px] font-bold text-${skill.color}-600 mt-0.5">${escapeHtml(skill.label)} · 主技能Lv.${skillLevel}${selected.has(String(item.id)) ? ' · 已加入候选池' : ''}</div></div></div><div class="mt-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"><div class="flex items-center justify-between gap-2 text-[8px] font-black text-slate-400"><span>系统估算全天触发</span><span class="text-[10px] text-indigo-700">${estimate?.ok ? `${triggers.toFixed(2)} 次/日` : '待补资料'}</span></div><div class="mt-0.5 text-[7px] font-bold text-slate-400">${escapeHtml(estimateText)}</div>${foodSummary?`<div class="mt-1 rounded-md bg-emerald-50 px-1.5 py-1 text-[7px] font-black text-emerald-700">食材产量：${foodSummary}/日</div>`:''}</div></div>`;
+        const estimateText = estimate?.ok ? `满体基础触发率${Number(estimate.baseSkillPercent).toFixed(1)}% · ${helps.toFixed(1)}次帮忙/日${weeklyCookingState.goodCamp?' · 已计露营券速度增益':' · 未计露营券'}` : (estimate?.reason || '固定资料尚未匹配');
+        return `<div class="rounded-xl border ${selected.has(String(item.id)) ? 'border-indigo-200 bg-indigo-50/60' : 'border-slate-200 bg-white'} p-2.5"><div class="flex items-start gap-2"><input type="checkbox" ${selected.has(String(item.id)) ? 'checked' : ''} onchange='toggleWeeklyCookingPokemon(${JSON.stringify(String(item.id))}, this.checked)' class="mt-1 accent-indigo-600"><div class="min-w-0 flex-1"><div class="text-[10px] font-black text-slate-800 truncate">${escapeHtml(getGraduationDexNickname(item))} <span class="text-slate-400">· ${escapeHtml(species)}</span></div><div class="text-[8px] font-bold text-${skill.color}-600 mt-0.5">${escapeHtml(skill.label)} · 主技能Lv.${skillLevel}${selected.has(String(item.id)) ? ' · 已加入候选池' : ''}</div></div></div><div class="mt-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"><div class="flex items-center justify-between gap-2 text-[8px] font-black text-slate-400"><span>满体理论全天触发</span><span class="text-[10px] text-indigo-700">${estimate?.ok ? `${triggers.toFixed(2)} 次/日` : '待补资料'}</span></div><div class="mt-0.5 text-[7px] font-bold text-slate-400">${escapeHtml(estimateText)}</div>${foodSummary?`<div class="mt-1 rounded-md bg-emerald-50 px-1.5 py-1 text-[7px] font-black text-emerald-700">满体食材产量：${foodSummary}/日</div>`:''}</div></div>`;
     }).join('')}</div>`;
 }
 
@@ -24661,8 +24723,8 @@ async function calculateAndRenderWeeklyCooking() {
         if (Number(nature.food) > 0) ingredientRate *= 1.2;
         if (Number(nature.food) < 0) ingredientRate *= 0.8;
         ingredientRate = Math.min(1, ingredientRate);
-        // 常态日近似：一次完整夜间睡眠、无奶妈、无露营卷。1.5 是全天体力档位的平均帮忙倍率。
-        const helpsPerDay = 86400 / Math.max(1, baseFrequency * frequencyMultiplier) * 1.5;
+        // 个体面板只展示满体力理论效率；奶妈、睡眠和体力衰减由周模拟逐小时处理。
+        const helpsPerDay = 86400 / Math.max(1, baseFrequency * frequencyMultiplier) * WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER;
         const procsPerSlot = helpsPerDay * ingredientRate / slots.length;
         const map = {};
         slots.forEach(slot => { map[slot.name] = (map[slot.name] || 0) + procsPerSlot * slot.amount; });
@@ -24671,7 +24733,7 @@ async function calculateAndRenderWeeklyCooking() {
         if (skills.includes('sts') || skills.includes('技能几率s') || skills.includes('技能概率提升s')) skillRate *= 1.18;
         skillRate *= 1 + (Number(nature.skill) || 0);
         const dailySkillTriggers = helpsPerDay * skillRate;
-        return { ok:true, entry, species, level, pokedexId, map, helpsPerDay, ingredientRate, baseSkillPercent:Number(params.skillPercent) || 0, skillRate, dailySkillTriggers, mainSkillId:Number(server.mainSkillId) || 0, specialty:server.specialty || '' };
+        return { ok:true, entry, species, level, pokedexId, map, helpsPerDay, ingredientRate, baseSkillPercent:Number(params.skillPercent) || 0, skillRate, dailySkillTriggers, energyBasis:'full', energyMultiplier:WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER, mainSkillId:Number(server.mainSkillId) || 0, specialty:server.specialty || '' };
     }
     window.getCookingPokemonFixedData = function(species) {
         const pokedexId = getPokedexId(species);
