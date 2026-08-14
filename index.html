@@ -12966,9 +12966,9 @@ function openSleepResearchModal() {
     const sleepTypeRecord = findSleepTypeRecord(today, initialSession);
     const modal = document.createElement('div');
     modal.id = 'sleep-research-modal';
-    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn overflow-y-auto';
+    modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center z-50 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] animate-fadeIn overflow-y-auto overscroll-contain';
     modal.innerHTML = `
-    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-lg w-full shadow-2xl flex flex-col gap-4 relative my-4" onclick="event.stopPropagation()">
+    <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-lg w-full shadow-2xl flex flex-col gap-4 relative mb-4" onclick="event.stopPropagation()">
         <button onclick="document.getElementById('sleep-research-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
         <div class="text-center pr-6">
             <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-moon text-indigo-500"></i> 完整睡眠研究录入</h3>
