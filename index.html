@@ -1007,6 +1007,7 @@ let luckCalculationEnabled = true;
 let saveBoxTimer = null;
 let saveHistoryTimer = null;
 let saveGraduationTimer = null;
+let historyCloudSyncQueue = Promise.resolve({ ok: true });
 
 let todayCheckIns = []; // 存放今天打卡的流水：{ id, name, result, lockMode, track }
 
@@ -1493,7 +1494,7 @@ function mergeBallPlannerStateLogs(existing, candidate) {
 function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
-        isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log);
+        isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log);
 }
 
 function isBallPlannerEnabled() {
@@ -1550,26 +1551,9 @@ async function performBallPlannerCloudSync() {
     saveHistoryTimer = null;
     setBallPlannerSyncStatus('syncing');
     try {
-        const { data, error: readError } = await supabaseClient
-            .from('player_boxes')
-            .select('history_logs')
-            .eq('user_id', currentCloudUser.id)
-            .maybeSingle();
-        if (readError) throw readError;
-
-        const remoteLogs = data && Array.isArray(data.history_logs) ? data.history_logs : [];
-        historyLogs = mergeHistoryLogs(remoteLogs, Array.isArray(historyLogs) ? historyLogs : []);
+        const result = await saveHistoryToCloudNow();
+        if (!result?.ok) throw (result?.error || new Error('账号同步失败'));
         loadBallPlannerStateFromHistory();
-        localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
-
-        const { error: writeError } = await supabaseClient
-            .from('player_boxes')
-            .upsert({
-                user_id: currentCloudUser.id,
-                history_logs: historyLogs,
-                updated_at: new Date().toISOString()
-            }, { onConflict: 'user_id' });
-        if (writeError) throw writeError;
         setBallPlannerSyncStatus('success');
         return { ok: true, guest: false };
     } catch (error) {
@@ -3838,6 +3822,9 @@ function chooseNewerHistoryLog(existing, candidate) {
     if (isBallPlannerStateLog(existing) && isBallPlannerStateLog(candidate)) {
         return mergeBallPlannerStateLogs(existing, candidate);
     }
+    if (isEncounterStatisticsLog(existing) && isEncounterStatisticsLog(candidate)) {
+        return mergeEncounterStatisticsLogs(existing, candidate);
+    }
     const existingTime = getHistoryLogMergeTime(existing);
     const candidateTime = getHistoryLogMergeTime(candidate);
     if (candidateTime > existingTime) return candidate;
@@ -3896,7 +3883,17 @@ function mergeHistoryLogs(cloudLogs = [], localLogs = []) {
 async function loadHistoryFromCloud() {
     loadHistoryFromLocal();
 
-    if (!currentCloudUser) return;
+    // “总遇到数”过去只存在当前设备的 localStorage。先把旧值迁移成隐藏的历史状态，
+    // 再与云端按 updatedAt 合并；旧版没有时间戳的本地值使用极早时间，避免覆盖另一台设备已有的新值。
+    loadEncounterStatisticsFromLocal();
+    historyLogs = prepareEncounterStatisticsLogsForMerge(historyLogs);
+    syncEncounterStatisticsLocalStateIntoHistory();
+    loadEncounterStatisticsFromHistory({ refresh: false });
+
+    if (!currentCloudUser) {
+        updateBoxUI(false);
+        return;
+    }
 
     const localSnapshot = Array.isArray(historyLogs) ? [...historyLogs] : [];
 
@@ -3909,22 +3906,27 @@ async function loadHistoryFromCloud() {
     if (error) {
         console.error(error);
         showToast('读取云端历史库失败，请确认 player_boxes 已添加 history_logs 列');
+        updateBoxUI(false);
         return;
     }
 
     if (data && Array.isArray(data.history_logs)) {
+        const preparedRemoteLogs = prepareEncounterStatisticsLogsForMerge(data.history_logs);
+        const remoteSnapshot = mergeHistoryLogs([], preparedRemoteLogs);
         // 云端是跨设备已经确认保存的快照。老版本记录没有 updatedAt 时，
         // 同 ID 无法按时间区分，故让云端处于后合并位置并在平局时覆盖本机旧缓存。
-        historyLogs = mergeHistoryLogs(localSnapshot, data.history_logs);
+        historyLogs = mergeHistoryLogs(localSnapshot, preparedRemoteLogs);
         const backfilledResearch = ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
+        loadEncounterStatisticsFromHistory({ refresh: false });
         localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
 
         // 如果本机有云端没有的旧历史，或旧流水被补建了睡眠研究空壳，顺手补回云端，避免换设备丢失
-        if (backfilledResearch || historyLogs.length !== data.history_logs.length) {
+        if (backfilledResearch || JSON.stringify(historyLogs) !== JSON.stringify(remoteSnapshot)) {
             await saveHistoryToCloudNow();
         }
 
         loadBallPlannerStateFromHistory();
+        updateBoxUI(false);
         if (currentCloudUser) {
             rebuildTodayCheckInsFromHistory();
             renderTodayReportUI();
@@ -3934,26 +3936,75 @@ async function loadHistoryFromCloud() {
 
     // 老账号首次使用新版：云端还没有历史列数据时，用本地历史作为首份云端快照
     historyLogs = localSnapshot;
+    loadEncounterStatisticsFromHistory({ refresh: false });
     loadBallPlannerStateFromHistory();
     await saveHistoryToCloudNow();
+    updateBoxUI(false);
 }
 
-async function saveHistoryToCloudNow() {
-    if (!currentCloudUser) return;
+function saveHistoryToCloudNow() {
+    if (!currentCloudUser) return Promise.resolve({ ok: true, guest: true });
+    const userId = currentCloudUser.id;
+    const task = historyCloudSyncQueue.catch(() => ({ ok: false })).then(() => performHistoryCloudSync(userId));
+    historyCloudSyncQueue = task;
+    return task;
+}
 
-    const { error } = await supabaseClient
-        .from('player_boxes')
-        .upsert({
-            user_id: currentCloudUser.id,
-            history_logs: historyLogs,
-            updated_at: new Date().toISOString()
-        }, {
-            onConflict: 'user_id'
-        });
+async function performHistoryCloudSync(userId) {
+    if (!userId || !currentCloudUser || currentCloudUser.id !== userId) return { ok: false, staleUser: true };
+    let desiredLogs = mergeHistoryLogs([], prepareEncounterStatisticsLogsForMerge(historyLogs));
 
-    if (error) {
-        console.error(error);
-        showToast('历史库云端保存失败，请确认 Supabase 已添加 history_logs 列');
+    try {
+        // history_logs 是一个整包 JSON。采用“读取合并 → 写入 → 重新读取校验”的乐观合并，
+        // 可避免电脑和手机几乎同时新增不同研究时，最后一次整包上传吞掉另一端记录。
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const { data, error: readError } = await supabaseClient
+                .from('player_boxes')
+                .select('history_logs')
+                .eq('user_id', userId)
+                .maybeSingle();
+            if (readError) throw readError;
+            if (!currentCloudUser || currentCloudUser.id !== userId) return { ok: false, staleUser: true };
+
+            const remoteLogs = prepareEncounterStatisticsLogsForMerge(data && Array.isArray(data.history_logs) ? data.history_logs : []);
+            desiredLogs = mergeHistoryLogs(remoteLogs, mergeHistoryLogs(desiredLogs, historyLogs));
+
+            const { error: writeError } = await supabaseClient
+                .from('player_boxes')
+                .upsert({
+                    user_id: userId,
+                    history_logs: desiredLogs,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_id' });
+            if (writeError) throw writeError;
+
+            // 给另一台几乎同时写入的设备一个落盘窗口，再确认云端是否仍包含本次完整合并结果。
+            await new Promise(resolve => setTimeout(resolve, 80 + attempt * 70));
+            const { data: verifyData, error: verifyError } = await supabaseClient
+                .from('player_boxes')
+                .select('history_logs')
+                .eq('user_id', userId)
+                .maybeSingle();
+            if (verifyError) throw verifyError;
+
+            const verifiedLogs = mergeHistoryLogs([], prepareEncounterStatisticsLogsForMerge(
+                verifyData && Array.isArray(verifyData.history_logs) ? verifyData.history_logs : []
+            ));
+            const completeLogs = mergeHistoryLogs(verifiedLogs, desiredLogs);
+            if (JSON.stringify(verifiedLogs) === JSON.stringify(completeLogs)) {
+                historyLogs = mergeHistoryLogs(verifiedLogs, historyLogs);
+                localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+                loadEncounterStatisticsFromHistory({ refresh: false });
+                return { ok: true, guest: false };
+            }
+            desiredLogs = mergeHistoryLogs(completeLogs, historyLogs);
+        }
+
+        throw new Error('云端历史在多设备同时写入后仍未收敛');
+    } catch (error) {
+        console.error('历史库云端保存失败：', error);
+        showToast('历史库云端保存失败，本机记录已保留，稍后请重试同步');
+        return { ok: false, error };
     }
 }
 
@@ -4761,7 +4812,71 @@ function saveTotalCatchCalibrationToLocal() {
     localStorage.setItem(getTotalCatchCalibrationStorageKey(), JSON.stringify(totalCatchCalibration));
 }
 
-let encounterStatistics = { total: 0, initialized: false };
+const ENCOUNTER_STATISTICS_LOG_ID = '__encounter_statistics_v1__';
+let encounterStatistics = { total: 0, manualBase: 0, initialized: false, updatedAt: '', version: 2, basisMode: 'automatic' };
+
+function normalizeEncounterStatistics(value = {}) {
+    const rawManualBase = Number(value.manualBase);
+    const hasManualBase = value.manualBase !== null && value.manualBase !== undefined && Number.isFinite(rawManualBase);
+    return {
+        total: Math.max(0, Math.floor(Number(value.total) || 0)),
+        manualBase: hasManualBase ? Math.floor(rawManualBase) : 0,
+        initialized: !!value.initialized,
+        updatedAt: String(value.updatedAt || ''),
+        version: hasManualBase && Number(value.version || 0) >= 2 ? 2 : 1,
+        basisMode: ['manual', 'legacy_migration', 'automatic'].includes(value.basisMode) ? value.basisMode : 'legacy_migration'
+    };
+}
+
+function isEncounterStatisticsLog(log) {
+    return !!(log && (log.type === 'encounter_statistics' || String(log.id || '') === ENCOUNTER_STATISTICS_LOG_ID));
+}
+
+function mergeEncounterStatisticsLogs(existing, candidate) {
+    const first = normalizeEncounterStatistics(existing?.state || {});
+    const second = normalizeEncounterStatistics(candidate?.state || {});
+    const firstManual = first.basisMode === 'manual';
+    const secondManual = second.basisMode === 'manual';
+    const firstTime = getHistoryLogMergeTime(existing);
+    const secondTime = getHistoryLogMergeTime(candidate);
+    let chosenLog;
+
+    // 明确按下“总遇到”修改过的校准优先于某台设备自动生成的 0 基准；
+    // 两端都明确修改时才按最后修改时间决定。
+    if (firstManual !== secondManual) {
+        chosenLog = firstManual ? existing : candidate;
+    } else if (!firstManual && first.manualBase !== second.manualBase) {
+        // 旧版首次迁移时，各设备的总数从未同步：保留较大的历史基准，避免空设备覆盖完整设备。
+        chosenLog = first.manualBase > second.manualBase ? existing : candidate;
+    } else {
+        chosenLog = secondTime >= firstTime ? candidate : existing;
+    }
+
+    const chosenState = normalizeEncounterStatistics(chosenLog?.state || {});
+    const mergedTime = Math.max(firstTime, secondTime);
+    chosenState.updatedAt = mergedTime ? new Date(mergedTime).toISOString() : chosenState.updatedAt;
+    return Object.assign({}, chosenLog, {
+        id: ENCOUNTER_STATISTICS_LOG_ID,
+        type: 'encounter_statistics',
+        state: chosenState,
+        updatedAt: chosenState.updatedAt || chosenLog.updatedAt || new Date().toISOString()
+    });
+}
+
+function prepareEncounterStatisticsLogsForMerge(logs = []) {
+    const source = Array.isArray(logs) ? logs : [];
+    const recordedCount = getRecordedEncounterCount(source);
+    return source.map(log => {
+        if (!isEncounterStatisticsLog(log)) return log;
+        const state = normalizeEncounterStatistics(log.state || {});
+        if (Number(state.version) >= 2) return log;
+        state.manualBase = Math.floor(Number(state.total) || 0) - recordedCount;
+        state.version = 2;
+        state.basisMode = 'legacy_migration';
+        state.updatedAt = log.updatedAt || state.updatedAt || '';
+        return Object.assign({}, log, { state });
+    });
+}
 
 function getEncounterStatisticsStorageKey() {
     return currentCloudUser ? 'sleep_encounter_statistics_' + currentCloudUser.id : 'sleep_encounter_statistics_guest';
@@ -4770,11 +4885,9 @@ function getEncounterStatisticsStorageKey() {
 function loadEncounterStatisticsFromLocal() {
     try {
         const raw = localStorage.getItem(getEncounterStatisticsStorageKey());
-        encounterStatistics = Object.assign({ total: 0, initialized: false }, raw ? JSON.parse(raw) : {});
-        encounterStatistics.total = Math.max(0, Math.floor(Number(encounterStatistics.total) || 0));
-        encounterStatistics.initialized = !!encounterStatistics.initialized;
+        encounterStatistics = normalizeEncounterStatistics(raw ? JSON.parse(raw) : {});
     } catch (e) {
-        encounterStatistics = { total: 0, initialized: false };
+        encounterStatistics = normalizeEncounterStatistics();
     }
 }
 
@@ -4783,21 +4896,119 @@ function saveEncounterStatisticsToLocal() {
 }
 
 function getTotalEncounterCount() {
+    if (Number(encounterStatistics?.version) >= 2) {
+        return Math.max(0, Math.floor(Number(encounterStatistics.manualBase) || 0) + getRecordedEncounterCount());
+    }
     return Math.max(0, Math.floor(Number(encounterStatistics?.total) || 0));
+}
+
+function getRecordedEncounterCount(logs = historyLogs) {
+    return (Array.isArray(logs) ? logs : [])
+        .filter(log => log && !isHistoryDeleteMarker(log) && isSleepResearchLog(log))
+        .reduce((sum, log) => {
+            if (log.encounterCount === null || log.encounterCount === undefined || log.encounterCount === '') return sum;
+            return sum + Math.max(0, Math.floor(Number(log.encounterCount) || 0));
+        }, 0);
+}
+
+function migrateEncounterStatisticsToMergeSafeState() {
+    if (!encounterStatistics.initialized || Number(encounterStatistics.version) >= 2) return false;
+    // 旧版 total 已经包含本机研究记录的遇到数；先减去这些逐觉数据，留下真正的人工历史校准量。
+    // 此转换发生在云端合并前，所以电脑、手机各自新增的觉不会污染校准量。
+    encounterStatistics.manualBase = Math.floor(Number(encounterStatistics.total) || 0) - getRecordedEncounterCount();
+    encounterStatistics.version = 2;
+    encounterStatistics.basisMode = 'legacy_migration';
+    saveEncounterStatisticsToLocal();
+    return true;
+}
+
+function getEncounterStatisticsHistoryLog() {
+    return (Array.isArray(historyLogs) ? historyLogs : [])
+        .filter(isEncounterStatisticsLog)
+        .reduce((best, item) => chooseNewerHistoryLog(best, item), null);
+}
+
+function makeEncounterStatisticsHistoryLog(state = encounterStatistics) {
+    const normalized = normalizeEncounterStatistics(state);
+    return {
+        id: ENCOUNTER_STATISTICS_LOG_ID,
+        type: 'encounter_statistics',
+        state: normalized,
+        createdAt: normalized.updatedAt || '1970-01-01T00:00:00.000Z',
+        updatedAt: normalized.updatedAt || '1970-01-01T00:00:00.000Z'
+    };
+}
+
+// 将旧版仅保存在本机的总遇到数迁移进 history_logs。
+// 没有 updatedAt 的旧值只能在云端尚无该状态时补位，不能压过其他设备的新记录。
+function syncEncounterStatisticsLocalStateIntoHistory() {
+    migrateEncounterStatisticsToMergeSafeState();
+    const localState = normalizeEncounterStatistics(encounterStatistics);
+    if (!localState.initialized) return false;
+
+    const existing = getEncounterStatisticsHistoryLog();
+    const candidate = makeEncounterStatisticsHistoryLog(localState);
+    const chosen = existing ? mergeEncounterStatisticsLogs(existing, candidate) : candidate;
+    if (existing && JSON.stringify(chosen.state || {}) === JSON.stringify(existing.state || {})) return false;
+
+    historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(log => !isEncounterStatisticsLog(log));
+    historyLogs.push(chosen);
+    historyLogs = mergeHistoryLogs([], historyLogs);
+    return true;
+}
+
+function loadEncounterStatisticsFromHistory(options = {}) {
+    const log = getEncounterStatisticsHistoryLog();
+    if (!log) return false;
+
+    encounterStatistics = normalizeEncounterStatistics(Object.assign({}, log.state || {}, {
+        updatedAt: log.updatedAt || log.state?.updatedAt || ''
+    }));
+    migrateEncounterStatisticsToMergeSafeState();
+    saveEncounterStatisticsToLocal();
+    if (options.refresh !== false) updateBoxUI(false);
+    return true;
+}
+
+function saveEncounterStatisticsToHistory(options = {}) {
+    if (!encounterStatistics.initialized) return;
+    const log = makeEncounterStatisticsHistoryLog(encounterStatistics);
+    historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !isEncounterStatisticsLog(item));
+    historyLogs.push(log);
+    historyLogs = mergeHistoryLogs([], historyLogs);
+    saveHistoryToLocal();
+    if (options.saveCloudNow !== false && currentCloudUser) saveHistoryToCloudNow();
 }
 
 function setTotalEncounterCount(value, options = {}) {
     const total = Math.max(0, Math.floor(Number(value) || 0));
-    encounterStatistics.total = total;
-    encounterStatistics.initialized = true;
+    encounterStatistics = normalizeEncounterStatistics({
+        total,
+        manualBase: total - getRecordedEncounterCount(),
+        initialized: true,
+        updatedAt: new Date().toISOString(),
+        version: 2,
+        basisMode: 'manual'
+    });
     saveEncounterStatisticsToLocal();
+    saveEncounterStatisticsToHistory({ saveCloudNow: options.saveCloudNow !== false });
     if (options.refresh !== false) updateBoxUI(false);
 }
 
-function adjustTotalEncounterCount(delta) {
-    const change = Math.floor(Number(delta) || 0);
-    if (!change) return;
-    setTotalEncounterCount(Math.max(0, getTotalEncounterCount() + change), { refresh: false });
+function refreshEncounterStatisticsAfterResearchChange() {
+    if (!encounterStatistics.initialized) {
+        encounterStatistics = normalizeEncounterStatistics({
+            total: getRecordedEncounterCount(),
+            manualBase: 0,
+            initialized: true,
+            updatedAt: new Date().toISOString(),
+            version: 2,
+            basisMode: 'automatic'
+        });
+        saveEncounterStatisticsToLocal();
+        saveEncounterStatisticsToHistory();
+    }
+    updateBoxUI(false);
 }
 
 function promptSetTotalEncounterCount() {
@@ -13056,8 +13267,7 @@ function submitSleepResearchMeta() {
             if (ballUsage) payload.ballUsage = ballUsage;
             const research = upsertSleepResearch(payload);
             if (encounterCount !== null) {
-                adjustTotalEncounterCount(encounterCount);
-                updateBoxUI(false);
+                refreshEncounterStatisticsAfterResearchChange();
             }
             if (!sleepTypeData.empty) {
                 upsertSleepTypeRecord({
@@ -13228,10 +13438,6 @@ async function deleteSleepResearchWithCaptures(date, session, event) {
     if (research && research.ballUsage) {
         applyResearchBallUsageInventoryDelta(research.ballUsage, null);
     }
-    if (research && research.encounterCount !== null && research.encounterCount !== undefined) {
-        adjustTotalEncounterCount(-Math.max(0, Math.floor(Number(research.encounterCount) || 0)));
-    }
-
     historyLogs = (Array.isArray(historyLogs) ? historyLogs : [])
         .filter(h => {
             if (!h || isHistoryDeleteMarker(h)) return true;
@@ -13245,6 +13451,7 @@ async function deleteSleepResearchWithCaptures(date, session, event) {
     });
 
     historyLogs = mergeHistoryLogs([], historyLogs);
+    refreshEncounterStatisticsAfterResearchChange();
     await removeSleepResearchPhotoEntriesFromStorage(getStoredSleepResearchPhotos(safeDate, safeSession));
     removeSleepResearchMeta(safeDate, safeSession);
     removeSleepResearchPhotos(safeDate, safeSession);
@@ -13436,7 +13643,6 @@ function submitEditSleepResearch(date, session) {
     const encounterEl = document.getElementById('edit-research-encounter-count');
     const saveBtn = document.querySelector('#sleep-research-edit-modal button[data-date][data-session].bg-indigo-600');
     const previousResearchForBallUsage = findSleepResearch(date, session);
-    const previousEncounterCount = previousResearchForBallUsage?.encounterCount === null || previousResearchForBallUsage?.encounterCount === undefined ? 0 : Math.max(0, Math.floor(Number(previousResearchForBallUsage.encounterCount) || 0));
     const previousBallUsage = previousResearchForBallUsage && previousResearchForBallUsage.ballUsage ? previousResearchForBallUsage.ballUsage : null;
     const nextBallUsage = readBallUsageFromEditor('edit', session);
     const sleepTypeData = readSleepTypeFields('edit-research');
@@ -13483,7 +13689,7 @@ function submitEditSleepResearch(date, session) {
             const payload = { date, session, sleepScore, drowsyPower, note, encounterCount, photoDataUrls };
             if (nextBallUsage) payload.ballUsage = nextBallUsage;
             upsertSleepResearch(payload);
-            adjustTotalEncounterCount((encounterCount || 0) - previousEncounterCount);
+            refreshEncounterStatisticsAfterResearchChange();
             if (!sleepTypeData.empty) {
                 upsertSleepTypeRecord({
                     date,
