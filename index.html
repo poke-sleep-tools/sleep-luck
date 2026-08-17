@@ -1174,6 +1174,7 @@ function rebuildTodayCheckInsFromHistory() {
 
 // 🚀 历史时光库多账号核心控制轨：本地按账号隔离，登录账号额外同步到 Supabase
 let historyLogs = [];
+let encounterHistoryReady = false;
 function getHistoryStorageKey() {
     return currentCloudUser ? 'sleep_history_logs_' + currentCloudUser.id : 'sleep_history_logs_guest';
 }
@@ -1181,11 +1182,13 @@ function loadHistoryFromLocal() {
     try {
         const raw = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
         historyLogs = mergeHistoryLogs([], raw);
+        encounterHistoryReady = true;
         ensureSleepResearchForExistingCaptures({ persist: true, syncCloud: false });
         loadBallPlannerStateFromHistory();
     } catch (e) {
         console.error('历史抽卡库读取失败，已重置：', e);
         historyLogs = [];
+        encounterHistoryReady = true;
     }
 }
 function saveHistoryToLocal() {
@@ -3881,11 +3884,10 @@ function mergeHistoryLogs(cloudLogs = [], localLogs = []) {
 }
 
 async function loadHistoryFromCloud() {
-    loadHistoryFromLocal();
-
     // “总遇到数”过去只存在当前设备的 localStorage。先把旧值迁移成隐藏的历史状态，
     // 再与云端按 updatedAt 合并；旧版没有时间戳的本地值使用极早时间，避免覆盖另一台设备已有的新值。
     loadEncounterStatisticsFromLocal();
+    loadHistoryFromLocal();
     historyLogs = prepareEncounterStatisticsLogsForMerge(historyLogs);
     syncEncounterStatisticsLocalStateIntoHistory();
     loadEncounterStatisticsFromHistory({ refresh: false });
@@ -3950,6 +3952,14 @@ function saveHistoryToCloudNow() {
     return task;
 }
 
+function stableHistoryJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableHistoryJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableHistoryJson(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+}
+
 async function performHistoryCloudSync(userId) {
     if (!userId || !currentCloudUser || currentCloudUser.id !== userId) return { ok: false, staleUser: true };
     let desiredLogs = mergeHistoryLogs([], prepareEncounterStatisticsLogsForMerge(historyLogs));
@@ -3991,7 +4001,8 @@ async function performHistoryCloudSync(userId) {
                 verifyData && Array.isArray(verifyData.history_logs) ? verifyData.history_logs : []
             ));
             const completeLogs = mergeHistoryLogs(verifiedLogs, desiredLogs);
-            if (JSON.stringify(verifiedLogs) === JSON.stringify(completeLogs)) {
+            // Supabase 的 jsonb 会重排对象字段；必须比较数据含义，不能依赖 JSON 属性的原始排列顺序。
+            if (stableHistoryJson(verifiedLogs) === stableHistoryJson(completeLogs)) {
                 historyLogs = mergeHistoryLogs(verifiedLogs, historyLogs);
                 localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
                 loadEncounterStatisticsFromHistory({ refresh: false });
@@ -4883,6 +4894,8 @@ function getEncounterStatisticsStorageKey() {
 }
 
 function loadEncounterStatisticsFromLocal() {
+    // 账号或页面刚切换时，先使用上次完整计算的缓存总数；等对应账号的历史记录载入后再实时重算。
+    encounterHistoryReady = false;
     try {
         const raw = localStorage.getItem(getEncounterStatisticsStorageKey());
         encounterStatistics = normalizeEncounterStatistics(raw ? JSON.parse(raw) : {});
@@ -4892,11 +4905,19 @@ function loadEncounterStatisticsFromLocal() {
 }
 
 function saveEncounterStatisticsToLocal() {
+    if (Number(encounterStatistics?.version) >= 2 && encounterHistoryReady) {
+        encounterStatistics.total = Math.max(0,
+            Math.floor(Number(encounterStatistics.manualBase) || 0) + getRecordedEncounterCount()
+        );
+    }
     localStorage.setItem(getEncounterStatisticsStorageKey(), JSON.stringify(encounterStatistics));
 }
 
 function getTotalEncounterCount() {
     if (Number(encounterStatistics?.version) >= 2) {
+        if (!encounterHistoryReady) {
+            return Math.max(0, Math.floor(Number(encounterStatistics.total) || 0));
+        }
         return Math.max(0, Math.floor(Number(encounterStatistics.manualBase) || 0) + getRecordedEncounterCount());
     }
     return Math.max(0, Math.floor(Number(encounterStatistics?.total) || 0));
@@ -5008,10 +5029,16 @@ function refreshEncounterStatisticsAfterResearchChange() {
         saveEncounterStatisticsToLocal();
         saveEncounterStatisticsToHistory();
     }
+    // 已初始化时人工基准无需变化，但完整计算值仍要刷新进本机缓存，供下次打开页面立即显示。
+    saveEncounterStatisticsToLocal();
     updateBoxUI(false);
 }
 
 function promptSetTotalEncounterCount() {
+    if (currentCloudUser && !encounterHistoryReady) {
+        showToast('账号历史仍在同步，请稍等片刻再修改总遇到数');
+        return;
+    }
     const current = getTotalEncounterCount();
     const answer = prompt('请输入截至目前睡眠研究中总共遇到的宝可梦数量。以后填写每次研究的“本次遇到多少只”时，系统会自动在这个总数上增减。', String(current));
     if (answer === null) return;
