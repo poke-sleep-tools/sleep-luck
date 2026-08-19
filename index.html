@@ -894,6 +894,9 @@
                     <button onclick="openMealPrepPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-orange-100 text-orange-800 shadow-sm flex items-center gap-1 hover:bg-orange-200" title="支持下周类型未知或活动已确定，根据目标料理、背包容量与食材产速推荐提前备料库存">
                         <i class="fa-solid fa-utensils text-orange-600"></i> 🍲 料理备料规划
                     </button>
+                    <button onclick="openRecipeBoxFitModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-100 text-emerald-800 shadow-sm flex items-center gap-1 hover:bg-emerald-200" title="按出货库个体产能、奶妈、扩锅与咚咚鼠工时，比较各食谱对当前 Box 的适配度">
+                        <i class="fa-solid fa-ranking-star text-emerald-600"></i> 🍽️ 食谱适配度
+                    </button>
                     <button onclick="openWeeklyCookingSimulatorModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-rose-100 text-rose-800 shadow-sm flex items-center gap-1 hover:bg-rose-200" title="结合出货库个体、岛屿加成、睡眠、收菜频率、扩锅和料理暴击，模拟整周料理方案">
                         <i class="fa-solid fa-calendar-week text-rose-600"></i> 🗓️ 周料理模拟
                     </button>
@@ -25536,6 +25539,228 @@ async function calculateAndRenderWeeklyCooking() {
         // 已打开弹窗不强制刷新，避免覆盖用户正在输入的内容；下次打开即使用完整资料库。
         autoProductionCache.key = '';
     });
+})();
+</script>
+<!-- 食谱 × Box 适配度（单顿独立分析） -->
+<script>
+(() => {
+    const STORAGE_KEY = 'poke_sleep_recipe_box_fit_v1';
+    const TYPE_META = {
+        curry:{ label:'咖喱', icon:'🍛' },
+        salad:{ label:'沙拉', icon:'🥗' },
+        dessert:{ label:'甜品', icon:'🍨' }
+    };
+    const TYPE_BY_NUMBER = { 1:'curry', 2:'salad', 3:'dessert' };
+    const INGREDIENT_BY_ID = {
+        1:'粗枝大葱',2:'品鲜蘑菇',3:'特选蛋',4:'窝心土豆',5:'特选苹果',6:'火辣香草',7:'豆制肉',8:'哞哞鲜奶',9:'甜甜蜜',10:'纯粹油',11:'暖暖姜',12:'好眠番茄',13:'放松可可',14:'美味尾巴',15:'萌绿大豆',16:'萌绿玉米',17:'醒脑咖啡豆',18:'沉甸甸南瓜',19:'嫩亮牛油果'
+    };
+    const NAME_BY_ID = {
+        1001:'特选苹果咖喱',1002:'炙烧尾肉咖喱',1003:'太阳之力番茄咖喱',1004:'绝对睡眠奶油咖喱',1005:'辣味葱劲十足咖喱',1006:'蘑菇孢子咖喱',1007:'亲子爱咖喱',1008:'吃饱饱起司肉排咖喱',1009:'窝心白酱浓汤',1010:'单纯白酱浓汤',1011:'豆制肉排咖喱',1012:'宝宝甜蜜咖喱',1013:'忍者咖喱',1014:'日照炸肉排咖喱',1015:'入口即化蛋卷咖喱',1016:'健美豆子咖喱',1017:'柔软玉米浓汤',1018:'炼狱玉米干咖喱',1019:'迷昏拳辣味咖喱',1020:'觉醒力量浓汤',1021:'居合斩寿喜烧咖喱',1022:'扮演南瓜精浓汤',1023:'茂盛焗烤牛油果',
+        2001:'呆呆兽尾巴的胡椒沙拉',2002:'蘑菇孢子沙拉',2003:'拨雪凯撒沙拉',2004:'贪吃鬼土豆沙拉',2005:'湿润豆腐沙拉',2006:'蛮力豪迈沙拉',2007:'豆制火腿沙拉',2008:'好眠番茄沙拉',2009:'哞哞起司番茄沙拉',2010:'心情不定肉沙拉淋巧克力酱',2011:'过热沙拉',2012:'特选苹果沙拉',2013:'免疫葱花沙拉',2014:'迷人苹果起司沙拉',2015:'忍者沙拉',2016:'热风豆腐沙拉',2017:'萌绿沙拉',2018:'冥想香甜沙拉',2019:'乱击玉米沙拉',2020:'十字切碎丁沙拉',2021:'不服输咖啡沙拉',2022:'落英缤纷含羞草蛋沙拉',2023:'苹果酸奶沙拉',2024:'碎裂牛油果沙拉',2025:'重踏牛油果酱脆片',2026:'大块满满热水沙拉',
+        3001:'熟成甜薯烧',3002:'不屈姜饼',3003:'特选苹果汁',3004:'手制劲爽汽水',3005:'火花姜茶',3006:'胖丁百汇布丁',3007:'恶魔之吻水果牛奶',3008:'祈愿苹果派',3009:'橙梦排毒茶',3010:'甜甜香气巧克力蛋糕',3011:'哞哞热鲜奶',3012:'轻装豆香蛋糕',3013:'活力蛋白饮',3014:'我行我素蔬菜汁',3015:'大马拉萨达',3016:'大力士豆香甜甜圈',3017:'大爆炸爆米花',3018:'茶会玉米司康',3019:'花瓣舞巧克力塔',3020:'花之礼马卡龙',3021:'早起咖啡冻',3022:'电光香料可乐',3023:'破格玉米香提拉米苏',3024:'土王闪电泡芙',3025:'心跳加速鬼面松饼',3026:'青草搅拌器冰沙',3027:'采蜜巧克力格子松饼'
+    };
+    let state = { type:'curry', dayKind:'weekday', healerId:'auto', basePot:57, goodCamp:false, cookingBoost:false, recipeLevels:{} };
+    let lastResults = [];
+
+    function loadState() {
+        try { state = Object.assign(state, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); } catch (_) {}
+        state.recipeLevels = state.recipeLevels && typeof state.recipeLevels === 'object' ? state.recipeLevels : {};
+        if (typeof weeklyCookingState !== 'undefined') {
+            state.basePot = Number(state.basePot) || Number(weeklyCookingState.basePot) || 57;
+            if (state.goodCamp == null) state.goodCamp = !!weeklyCookingState.goodCamp;
+            if (state.cookingBoost == null) state.cookingBoost = !!weeklyCookingState.cookingWeekBoost;
+        }
+    }
+    function saveState() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {} }
+    function canonical(name) { return typeof canonicalizeMealPrepIngredientName === 'function' ? canonicalizeMealPrepIngredientName(name) : String(name || ''); }
+    function recipes() {
+        const masterRows = Object.values(window.__cookingMasterData?.mealMap || {}).map(raw => [raw.id,raw.type,raw.baseStrength,(raw.ingredients||[]).map(item=>[item.id,item.quantity])]);
+        const rows = masterRows.length ? masterRows : (typeof EMBEDDED_MEAL_ROWS !== 'undefined' ? EMBEDDED_MEAL_ROWS : []);
+        return rows.map(([id,type,baseStrength,ingredients]) => ({
+            id, type:TYPE_BY_NUMBER[type], name:NAME_BY_ID[id] || `料理${id}`, baseStrength:Number(baseStrength)||0,
+            ingredients:(ingredients||[]).map(([ingredientId,amount]) => ({ name:canonical(INGREDIENT_BY_ID[ingredientId] || `食材${ingredientId}`), amount:Number(amount)||0 }))
+        })).filter(item => item.type && item.baseStrength > 0 && item.ingredients.length);
+    }
+    function roster() {
+        const list = typeof graduationDex !== 'undefined' && Array.isArray(graduationDex) ? graduationDex : [];
+        return list.map(item => {
+            const cap = typeof getGraduationCapture === 'function' ? getGraduationCapture(item) : (item.capture || item);
+            const cur = typeof getGraduationCurrent === 'function' ? getGraduationCurrent(item) : (item.current || item);
+            const species = cur.name || cap.name || '';
+            const estimate = typeof window.calculateCookingPokemonEstimate === 'function' ? window.calculateCookingPokemonEstimate(item) : null;
+            if (!estimate?.ok) return null;
+            const skill = typeof getWeeklyCookingMainSkillInfo === 'function' ? getWeeklyCookingMainSkillInfo(species) : {key:'other',label:'其他'};
+            const mainSkillLevel = Math.max(1, Math.min(8, Math.floor(Number(cur.mainSkillLevel)||1)));
+            const campFactor = state.goodCamp ? 1.2 : 1;
+            const ingredientRates = {};
+            Object.entries(estimate.map || {}).forEach(([name,value]) => ingredientRates[canonical(name)] = (ingredientRates[canonical(name)]||0) + Number(value)*campFactor/24);
+            return {
+                id:String(item.id), item, species, nickname:typeof getGraduationDexNickname === 'function' ? getGraduationDexNickname(item) : species,
+                skill, mainSkillLevel, ingredientRates,
+                triggersPerHour:(Number(estimate.dailySkillTriggers)||0)*campFactor/24
+            };
+        }).filter(Boolean);
+    }
+    function healerChoices(rows) { return rows.filter(row => row.skill.key === 'healer'); }
+    function healerPower(row) {
+        const value = typeof getWeeklyCookingSkillValue === 'function' ? getWeeklyCookingSkillValue('healer',row.mainSkillLevel) : 0;
+        return row.triggersPerHour * value;
+    }
+    function selectedHealer(rows) {
+        const healers = healerChoices(rows);
+        if (state.healerId === 'none') return null;
+        if (state.healerId !== 'auto') return healers.find(row => row.id === String(state.healerId)) || null;
+        return healers.sort((a,b) => healerPower(b)-healerPower(a))[0] || null;
+    }
+    function levelBonus(recipe) {
+        let level = Math.max(1,Math.min(70,Math.floor(Number(state.recipeLevels?.[recipe.id])||0))) || 1;
+        try {
+            const savedRecipe = Object.values(weeklyCookingState?.extraRecipes || {}).flat().find(item => Number(item.mealId) === Number(recipe.id));
+            if (!Number(state.recipeLevels?.[recipe.id]) && savedRecipe) level = Math.max(1, Number(getWeeklyCookingRecipeStat(savedRecipe.type || recipe.type, savedRecipe, weeklyCookingState)?.level)||1);
+        } catch (_) {}
+        const masterLevels = window.__cookingMasterData?.recipeLevelData || [];
+        const row = masterLevels.find(item => Number(item.level) === level);
+        if (row) return { level, multiplier:1 + (Number(row.bonus)||0) };
+        const fallback = (typeof EMBEDDED_RECIPE_LEVEL_ROWS !== 'undefined' ? EMBEDDED_RECIPE_LEVEL_ROWS : []).find(item => Number(item[0]) === level);
+        return { level, multiplier:1 + (Number(fallback?.[1])||0) };
+    }
+    function recipeEnergy(recipe) {
+        const lv = levelBonus(recipe);
+        let islandBonus = 0;
+        try { islandBonus = Number(weeklyCookingState?.islandBonuses?.[weeklyCookingState.selectedIsland]) || 0; } catch (_) {}
+        const event = state.cookingBoost ? 1.5 : 1;
+        return { level:lv.level, islandBonus, normal:recipe.baseStrength*lv.multiplier*(1+islandBonus/100)*event };
+    }
+    function addProduction(target,row,hours,relevant) {
+        if (!row || hours <= 0) return;
+        Object.entries(row.ingredientRates).forEach(([name,rate]) => {
+            if (relevant.has(name)) target[name] = (target[name]||0) + rate*hours;
+        });
+    }
+    function scheduleWallTime(jobHours, slots) {
+        const lanes = Array(Math.max(1,slots)).fill(0);
+        Object.values(jobHours).filter(value => value > 0.0001).sort((a,b)=>b-a).forEach(hours => {
+            let index = 0;
+            for (let i=1;i<lanes.length;i++) if (lanes[i] < lanes[index]) index=i;
+            lanes[index] += hours;
+        });
+        return Math.max(0,...lanes);
+    }
+    function combinations(items) {
+        const source = [...items].sort((a,b)=>b.triggersPerHour-a.triggersPerHour).slice(0,8);
+        const output=[[]], max=(1<<source.length)-1;
+        for(let mask=1;mask<=max;mask++) output.push(source.filter((_,i)=>mask&(1<<i)));
+        return output;
+    }
+    function evaluate(recipe,rows,healer,potter,dedenneRows,targetTriggers) {
+        const demand=Object.fromEntries(recipe.ingredients.map(item=>[canonical(item.name),Number(item.amount)||0]));
+        const relevant=new Set(Object.keys(demand));
+        const potSize=(Number(state.basePot)||0)*(state.goodCamp?1.5:1);
+        const shortage=Math.max(0,Object.values(demand).reduce((a,b)=>a+b,0)-potSize);
+        const potValue=potter && typeof getWeeklyCookingSkillValue==='function' ? getWeeklyCookingSkillValue('pot',potter.mainSkillLevel) : 0;
+        if(shortage>0 && (!potter || !potValue || !potter.triggersPerHour)) return null;
+        const potTriggers=shortage>0?Math.ceil(shortage/potValue):0;
+        const potHours=potTriggers?(potTriggers/potter.triggersPerHour):0;
+        const tastyRate=dedenneRows.reduce((sum,row)=>sum+row.triggersPerHour,0);
+        if(targetTriggers>0 && !tastyRate) return null;
+        const tastyHours=targetTriggers/tastyRate;
+        const locked=new Set([healer?.id,potter?.id,...dedenneRows.map(row=>row.id)].filter(Boolean));
+        let wall=0, best=null;
+        for(let iteration=0;iteration<30;iteration++) {
+            const incidental={};
+            addProduction(incidental,healer,wall,relevant);
+            addProduction(incidental,potter,potHours,relevant);
+            dedenneRows.forEach(row=>addProduction(incidental,row,tastyHours,relevant));
+            const residual={};
+            Object.keys(demand).forEach(name=>residual[name]=Math.max(0,demand[name]-(incidental[name]||0)));
+            const specialistHours={}, ingredientPlan=[], missing=[];
+            Object.entries(residual).sort((a,b)=>b[1]-a[1]).forEach(([name,amount])=>{
+                if(amount<=0.0001){ingredientPlan.push({name,demand:demand[name],incidental:incidental[name]||0,remaining:0,producer:null,hours:0});return;}
+                const candidates=rows.filter(row=>!locked.has(row.id) && Number(row.ingredientRates[name])>0).sort((a,b)=>b.ingredientRates[name]-a.ingredientRates[name]);
+                const producer=candidates[0];
+                if(!producer){missing.push(name);ingredientPlan.push({name,demand:demand[name],incidental:incidental[name]||0,remaining:amount,producer:null,hours:Infinity});return;}
+                const hours=amount/producer.ingredientRates[name];
+                specialistHours[producer.id]=(specialistHours[producer.id]||0)+hours;
+                ingredientPlan.push({name,demand:demand[name],incidental:incidental[name]||0,remaining:amount,producer,hours});
+            });
+            if(missing.length)return { feasible:false,recipe,missing };
+            const jobHours={...specialistHours};
+            if(potter)jobHours[potter.id]=(jobHours[potter.id]||0)+potHours;
+            dedenneRows.forEach(row=>jobHours[row.id]=(jobHours[row.id]||0)+tastyHours);
+            const nextWall=scheduleWallTime(jobHours,healer?4:5);
+            const totalWorkerHours=Object.values(jobHours).reduce((a,b)=>a+b,0)+(healer?nextWall:0);
+            best={feasible:true,recipe,demand,incidental,ingredientPlan,jobHours,wallHours:nextWall,totalWorkerHours,potHours,potTriggers,potter,dedenneRows,targetTriggers,tastyHours,healer};
+            if(Math.abs(nextWall-wall)<0.002)break;
+            // 奶妈的顺带产出取决于整个备料过程持续多久，而过程时长又会被这部分产出缩短。
+            // 用阻尼迭代求稳定点，避免“本轮全靠奶妈、下一轮时长归零”的来回振荡。
+            wall=iteration===0?nextWall:(wall+nextWall)/2;
+        }
+        const energy=recipeEnergy(recipe);
+        const visibleChance=targetTriggers*10;
+        const actualChance=Math.min(100,(state.dayKind==='sunday'?30:10)+visibleChance);
+        const critExtra=state.dayKind==='sunday'?2:1;
+        const expected=energy.normal*(1+critExtra*actualChance/100);
+        return Object.assign(best,{energy,visibleChance,actualChance,expected,score:best.totalWorkerHours>0?expected/best.totalWorkerHours:0});
+    }
+    function bestForRecipe(recipe,rows,healer) {
+        // 先做 Box 硬门槛检查：任一必需食材在整个 Box 中都没有产能时，
+        // 这道菜不是“效率很低”，而是当前 Box 根本无法独立完成，因此不参与排名与后续枚举。
+        const zeroIngredients=recipe.ingredients.map(item=>canonical(item.name)).filter(name=>!rows.some(row=>Number(row.ingredientRates[name])>0));
+        if(zeroIngredients.length)return {excluded:true,feasible:false,recipe,missing:[...new Set(zeroIngredients)]};
+        const total=recipe.ingredients.reduce((sum,item)=>sum+item.amount,0);
+        const potSize=(Number(state.basePot)||0)*(state.goodCamp?1.5:1);
+        const potters=total>potSize?rows.filter(row=>row.skill.key==='pot' && row.id!==healer?.id):[null];
+        if(!potters.length)return {feasible:false,recipe,missing:['扩锅能力']};
+        const dedennes=rows.filter(row=>normalizeWeeklyCookingSpeciesName(row.species)==='咚咚鼠' && row.id!==healer?.id);
+        const tastyOptions=combinations(dedennes);
+        let best=null, firstFailure=null;
+        for(const potter of potters) {
+            for(const group of tastyOptions) {
+                for(let k=0;k<=7;k++) {
+                    if(k===0 && group.length)continue;
+                    if(k>0 && !group.length)continue;
+                    const result=evaluate(recipe,rows,healer,potter,group,k);
+                    if(!result?.feasible){firstFailure ||= result;continue;}
+                    if(!best || result.score>best.score || (result.score===best.score&&result.wallHours<best.wallHours))best=result;
+                }
+            }
+        }
+        return best||firstFailure||{feasible:false,recipe,missing:['可用个体']};
+    }
+    function fmt(value,digits=1){return Number.isFinite(Number(value))?Number(value).toFixed(digits):'—';}
+    function renderResults() {
+        const root=document.getElementById('recipe-box-fit-results'); if(!root)return;
+        const rows=roster(), healer=selectedHealer(rows);
+        const selectedRecipes=recipes().filter(item=>item.type===state.type);
+        if(!rows.length){root.innerHTML='<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-700">出货库中暂时没有可按面板推算产量的个体。请先补充宝可梦当前等级和食材组合。</div>';return;}
+        const evaluated=selectedRecipes.map(recipe=>bestForRecipe(recipe,rows,healer));
+        const excluded=evaluated.filter(item=>item.excluded);
+        lastResults=evaluated.filter(item=>!item.excluded).sort((a,b)=>(b.score||0)-(a.score||0));
+        const feasible=lastResults.filter(item=>item.feasible);
+        root.innerHTML=`<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+            <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3"><div class="text-[9px] font-bold text-emerald-600">进入适配度计算</div><div class="text-xl font-black text-emerald-900">${lastResults.length}</div><div class="text-[8px] font-bold text-emerald-600">零产能排除 ${excluded.length} 道</div></div>
+            <div class="rounded-xl bg-indigo-50 border border-indigo-200 p-3"><div class="text-[9px] font-bold text-indigo-600">可推算 Box 个体</div><div class="text-xl font-black text-indigo-900">${rows.length}</div></div>
+            <div class="rounded-xl bg-rose-50 border border-rose-200 p-3"><div class="text-[9px] font-bold text-rose-600">采用奶妈</div><div class="text-sm font-black text-rose-900 truncate">${escapeHtml(healer?.nickname||'不固定奶妈')}</div></div>
+            <div class="rounded-xl bg-orange-50 border border-orange-200 p-3"><div class="text-[9px] font-bold text-orange-600">最高适配度</div><div class="text-sm font-black text-orange-900">${feasible[0]?`${Math.round(feasible[0].score).toLocaleString()} 能量/宝可梦h`:'无可行项'}</div></div>
+        </div>${excluded.length?`<details class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2"><summary class="cursor-pointer text-[9px] font-black text-amber-800">有 ${excluded.length} 道料理因 Box 至少一种食材产能为 0，已完全排除</summary><div class="mt-2 space-y-1 text-[8px] font-bold text-amber-700">${excluded.map(item=>`<div>${escapeHtml(item.recipe.name)}：缺 ${escapeHtml(item.missing.join('、'))}</div>`).join('')}</div></details>`:''}<div class="space-y-2">${lastResults.map((result,index)=>renderResultCard(result,index)).join('')||'<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-700">当前 Box 没有可进入排名的该类型料理。</div>'}</div>`;
+    }
+    function renderResultCard(result,index) {
+        const recipe=result.recipe;
+        if(!result.feasible)return `<div class="rounded-2xl border border-slate-200 bg-slate-50 p-3"><div class="font-black text-slate-700">${escapeHtml(recipe.name)}</div><div class="mt-1 text-[9px] font-bold text-rose-600">暂不可做：缺少 ${escapeHtml((result.missing||[]).join('、'))}</div></div>`;
+        const roleText=[result.healer&&`奶妈 ${result.healer.nickname} 全程`,result.potter&&`扩锅 ${result.potter.nickname} ${fmt(result.potHours,2)}h / ${result.potTriggers}次`,result.dedenneRows.length&&`${result.dedenneRows.length}只咚咚鼠共同站 ${fmt(result.tastyHours,2)}h，目标${result.targetTriggers}次`].filter(Boolean).join(' · ')||'不需要固定功能位';
+        return `<details ${index<3?'open':''} class="rounded-2xl border ${index===0?'border-emerald-300 bg-emerald-50/30':'border-slate-200 bg-white'} overflow-hidden"><summary class="cursor-pointer list-none p-3"><div class="flex flex-col md:flex-row md:items-center gap-2"><div class="min-w-0 flex-1"><div class="flex items-center gap-2"><span class="rounded-full ${index===0?'bg-emerald-600 text-white':'bg-slate-100 text-slate-600'} px-2 py-0.5 text-[9px] font-black">#${index+1}</span><span class="font-black text-slate-900">${escapeHtml(recipe.name)}</span><span class="text-[8px] font-bold text-slate-400">Lv.${result.energy.level}</span></div><div class="mt-1 text-[8px] font-bold text-slate-400">${recipe.ingredients.map(item=>`${escapeHtml(item.name)}×${item.amount}`).join(' · ')}</div></div><div class="grid grid-cols-3 gap-2 text-center"><div><div class="text-[8px] font-bold text-slate-400">适配度</div><div class="text-xs font-black text-emerald-700">${Math.round(result.score).toLocaleString()}/h</div></div><div><div class="text-[8px] font-bold text-slate-400">总宝可梦工时</div><div class="text-xs font-black text-indigo-700">${fmt(result.totalWorkerHours,2)}h</div></div><div><div class="text-[8px] font-bold text-slate-400">并行备齐</div><div class="text-xs font-black text-orange-700">约${fmt(result.wallHours,2)}h</div></div></div></div></summary><div class="border-t border-slate-200 p-3 space-y-3"><div class="grid grid-cols-2 md:grid-cols-5 gap-2"><label class="rounded-xl bg-emerald-50 p-2"><div class="text-[8px] font-bold text-emerald-600">当前食谱等级</div><input type="number" min="1" max="70" value="${result.energy.level}" onchange="updateRecipeBoxFitLevel(${recipe.id},this.value)" class="mt-1 w-full rounded-lg border border-emerald-200 bg-white px-2 py-1 text-sm font-black text-emerald-900"></label><div class="rounded-xl bg-slate-50 p-2"><div class="text-[8px] font-bold text-slate-400">普通单顿能量</div><div class="font-black text-slate-800">${Math.round(result.energy.normal).toLocaleString()}</div></div><div class="rounded-xl bg-fuchsia-50 p-2"><div class="text-[8px] font-bold text-fuchsia-500">画面叠加 / 实际暴击率</div><div class="font-black text-fuchsia-800">+${result.visibleChance}% / ${result.actualChance}%</div></div><div class="rounded-xl bg-amber-50 p-2"><div class="text-[8px] font-bold text-amber-500">含暴击期望能量</div><div class="font-black text-amber-800">${Math.round(result.expected).toLocaleString()}</div></div><div class="rounded-xl bg-sky-50 p-2"><div class="text-[8px] font-bold text-sky-500">锅容量</div><div class="font-black text-sky-800">${Math.floor((Number(state.basePot)||0)*(state.goodCamp?1.5:1))} / 需${Object.values(result.demand).reduce((a,b)=>a+b,0)}</div></div></div><div class="rounded-xl border border-violet-100 bg-violet-50 p-2 text-[9px] font-bold text-violet-800">${escapeHtml(roleText)}</div><div class="overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[680px] text-[9px]"><thead class="bg-slate-900 text-white"><tr><th class="p-2 text-left">食材</th><th class="p-2 text-right">需求</th><th class="p-2 text-right">功能位顺带产出</th><th class="p-2 text-right">剩余</th><th class="p-2 text-left">主力生产者</th><th class="p-2 text-right">额外站场</th></tr></thead><tbody>${result.ingredientPlan.map(row=>`<tr class="border-t border-slate-100"><td class="p-2 font-black">${escapeHtml(row.name)}</td><td class="p-2 text-right">${fmt(row.demand,1)}</td><td class="p-2 text-right text-emerald-700">${fmt(Math.min(row.demand,row.incidental),1)}</td><td class="p-2 text-right">${fmt(row.remaining,1)}</td><td class="p-2 font-bold">${row.producer?`${escapeHtml(row.producer.nickname)} · ${fmt(row.producer.ingredientRates[row.name],2)}/h`:'已被功能位覆盖'}</td><td class="p-2 text-right font-black text-indigo-700">${fmt(row.hours,2)}h</td></tr>`).join('')}</tbody></table></div><div class="text-[8px] font-bold leading-relaxed text-slate-400">适配度＝含暴击期望料理能量 ÷ 总宝可梦站场小时。奶妈占1个位置并全程站场；其余工作在剩余4格并行。咚咚鼠与扩锅手只按实际功能站场时间计算，其间产出的本食谱食材会先抵扣；不相关食材按0收益处理。该工具比较的是单顿食谱适配度，不代表整周最优轮换。</div></div></details>`;
+    }
+    function renderModal() {
+        let modal=document.getElementById('recipe-box-fit-modal');
+        if(!modal){modal=document.createElement('div');modal.id='recipe-box-fit-modal';modal.className='fixed inset-0 z-[100] hidden bg-slate-950/60 backdrop-blur-sm p-2 sm:p-5 overflow-y-auto';document.body.appendChild(modal);}
+        const rows=roster(), healers=healerChoices(rows).sort((a,b)=>healerPower(b)-healerPower(a));
+        modal.innerHTML=`<div class="mx-auto my-2 w-full max-w-6xl overflow-hidden rounded-3xl bg-white shadow-2xl"><div class="sticky top-0 z-10 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-cyan-600 px-4 py-3 text-white"><div><div class="text-lg font-black">🍽️ 食谱 × Box 适配度</div><div class="text-[9px] font-bold text-white/80">比较做出一顿料理需要占用多少宝可梦工时；功能位顺带产出的有效食材也会计算。</div></div><button onclick="closeRecipeBoxFitModal()" class="h-10 w-10 rounded-full bg-white/15 text-xl font-black hover:bg-white/25">×</button></div><div class="p-3 sm:p-5"><div class="grid grid-cols-2 md:grid-cols-6 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3"><label class="text-[9px] font-black text-slate-500">料理类型<select onchange="updateRecipeBoxFit('type',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black">${Object.entries(TYPE_META).map(([key,meta])=>`<option value="${key}" ${state.type===key?'selected':''}>${meta.icon} ${meta.label}</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">用餐日<select onchange="updateRecipeBoxFit('dayKind',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"><option value="weekday" ${state.dayKind==='weekday'?'selected':''}>周一～周六</option><option value="sunday" ${state.dayKind==='sunday'?'selected':''}>周日</option></select></label><label class="text-[9px] font-black text-slate-500">基础锅容量<input type="number" min="1" value="${state.basePot}" onchange="updateRecipeBoxFit('basePot',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500 col-span-2">固定奶妈<select onchange="updateRecipeBoxFit('healerId',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"><option value="auto" ${state.healerId==='auto'?'selected':''}>自动选择最强奶妈（推荐）</option><option value="none" ${state.healerId==='none'?'selected':''}>不固定奶妈</option>${healers.map(row=>`<option value="${escapeHtmlAttr(row.id)}" ${String(state.healerId)===row.id?'selected':''}>${escapeHtml(row.nickname)} · ${escapeHtml(row.species)}</option>`).join('')}</select></label><div class="flex flex-col justify-end gap-1"><label class="flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-2 py-1.5 text-[9px] font-black"><input type="checkbox" ${state.goodCamp?'checked':''} onchange="updateRecipeBoxFit('goodCamp',this.checked)">露营卷</label><label class="flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-2 py-1.5 text-[9px] font-black"><input type="checkbox" ${state.cookingBoost?'checked':''} onchange="updateRecipeBoxFit('cookingBoost',this.checked)">料理周×1.5</label></div></div><div class="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[9px] font-bold text-indigo-700"><i class="fa-solid fa-circle-info"></i> 咚咚鼠会按 Box 中真实个体枚举0～7次技能目标；可同时使用多只。其站场期间产出的食材会照常抵扣，但只有当前食谱需要的食材才有价值。露营卷同时增加帮忙速度与锅容量。</div><div id="recipe-box-fit-results" class="mt-3"></div></div></div>`;
+        modal.classList.remove('hidden'); document.body.classList.add('overflow-hidden'); renderResults();
+    }
+    window.openRecipeBoxFitModal=function(){loadState();renderModal();};
+    window.closeRecipeBoxFitModal=function(){const modal=document.getElementById('recipe-box-fit-modal');if(modal)modal.classList.add('hidden');document.body.classList.remove('overflow-hidden');};
+    window.updateRecipeBoxFit=function(field,value){state[field]=['goodCamp','cookingBoost'].includes(field)?!!value:(field==='basePot'?Math.max(1,Number(value)||1):value);saveState();renderModal();};
+    window.updateRecipeBoxFitLevel=function(recipeId,value){state.recipeLevels[recipeId]=Math.max(1,Math.min(70,Math.floor(Number(value)||1)));saveState();renderResults();};
 })();
 </script>
 </body>
