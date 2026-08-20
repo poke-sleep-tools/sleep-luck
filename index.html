@@ -26122,6 +26122,20 @@ async function calculateAndRenderWeeklyCooking() {
         const weekday=order(plan.filter(item=>item.dayKind==='weekday')),sunday=order(plan.filter(item=>item.dayKind==='sunday')),weekSlots=spread(weekday.length,maxWeek),sunSlots=spread(sunday.length,maxSun);
         return [...weekday.map((meal,index)=>({...meal,scheduleIndex:weekSlots[index],scheduleGroupIndex:weekSlots[index]})),...sunday.map((meal,index)=>({...meal,scheduleIndex:maxWeek+sunSlots[index],scheduleGroupIndex:sunSlots[index]}))].sort((a,b)=>a.scheduleIndex-b.scheduleIndex);
     }
+    function scheduleIdealMealVariants(plan){
+        const maxWeek=Math.max(0,Math.min(18,Number(state.weekdayMeals)||0)),maxSun=Math.max(0,Math.min(3,Number(state.sundayMeals)||0));
+        const order=list=>[...list].sort((a,b)=>(a.visibleCritChance||0)-(b.visibleCritChance||0)||(b.normalCookingEnergy||0)-(a.normalCookingEnergy||0));
+        const weekday=order(plan.filter(item=>item.dayKind==='weekday')),sunday=order(plan.filter(item=>item.dayKind==='sunday'));
+        const patterns=(count,total)=>{
+            if(!count)return [[]];if(count>=total)return [Array.from({length:total},(_,i)=>i)];
+            const spread=Array.from({length:count},(_,i)=>Math.max(0,Math.min(total-1,Math.ceil((i+1)*total/count)-1))),raw=[spread,Array.from({length:count},(_,i)=>i),Array.from({length:count},(_,i)=>total-count+i),spread.map(x=>Math.max(0,x-1)),spread.map(x=>Math.min(total-1,x+1))];
+            if(count===1)for(let i=0;i<total;i++)raw.push([i]);
+            if(count===2&&total>=3)raw.push([0,total-1]);
+            const seen=new Set(),out=[];raw.forEach(list=>{const normalized=[...new Set(list)].sort((a,b)=>a-b);if(normalized.length!==count)return;const key=normalized.join(',');if(!seen.has(key)){seen.add(key);out.push(normalized);}});return out;
+        };
+        const variants=[],seen=new Set();patterns(weekday.length,maxWeek).forEach(weekSlots=>patterns(sunday.length,maxSun).forEach(sunSlots=>{const scheduled=[...weekday.map((meal,i)=>({...meal,scheduleIndex:weekSlots[i],scheduleGroupIndex:weekSlots[i]})),...sunday.map((meal,i)=>({...meal,scheduleIndex:maxWeek+sunSlots[i],scheduleGroupIndex:sunSlots[i]}))].sort((a,b)=>a.scheduleIndex-b.scheduleIndex),key=scheduled.map(item=>`${item.dayKind}:${item.scheduleIndex}:${item.recipeId}:${item.tastyTarget}`).join('|');if(!seen.has(key)){seen.add(key);variants.push(scheduled);}}));
+        return variants.length?variants:[scheduleIdealMeals(plan)];
+    }
     function planDemand(plan,initialStock={}){
         const demand={__pot:0,__tasty:0},cycles=[];let cookingEnergy=0;
         plan.forEach(meal=>{Object.entries(meal.ingredients).forEach(([name,value])=>demand[name]=(demand[name]||0)+value);});
@@ -26144,89 +26158,110 @@ async function calculateAndRenderWeeklyCooking() {
                 next.set(visible,(next.get(visible)||0)+probability*(1-crit));
             });
             const scheduleIndex=Number.isFinite(meal.scheduleIndex)?meal.scheduleIndex:mealIndex,durationHours=Math.max(0.01,(scheduleIndex-previousScheduleIndex)*8);previousScheduleIndex=scheduleIndex;
-            cycles.push({mealIndex,scheduleIndex,dayKind:meal.dayKind,recipe:meal.recipe,durationHours,potDemand:cyclePotDemand,tastyDemand:cycleTastyDemand,targetVisibleCrit:target,expectedMealEnergy});
+            cycles.push({mealIndex,scheduleIndex,dayKind:meal.dayKind,recipe:meal.recipe,durationHours,potDemand:cyclePotDemand,tastyDemand:cycleTastyDemand,targetVisibleCrit:target,expectedMealEnergy,ingredients:{...(meal.ingredients||{})}});
             cookingEnergy+=expectedMealEnergy;distribution=next;
         });
         return {demand,cookingEnergy,cycles};
     }
     function getIdealPlanningHours(){return Math.max(1,Math.min(168,Number(state.periodHours)||168));}
-    function solveAllocationOnce(plan,rows,healer,mode,initialStock={}){
-        const horizon=getIdealPlanningHours(),slotHours=horizon*4,scheduledPlan=scheduleIdealMeals(plan),{demand,cookingEnergy,cycles}=planDemand(scheduledPlan,initialStock),nonHealer=rows.filter(row=>row.id!==healer?.id),hours={},mandatoryHours={},skillContributionByRow={},cycleSkillSchedule=[],supply={...initialStock};
+    function solveAllocationOnce(plan,rows,healer,mode,initialStock={},scheduledPlanOverride=null){
+        const horizon=getIdealPlanningHours(),activeSlots=healer?4:5,slotHours=horizon*activeSlots,scheduledPlan=scheduledPlanOverride||scheduleIdealMeals(plan),demandResult=planDemand(scheduledPlan,initialStock),demand=demandResult.demand,cookingEnergy=demandResult.cookingEnergy,cycles=demandResult.cycles,nonHealer=rows.filter(row=>row.id!==healer?.id),hours={},effectiveFunctionHours={},skillContributionByRow={},wastedSkillByRow={},cycleSkillSchedule=[],supply={...initialStock},stock={};
+        const ingredientKeys=Object.keys(demand).filter(key=>key!=='__pot'&&key!=='__tasty'&&demand[key]>0.0001),topEnergy=Math.max(1,...nonHealer.map(row=>Number(row.directEnergyPerHour)||0));
+        ingredientKeys.forEach(key=>stock[key]=Math.max(0,Number(initialStock[key])||0));
         supply.__tasty=0;supply.__pot=0;
-        const nightCapWeekly=typeof getNightCapPikachuProductionForHours==='function'?getNightCapPikachuProductionForHours(horizon):{};
-        Object.entries(nightCapWeekly).forEach(([name,value])=>{
-            const key=typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(name):name;
-            supply[key]=(supply[key]||0)+Math.max(0,Number(value)||0);
-        });
-        const keys=Object.keys(demand).filter(key=>demand[key]>0.0001),ingredientKeys=keys.filter(key=>key!=='__pot'&&key!=='__tasty');
-        const addIngredientSupply=(row,value)=>ingredientKeys.forEach(key=>supply[key]=(supply[key]||0)+resourceRate(row,key)*value);
-        if(healer)addIngredientSupply(healer,horizon);
-        let used=0;
-        // 扩锅与爆锅按“下一顿”逐餐结算：每餐达到目标即封顶，不能把多余触发存给下下顿。
-        for(const cycle of cycles){
-            const perRowHours={},entries=[];let cycleFunctionHours=0;
-            for(const key of ['__pot','__tasty']){
-                let remaining=Math.max(0,Number(key==='__pot'?cycle.potDemand:cycle.tastyDemand)||0),guard=0;
-                while(remaining>0.001&&guard++<200){
-                    let best=null;
-                    nonHealer.forEach(row=>{
-                        const cycleDuration=Math.max(0.01,Number(cycle.durationHours)||8),rate=resourceRate(row,key),cycleRemaining=cycleDuration-(perRowHours[row.id]||0),totalRemaining=horizon-(hours[row.id]||0);
-                        if(rate<=0||cycleRemaining<=0.0001||totalRemaining<=0.0001||cycleFunctionHours>=cycleDuration*4-0.0001)return;
-                        const loss=Math.max(0,Math.max(1,...nonHealer.map(item=>item.directEnergyPerHour||0))-(row.directEnergyPerHour||0));
-                        const score=rate/(1+loss/(mode===0?400:mode===1?1200:2400));
-                        if(!best||score>best.score)best={row,rate,score,available:Math.min(cycleRemaining,totalRemaining,cycleDuration*4-cycleFunctionHours)};
-                    });
-                    if(!best)return {feasible:false,reason:key==='__pot'?'pot_cycle_capacity':'tasty_cycle_capacity',failedCycle:cycle,demand,supply,cookingEnergy,cycles,cycleSkillSchedule};
-                    const step=Math.min(best.available,remaining/best.rate);
-                    if(step<=0.0001||used+step>slotHours+0.0001)return {feasible:false,reason:'team_slot_hours_exhausted',failedCycle:cycle,demand,supply,cookingEnergy,cycles,cycleSkillSchedule};
-                    hours[best.row.id]=(hours[best.row.id]||0)+step;mandatoryHours[best.row.id]=(mandatoryHours[best.row.id]||0)+step;perRowHours[best.row.id]=(perRowHours[best.row.id]||0)+step;used+=step;cycleFunctionHours+=step;
-                    addIngredientSupply(best.row,step);const produced=Math.min(remaining,best.rate*step);remaining-=produced;supply[key]=(supply[key]||0)+produced;
-                    if(!skillContributionByRow[best.row.id])skillContributionByRow[best.row.id]={__pot:0,__tasty:0};skillContributionByRow[best.row.id][key]+=produced;
-                    entries.push({key,rowId:best.row.id,nickname:best.row.nickname,species:best.row.species,hours:step,produced});
-                }
+        const nightHourly={};
+        if(typeof getNightCapPikachuHourlyProduction==='function')Object.entries(getNightCapPikachuHourlyProduction()||{}).forEach(([name,value])=>{const key=typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(name):name;nightHourly[key]=(nightHourly[key]||0)+Math.max(0,Number(value)||0);});
+        const futureIngredientNeed=(fromIndex)=>{const out={};for(let i=fromIndex;i<cycles.length;i++)Object.entries(cycles[i].ingredients||{}).forEach(([key,value])=>out[key]=(out[key]||0)+Math.max(0,Number(value)||0));return out;};
+        const minSkillReserve=(cycle,localPot,localTasty)=>{
+            let reserve=0;
+            [['__pot',Math.max(0,Number(cycle.potDemand||0)-localPot)],['__tasty',Math.max(0,Number(cycle.tastyDemand||0)-localTasty)]].forEach(([key,need])=>{if(need<=0.001)return;const maxRate=Math.max(0,...nonHealer.map(row=>resourceRate(row,key)));reserve+=maxRate>0?need/maxRate:Infinity;});
+            return reserve;
+        };
+        let used=0,requiredWorkHours=0,chronologicalFeasible=true,failedCycle=null;
+        for(let cycleIndex=0;cycleIndex<cycles.length;cycleIndex++){
+            const cycle=cycles[cycleIndex],duration=Math.max(0.01,Number(cycle.durationHours)||8),capacity=duration*activeSlots,cycleHours={},entries=[],ingredientProduction={},stockBefore={...stock},passiveEntries=[];
+            let cycleUsed=0,localPot=0,localTasty=0;
+            const addPassive=(row,value)=>{if(!row||value<=0)return;ingredientKeys.forEach(key=>{const amount=resourceRate(row,key)*value;if(amount>0){stock[key]=(stock[key]||0)+amount;supply[key]=(supply[key]||0)+amount;ingredientProduction[key]=(ingredientProduction[key]||0)+amount;}});};
+            if(healer){const ingredients={};ingredientKeys.forEach(key=>{const amount=resourceRate(healer,key)*duration;if(amount>0)ingredients[key]=amount;});passiveEntries.push({rowId:healer.id,nickname:healer.nickname,species:healer.species,hours:duration,reason:'奶妈全程站场',ingredients,directEnergy:(Number(healer.directEnergyPerHour)||0)*duration});}
+            addPassive(healer,duration);
+            const nightIngredients={};ingredientKeys.forEach(key=>{const amount=(nightHourly[key]||0)*duration;if(amount>0){stock[key]=(stock[key]||0)+amount;supply[key]=(supply[key]||0)+amount;ingredientProduction[key]=(ingredientProduction[key]||0)+amount;nightIngredients[key]=amount;}});if(Object.keys(nightIngredients).length)passiveEntries.push({rowId:'night-cap-pikachu',nickname:'睡帽皮卡丘',species:'睡帽皮卡丘',hours:duration,reason:'队伍外被动产出',ingredients:nightIngredients,directEnergy:0});
+            const addEntry=(row,step,reason)=>{
+                if(!(step>0))return;
+                hours[row.id]=(hours[row.id]||0)+step;cycleHours[row.id]=(cycleHours[row.id]||0)+step;cycleUsed+=step;used+=step;if(reason!=='剩余位置直产能量')requiredWorkHours+=step;
+                ingredientKeys.forEach(key=>{const amount=resourceRate(row,key)*step;if(amount>0){stock[key]=(stock[key]||0)+amount;supply[key]=(supply[key]||0)+amount;ingredientProduction[key]=(ingredientProduction[key]||0)+amount;}});
+                const skillKey=row.skill?.key==='pot'?'__pot':row.skill?.key==='tasty'?'__tasty':'';
+                const raw=skillKey?resourceRate(row,skillKey)*step:0,need=skillKey==='__pot'?Math.max(0,Number(cycle.potDemand||0)-localPot):skillKey==='__tasty'?Math.max(0,Number(cycle.tastyDemand||0)-localTasty):0,effective=Math.min(need,raw),wasted=Math.max(0,raw-effective);
+                if(skillKey==='__pot')localPot+=effective;if(skillKey==='__tasty')localTasty+=effective;
+                if(skillKey){if(!skillContributionByRow[row.id])skillContributionByRow[row.id]={__pot:0,__tasty:0};skillContributionByRow[row.id][skillKey]+=effective;wastedSkillByRow[row.id]=(wastedSkillByRow[row.id]||0)+wasted;if(raw>0)effectiveFunctionHours[row.id]=(effectiveFunctionHours[row.id]||0)+step*(effective/raw);}
+                const segmentIngredients={};ingredientKeys.forEach(key=>{const amount=resourceRate(row,key)*step;if(amount>0)segmentIngredients[key]=amount;});
+                const existing=entries.find(item=>item.rowId===row.id&&item.reason===reason);if(existing){existing.hours+=step;existing.produced+=effective;existing.rawProduced+=raw;existing.wasted+=wasted;existing.directEnergy+=(Number(row.directEnergyPerHour)||0)*step;Object.entries(segmentIngredients).forEach(([key,value])=>existing.ingredients[key]=(existing.ingredients[key]||0)+value);}else entries.push({key:skillKey||'ingredients',rowId:row.id,nickname:row.nickname,species:row.species,hours:step,produced:effective,rawProduced:raw,wasted,reason,ingredients:segmentIngredients,directEnergy:(Number(row.directEnergyPerHour)||0)*step});
+            };
+            const currentDeficits=()=>Object.fromEntries(ingredientKeys.map(key=>[key,Math.max(0,Number(cycle.ingredients?.[key]||0)-(stock[key]||0))]));
+            const remainingTotal=()=>{const future=futureIngredientNeed(cycleIndex),out={};ingredientKeys.forEach(key=>out[key]=Math.max(0,(future[key]||0)-(stock[key]||0)));return out;};
+            // 先安排当前及后续确定需要的食材。食材宝在这些工时内产生的扩锅/爆锅会同步结算，
+            // 因而新叶喵、宝宝暴龙等不会再因为“不是专职开锅手”而丢失主技能价值。
+            let guard=0;
+            while(guard++<800){
+                const totalDef=remainingTotal(),nowDef=currentDeficits();if(ingredientKeys.every(key=>totalDef[key]<=0.001))break;
+                const reserve=minSkillReserve(cycle,localPot,localTasty);if(!Number.isFinite(reserve)||cycleUsed+reserve>=capacity-0.0001)break;
+                let best=null;
+                nonHealer.forEach(row=>{
+                    const available=Math.min(duration-(cycleHours[row.id]||0),horizon-(hours[row.id]||0),capacity-cycleUsed-reserve);if(available<=0.0001)return;
+                    let urgent=0,future=0;ingredientKeys.forEach(key=>{const rate=resourceRate(row,key);if(rate<=0)return;if(nowDef[key]>0)urgent+=rate/Math.max(1,Number(cycle.ingredients?.[key])||1);if(totalDef[key]>0)future+=rate/Math.max(1,Number(demand[key])||1);});
+                    if(urgent<=0&&future<=0)return;
+                    const incidentalPot=row.skill?.key==='pot'?Math.min(Math.max(0,Number(cycle.potDemand||0)-localPot),resourceRate(row,'__pot'))/Math.max(1,Number(cycle.potDemand)||1):0;
+                    const incidentalTasty=row.skill?.key==='tasty'?Math.min(Math.max(0,Number(cycle.tastyDemand||0)-localTasty),resourceRate(row,'__tasty'))/Math.max(1,Number(cycle.tastyDemand)||1):0;
+                    const loss=Math.max(0,topEnergy-(Number(row.directEnergyPerHour)||0)),coverage=urgent*12+future+(incidentalPot+incidentalTasty)*6,score=coverage/(1+loss/(mode===0?500:mode===1?1400:3000));
+                    if(!best||score>best.score)best={row,available,score};
+                });
+                if(!best)break;
+                const stepDeficits=remainingTotal(),times=ingredientKeys.map(key=>{const rate=resourceRate(best.row,key);return rate>0&&stepDeficits[key]>0?stepDeficits[key]/rate:Infinity;}).filter(Number.isFinite),step=Math.min(best.available,Math.max(0.05,Math.min(...times)));
+                addEntry(best.row,step,'食材与附带技能');
             }
-            cycleSkillSchedule.push({...cycle,functionHours:cycleFunctionHours,entries});
+            // 再补本餐尚未达到的功能缺口；这里仍会同时产出该宝可梦的食材与直接能量。
+            for(const key of ['__pot','__tasty']){
+                guard=0;
+                while(guard++<300){
+                    const remaining=Math.max(0,Number(key==='__pot'?cycle.potDemand:cycle.tastyDemand)-(key==='__pot'?localPot:localTasty));if(remaining<=0.001)break;
+                    let best=null;
+                    nonHealer.forEach(row=>{const rate=resourceRate(row,key),available=Math.min(duration-(cycleHours[row.id]||0),horizon-(hours[row.id]||0),capacity-cycleUsed);if(rate<=0||available<=0.0001)return;const future=remainingTotal(),foodValue=ingredientKeys.reduce((sum,name)=>sum+(future[name]>0?resourceRate(row,name)/Math.max(1,demand[name]):0),0),loss=Math.max(0,topEnergy-(Number(row.directEnergyPerHour)||0)),score=(rate/Math.max(1,remaining)+foodValue*4)/(1+loss/(mode===0?500:mode===1?1400:3000));if(!best||score>best.score)best={row,rate,available,score};});
+                    if(!best){chronologicalFeasible=false;failedCycle={...cycle,reason:key==='__pot'?'pot_cycle_capacity':'tasty_cycle_capacity'};break;}
+                    addEntry(best.row,Math.min(best.available,remaining/best.rate),key==='__pot'?'本餐扩锅':'本餐爆锅');
+                }
+                if(!chronologicalFeasible)break;
+            }
+            if(!chronologicalFeasible)break;
+            // 剩余位置先为后续餐准备食材，全部确定需求满足后才交给直接能量最高的个体。
+            guard=0;
+            while(guard++<800&&cycleUsed<capacity-0.0001){
+                const totalDef=remainingTotal();let best=null;
+                nonHealer.forEach(row=>{const available=Math.min(duration-(cycleHours[row.id]||0),horizon-(hours[row.id]||0),capacity-cycleUsed);if(available<=0.0001)return;let coverage=0;ingredientKeys.forEach(key=>{if(totalDef[key]>0)coverage+=resourceRate(row,key)/Math.max(1,demand[key]);});const score=coverage>0?coverage*1e6+(Number(row.directEnergyPerHour)||0):(Number(row.directEnergyPerHour)||0);if(!best||score>best.score)best={row,available,score,coverage};});
+                if(!best)break;
+                let step=best.available;if(best.coverage>0){const times=ingredientKeys.map(key=>{const rate=resourceRate(best.row,key);return rate>0&&totalDef[key]>0?totalDef[key]/rate:Infinity;}).filter(Number.isFinite);if(times.length)step=Math.min(step,Math.max(0.05,Math.min(...times)));}
+                addEntry(best.row,step,best.coverage>0?'提前备后续食材':'剩余位置直产能量');
+            }
+            const shortages={};Object.entries(cycle.ingredients||{}).forEach(([key,value])=>{const missing=Math.max(0,Number(value)-(stock[key]||0));if(missing>0.001)shortages[key]=missing;});
+            if(Object.keys(shortages).length){chronologicalFeasible=false;failedCycle={...cycle,reason:'ingredient_deadline',shortages,stockBefore,stockAtMeal:{...stock}};break;}
+            Object.entries(cycle.ingredients||{}).forEach(([key,value])=>stock[key]=Math.max(0,(stock[key]||0)-Number(value||0)));
+            cycleSkillSchedule.push({...cycle,functionHours:Object.values(entries).reduce((sum,item)=>sum+(item.produced>0?item.hours*Math.min(1,item.produced/Math.max(0.0001,item.rawProduced)):0),0),usedPositionHours:cycleUsed,capacityPositionHours:capacity,stockBefore,ingredientProduction,stockAtMeal:Object.fromEntries(ingredientKeys.map(key=>[key,(stock[key]||0)+Number(cycle.ingredients?.[key]||0)])),stockAfterMeal:{...stock},potProduced:localPot,tastyProduced:localTasty,passiveEntries,entries});
         }
-        const totalRates=Object.fromEntries(ingredientKeys.map(key=>[key,nonHealer.reduce((sum,row)=>sum+resourceRate(row,key),0)]));
-        const topEnergy=Math.max(1,...nonHealer.map(row=>row.directEnergyPerHour||0));
-        let guard=0;
-        while(guard++<600){
-            const deficits=Object.fromEntries(ingredientKeys.map(key=>[key,Math.max(0,demand[key]-(supply[key]||0))]));
-            if(ingredientKeys.every(key=>deficits[key]<=0.001))break;
-            let best=null;
-            nonHealer.forEach(row=>{
-                const remaining=horizon-(hours[row.id]||0);if(remaining<=0.0001)return;
-                let coverage=0;
-                ingredientKeys.forEach(key=>{const rate=resourceRate(row,key);if(rate>0&&deficits[key]>0){const rarity=1/Math.max(0.0001,totalRates[key]);coverage+=(rate/Math.max(1,demand[key]))*(mode===1?1:(1+rarity*20));}});
-                if(coverage<=0)return;
-                const loss=Math.max(0,topEnergy-(row.directEnergyPerHour||0));
-                const score=mode===2?coverage:(coverage/(1+loss/(mode===0?400:1600)));
-                if(!best||score>best.score)best={row,score,remaining};
-            });
-            if(!best)return {feasible:false,reason:'missing_resource_capacity',demand,supply,cookingEnergy};
-            const times=ingredientKeys.map(key=>{const rate=resourceRate(best.row,key);return rate>0&&Math.max(0,demand[key]-(supply[key]||0))>0?Math.max(0,demand[key]-(supply[key]||0))/rate:Infinity;}).filter(Number.isFinite);
-            const step=Math.min(best.remaining,Math.max(0.05,Math.min(...times)));
-            if(used+step>slotHours+0.0001)return {feasible:false,reason:'team_slot_hours_exhausted',demand,supply,cookingEnergy};
-            hours[best.row.id]=(hours[best.row.id]||0)+step;used+=step;addIngredientSupply(best.row,step);
-        }
-        if(keys.some(key=>(supply[key]||0)+0.001<demand[key]))return {feasible:false,reason:'unresolved_resource_deficit',demand,supply,cookingEnergy,cycles,cycleSkillSchedule};
-        // 删除多余的低能量工时，再把剩余位置动态交给直产能量最高的个体。
-        [...nonHealer].sort((a,b)=>a.directEnergyPerHour-b.directEnergyPerHour).forEach(row=>{
-            const current=hours[row.id]||0,mandatory=mandatoryHours[row.id]||0;if(current<=mandatory+0.0001)return;
-            let reducible=current-mandatory,contributes=false;
-            ingredientKeys.forEach(key=>{const rate=resourceRate(row,key);if(rate>0){contributes=true;reducible=Math.min(reducible,Math.max(0,(supply[key]-demand[key])/rate));}});
-            if(!contributes)reducible=current-mandatory;
-            if(reducible>0.0001){hours[row.id]-=reducible;used-=reducible;ingredientKeys.forEach(key=>supply[key]-=resourceRate(row,key)*reducible);}
-        });
-        const requiredHours=used;
-        [...nonHealer].sort((a,b)=>b.directEnergyPerHour-a.directEnergyPerHour).forEach(row=>{if(used>=slotHours)return;const add=Math.min(horizon-(hours[row.id]||0),slotHours-used);if(add>0){hours[row.id]=(hours[row.id]||0)+add;used+=add;addIngredientSupply(row,add);}});
+        if(!chronologicalFeasible)return {feasible:false,reason:failedCycle?.reason||'chronological_infeasible',failedCycle,demand,supply,cookingEnergy,cycles,cycleSkillSchedule,scheduledPlan};
+        // 最后一顿之后若仍有剩余周期，继续用满所有非奶妈位置，只计直接能量与普通产出。
+        const elapsed=cycles.reduce((sum,cycle)=>sum+Number(cycle.durationHours||0),0),tail=Math.max(0,horizon-elapsed);
+        if(tail>0.0001){let cap=tail*activeSlots,cycleHours={};[...nonHealer].sort((a,b)=>b.directEnergyPerHour-a.directEnergyPerHour).forEach(row=>{if(cap<=0)return;const step=Math.min(tail,horizon-(hours[row.id]||0),cap);if(step<=0)return;hours[row.id]=(hours[row.id]||0)+step;used+=step;cap-=step;ingredientKeys.forEach(key=>{const amount=resourceRate(row,key)*step;supply[key]=(supply[key]||0)+amount;});});}
+        if(used>slotHours+0.01)return {feasible:false,reason:'team_slot_hours_exhausted',demand,supply,cookingEnergy,cycles,cycleSkillSchedule,scheduledPlan};
+        const requiredHours=requiredWorkHours;
         const directEnergy=(healer?(healer.directEnergyPerHour||0)*horizon:0)+nonHealer.reduce((sum,row)=>sum+(hours[row.id]||0)*(row.directEnergyPerHour||0),0);
-        const allocations=rows.map(row=>{const rowHours=row.id===healer?.id?horizon:(hours[row.id]||0),skill=skillContributionByRow[row.id]||{};return {id:row.id,nickname:row.nickname,species:row.species,hours:rowHours,functionHours:mandatoryHours[row.id]||0,wastedFunctionHours:Math.max(0,rowHours-(mandatoryHours[row.id]||0)),required:row.id===healer?.id?true:false,directEnergy:rowHours*(row.directEnergyPerHour||0),ingredients:Object.fromEntries(Object.entries(row.ingredientRates||{}).map(([name,rate])=>[name,rate*rowHours])),potBoost:Number(skill.__pot)||0,tastyBoost:Number(skill.__tasty)||0};}).filter(item=>item.hours>0.0001);
-        return {feasible:true,mode,demand,supply,cookingEnergy,directEnergy,totalExpectedEnergy:cookingEnergy+directEnergy,hours,mandatoryHours,requiredHours,totalHours:used,allocations,cycles,cycleSkillSchedule,scheduledPlan};
+        const allocations=rows.map(row=>{const rowHours=row.id===healer?.id?horizon:(hours[row.id]||0),skill=skillContributionByRow[row.id]||{};return {id:row.id,nickname:row.nickname,species:row.species,hours:rowHours,functionHours:effectiveFunctionHours[row.id]||0,nonFunctionHours:Math.max(0,rowHours-(effectiveFunctionHours[row.id]||0)),wastedFunctionHours:0,wastedSkillAmount:wastedSkillByRow[row.id]||0,required:row.id===healer?.id,directEnergy:rowHours*(row.directEnergyPerHour||0),ingredients:Object.fromEntries(Object.entries(row.ingredientRates||{}).map(([name,rate])=>[name,rate*rowHours])),potBoost:Number(skill.__pot)||0,tastyBoost:Number(skill.__tasty)||0};}).filter(item=>item.hours>0.0001);
+        return {feasible:true,mode,demand,supply,cookingEnergy,directEnergy,totalExpectedEnergy:cookingEnergy+directEnergy,hours,mandatoryHours:effectiveFunctionHours,requiredHours,totalHours:used,allocations,cycles,cycleSkillSchedule,scheduledPlan,chronologicalFeasible:true,finalStock:stock};
     }
     function solveAllocation(plan,rows,healer,initialStock={}){
         const tries=[0,1,2].map(mode=>solveAllocationOnce(plan,rows,healer,mode,initialStock)).filter(result=>result.feasible);
         return tries.sort((a,b)=>b.totalExpectedEnergy-a.totalExpectedEnergy)[0]||solveAllocationOnce(plan,rows,healer,0,initialStock);
+    }
+    function solveAllocationWithScheduleSearch(plan,rows,healer,initialStock={}){
+        const tries=[];scheduleIdealMealVariants(plan).forEach(scheduled=>[0,1,2].forEach(mode=>{const result=solveAllocationOnce(plan,rows,healer,mode,initialStock,scheduled);if(result.feasible)tries.push(result);}));
+        return tries.sort((a,b)=>b.totalExpectedEnergy-a.totalExpectedEnergy)[0]||solveAllocation(plan,rows,healer,initialStock);
     }
     function optimizeMeals(weekdayOptions,sundayOptions,rows,healer,initialStock={}){
         let plan=[],solution=solveAllocation(plan,rows,healer,initialStock),weekdayCount=0,sundayCount=0;
@@ -26239,14 +26274,16 @@ async function calculateAndRenderWeeklyCooking() {
             if(!best||best.gain<=0.01)break;
             plan.push(best.option);solution=best.trial;if(best.option.dayKind==='sunday')sundayCount++;else weekdayCount++;decisions.push({step:step+1,action:'add',meal:best.option,gain:best.gain,total:solution.totalExpectedEnergy});
         }
-        // 单顿替换改良，避免“先加入的局部好选择”阻挡更好的全周组合。
-        for(let pass=0;pass<3;pass++){
+        // 跨平日／周日替换改良：资源满时仍会主动比较“少吃一顿平日、换成周日餐”。
+        for(let pass=0;pass<5;pass++){
             let bestSwap=null;
-            plan.forEach((old,index)=>{const pool=old.dayKind==='sunday'?sundayOptions:weekdayOptions;pool.forEach(option=>{const next=[...plan];next[index]=option;const trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option,trial,gain};});const removed=plan.filter((_,i)=>i!==index),removeTrial=solveAllocation(removed,rows,healer,initialStock),gain=removeTrial.feasible?removeTrial.totalExpectedEnergy-solution.totalExpectedEnergy:-Infinity;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option:null,trial:removeTrial,gain};});
+            plan.forEach((old,index)=>{const pool=[...weekdayOptions,...sundayOptions];pool.forEach(option=>{const next=[...plan];next[index]=option;const wc=next.filter(item=>item.dayKind==='weekday').length,sc=next.length-wc;if(wc>maxWeek||sc>maxSun)return;const trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option,trial,gain};});const removed=plan.filter((_,i)=>i!==index),removeTrial=solveAllocation(removed,rows,healer,initialStock),gain=removeTrial.feasible?removeTrial.totalExpectedEnergy-solution.totalExpectedEnergy:-Infinity;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option:null,trial:removeTrial,gain};});
             if(!bestSwap)break;
             if(bestSwap.option)plan[bestSwap.index]=bestSwap.option;else plan.splice(bestSwap.index,1);
             solution=bestSwap.trial;decisions.push({action:bestSwap.option?'replace':'remove',old:bestSwap.old,new:bestSwap.option,gain:bestSwap.gain,total:solution.totalExpectedEnergy});
         }
+        // 餐数与菜式确定后，再比较多种合法餐位布局；不再把“均匀隔一顿吃”当成固定答案。
+        const scheduledSolution=solveAllocationWithScheduleSearch(plan,rows,healer,initialStock);if(scheduledSolution.feasible){const gain=scheduledSolution.totalExpectedEnergy-solution.totalExpectedEnergy;solution=scheduledSolution;decisions.push({action:'schedule_search',variants:scheduleIdealMealVariants(plan).length,gain,total:solution.totalExpectedEnergy});}
         return {plan,solution,decisions,weekdayCount:plan.filter(x=>x.dayKind==='weekday').length,sundayCount:plan.filter(x=>x.dayKind==='sunday').length};
     }
     function buildIdealStrategyAudit(options={}){
@@ -26255,10 +26292,15 @@ async function calculateAndRenderWeeklyCooking() {
         const week=makeMealOptions('weekday',weekday,rows),sun=makeMealOptions('sunday',sunday,rows),optimized=optimizeMeals(week.options,sun.options,rows,healer,prep.stock),solution=optimized.solution,finalPlan=solution.scheduledPlan||scheduleIdealMeals(optimized.plan);
         const grouped={};finalPlan.forEach(meal=>{const key=`${meal.dayKind}|${meal.recipeId}|${meal.tastyTarget}`;if(!grouped[key])grouped[key]=Object.assign({count:0},meal);grouped[key].count++;});
         const audit={version:'ideal-global-resource-v2.3-shared-core',generatedAt:new Date().toISOString(),model:'deterministic_global_shared_resource_dynamic_team',settings:Object.assign({},state),initialStock:{source:prep.source,nextWeekType:prep.nextWeekType||'',used:prep.used||0,items:prep.stock},assumptions:['奶妈按选择固定整个剩余周期；其食材与技能进入同一个资源池','其余个体没有常驻身份：食材、开锅、爆锅与树果收益共同竞争动态站场工时','扩锅与爆锅只按主技能识别，不限制专长类型；食材型、树果型和技能型均可承担功能位','同一站场小时同时产生树果、食材、扩锅与爆锅，不重复计时','萌绿之岛 EX 按主果间隔×0.90、另外两果×1.00、非三果×1.15统一修正树果、食材与技能产出','爆锅在暴击后才清零；未暴击保留，下一餐只补到目标累计','所有剩余餐次共同消耗食材和技能资源；平日与周日同时比较','不强制吃满；即使某种食材单独效率低，只要整顿料理提高总能量就会安排生产','料理暴击采用期望值，工时可连续切分；结果是确定性的理想模型','当前采用全局增量选择＋替换改良，并对三种资源分配顺序取最好结果','树果爆发已估算；其他复杂直接能量技能仍待逐类补全'],healer:healer?rowAudit(healer):null,roster:rows.map(rowAudit),candidateCounts:{weekday:week.options.length,sunday:sun.options.length},excluded:[...week.rejected,...sun.rejected],selectedMeals:finalPlan,selectedGroups:Object.values(grouped),decisions:optimized.decisions,allocation:solution.allocations,demand:solution.demand,supply:solution.supply,requiredWorkerHours:solution.requiredHours,totalWorkerHours:solution.totalHours,summary:{weekdayMeals:optimized.weekdayCount,sundayMeals:optimized.sundayCount,skippedMeals:(Number(state.weekdayMeals)||0)+(Number(state.sundayMeals)||0)-optimized.plan.length,cookingEnergy:solution.cookingEnergy,directEnergy:solution.directEnergy,totalExpectedEnergy:solution.totalExpectedEnergy}};
-        audit.version='ideal-per-meal-cap-v2.4';audit.model='deterministic_theoretical_expected_value_per_meal_caps';
+        audit.version='ideal-chronological-multi-output-v2.5';audit.model='deterministic_theoretical_chronological_multi_output_optimizer';
         audit.skillCycles=solution.cycleSkillSchedule||[];
+        audit.chronologicalFeasible=solution.chronologicalFeasible===true;
+        audit.finalStock=solution.finalStock||{};
         audit.assumptions.push('爆锅与扩锅按逐餐周期独立结算：爆锅显示加成上限70%，扩锅上限为下一顿食谱缺口；达到上限后的额外触发不进入后续餐次库存');
         audit.assumptions.push('本模型使用确定性连续工时与暴击概率分布的数学期望，不进行随机抽样仿真');
+        audit.assumptions.push('逐餐按时间顺序验证库存：每顿开饭前必须已经实际拥有该食谱的全部食材，不能只用期末总产量倒推可行');
+        audit.assumptions.push('食材、树果、扩锅和爆锅在同一站场小时同步结算；非技能型专长的扩锅／爆锅宝可梦也会贡献主技能');
+        audit.assumptions.push('餐位布局会比较均匀、靠前、靠后与边界分布；平日和周日餐允许跨类型替换，不把初次贪心结果直接当作最终答案');
         audit.nightCapPikachu={...normalizeNightCapPikachuState(nightCapPikachuState),weeklyIngredients:getNightCapPikachuProductionForHours(getIdealPlanningHours())};
         audit.assumptions.unshift('睡帽皮卡丘按亲密等级提供剩余周期被动食材，不占队伍工时且不受露营卷或活力影响');
         return audit;
@@ -26280,7 +26322,7 @@ async function calculateAndRenderWeeklyCooking() {
             return audit;
         }finally{state=saved;}
     };
-    function rowAudit(row){return {id:row.id,nickname:row.nickname,species:row.species,level:row.level,pokedexId:row.pokedexId,specialty:row.specialty,mainSkillId:row.mainSkillId,mainSkillLevel:row.mainSkillLevel,berryId:row.berryId,berryType:BERRY_TYPE[row.berryId]||'未知',favorite:row.favorite,berryCount:row.berryCount,exIntervalMultiplier:row.exIntervalMultiplier||1,exOutputMultiplier:row.exOutputMultiplier||1,helpsPerHour:row.helpsPerHour,ingredientRate:row.ingredientRate,regularBerryEnergyPerHour:row.regularBerryEnergyPerHour,directSkillEnergyPerHour:row.directSkillEnergyPerHour,directEnergyPerHour:row.directEnergyPerHour,triggersPerHour:row.triggersPerHour,ingredientRates:row.ingredientRates};}
+    function rowAudit(row){return {id:row.id,nickname:row.nickname,species:row.species,level:row.level,pokedexId:row.pokedexId,specialty:row.specialty,mainSkillId:row.mainSkillId,mainSkillLevel:row.mainSkillLevel,skillKey:row.skill?.key||'other',skillLabel:row.skill?.label||'',skillValue:typeof getWeeklyCookingSkillValue==='function'?getWeeklyCookingSkillValue(row.skill?.key,row.mainSkillLevel):0,berryId:row.berryId,berryType:BERRY_TYPE[row.berryId]||'未知',favorite:row.favorite,berryCount:row.berryCount,exIntervalMultiplier:row.exIntervalMultiplier||1,exOutputMultiplier:row.exOutputMultiplier||1,helpsPerHour:row.helpsPerHour,ingredientRate:row.ingredientRate,regularBerryEnergyPerHour:row.regularBerryEnergyPerHour,directSkillEnergyPerHour:row.directSkillEnergyPerHour,directEnergyPerHour:row.directEnergyPerHour,triggersPerHour:row.triggersPerHour,ingredientRates:row.ingredientRates};}
     function favoriteSelect(index){
         const exHint=state.island==='greengrass_ex'
             ? `<div class="mt-1 text-[8px] font-black ${index===0?'text-rose-600':'text-cyan-600'}">${index===0?'主果 · 帮忙间隔×0.90':'副果 · 帮忙间隔不变'}</div>`
@@ -26633,7 +26675,7 @@ async function calculateAndRenderWeeklyCooking() {
             });
             item.visibleCritChance=expectedVisible;item.actualCritChance=expectedActual;item.expectedEnergy=expectedEnergy;item.expectedNewBoost=expectedNewBoost;distribution=next;
         });
-        const allocations=(audit.allocation||[]).map(item=>({...item,role:item.tastyBoost>0?'爆锅':item.potBoost>0?'开锅':item.required?'奶妈':Object.values(item.ingredients||{}).some(Number)?'食材／综合':'树果／能量'}));
+        const allocations=(audit.allocation||[]).map(item=>{const functional=Number(item.functionHours||0)>0.001,food=Object.values(item.ingredients||{}).some(value=>Number(value)>0.01);let role=item.required?'奶妈':item.tastyBoost>0?(food&&!functional?'食材／爆锅复合':'爆锅'):item.potBoost>0?(food&&!functional?'食材／扩锅复合':'开锅'):food?'食材／综合':'树果／能量';if(!item.required&&food&&item.tastyBoost>0)role='食材／爆锅复合';if(!item.required&&food&&item.potBoost>0)role='食材／扩锅复合';return {...item,role};});
         return {source:'ideal-shared-core',audit,plans,allocations,score:Number(audit.summary?.totalExpectedEnergy)||0,cookingScore:Number(audit.summary?.cookingEnergy)||0,directScore:Number(audit.summary?.directEnergy)||0,skips:plans.filter(item=>item.skipped).length,weekdayMeals,sundayMeals};
     }
     function buildLiveCookingPlan(){
@@ -26682,7 +26724,10 @@ async function calculateAndRenderWeeklyCooking() {
     function buildLiveCookingNearTermAdvice(plan){
         const global=plan?.global,audit=global?.audit||{},periodHours=Math.max(1,Number(audit.settings?.periodHours)||(global?.plans?.length||1)*8),windowHours=Math.min(4,periodHours);
         const first=global?.plans?.find(item=>!item.skipped),needed=new Set(Object.keys(first?.meal?.ingredients||{}));
-        const ranked=(global?.allocations||[]).map(item=>{
+        const firstCycle=(audit.skillCycles||[])[0],cycleRows=new Map();
+        if(firstCycle)[...(firstCycle.entries||[]),...(firstCycle.passiveEntries||[])].forEach(item=>{const key=String(item.rowId||item.nickname),row=cycleRows.get(key)||{id:key,nickname:item.nickname||item.species,species:item.species||'',hours:0,ingredients:{},directEnergy:0,tastyBoost:0,potBoost:0,reasons:new Set(),required:item.reason==='奶妈全程站场'};row.hours+=Number(item.hours)||0;row.directEnergy+=Number(item.directEnergy)||0;row.reasons.add(item.reason||'站场');Object.entries(item.ingredients||{}).forEach(([name,value])=>row.ingredients[name]=(row.ingredients[name]||0)+Number(value||0));if(item.key==='__tasty')row.tastyBoost+=Number(item.produced)||0;if(item.key==='__pot')row.potBoost+=Number(item.produced)||0;cycleRows.set(key,row);});
+        const sourceRows=cycleRows.size?[...cycleRows.values()].map(item=>({...item,role:item.required?'奶妈':item.tastyBoost>0?'食材／爆锅复合':item.potBoost>0?'食材／扩锅复合':Object.values(item.ingredients).some(value=>Number(value)>.01)?'食材／综合':'树果／能量'})):(global?.allocations||[]);
+        const ranked=sourceRows.map(item=>{
             const role=String(item.role||''),hours=Math.max(0,Number(item.hours)||0),foods=Object.entries(item.ingredients||{}).filter(([,value])=>Number(value)>0);
             const firstFood=foods.reduce((sum,[name,value])=>sum+(needed.has(name)?Number(value):0),0);
             let urgency=(role.includes('奶妈')?100000:0)+(firstFood>0?50000+firstFood:0)+(first?.requiredNewPot&&Number(item.potBoost)>0?40000:0)+(Number(item.tastyBoost)>0?15000:0)+hours;
@@ -26692,7 +26737,7 @@ async function calculateAndRenderWeeklyCooking() {
         ranked.forEach(item=>{
             const lane=[...lanes].sort((a,b)=>(windowHours-b.start)-(windowHours-a.start))[0];
             if(!lane||lane.start>=windowHours-0.001)return;
-            const startHour=lane.start,activeHours=Math.min(windowHours-startHour,item.hours),factor=item.hours>0?activeHours/item.hours:0,functionActiveHours=Math.min(activeHours,Math.max(0,Number(item.functionHours)||0)),functionFactor=Number(item.functionHours)>0?functionActiveHours/Number(item.functionHours):0;
+            const startHour=lane.start,activeHours=Math.min(windowHours-startHour,item.hours),factor=item.hours>0?activeHours/item.hours:0,functionActiveHours=Math.min(activeHours,Math.max(0,Number(item.functionHours)||0)),functionFactor=firstCycle?factor:(Number(item.functionHours)>0?functionActiveHours/Number(item.functionHours):0);
             const ingredients=Object.fromEntries(item.foods.map(([name,value])=>[name,Number(value)*factor]));
             const segment={lane:lane.index+1,startHour,endHour:startHour+activeHours,nickname:item.nickname||item.species,species:item.species,role:item.role,activeHours,functionActiveHours,windowHours,ingredients,directEnergy:Number(item.directEnergy||0)*factor,tastyBoost:Number(item.tastyBoost||0)*functionFactor,potBoost:Number(item.potBoost||0)*functionFactor};
             lane.segments.push(segment);lane.start+=activeHours;members.push(segment);
@@ -26700,7 +26745,7 @@ async function calculateAndRenderWeeklyCooking() {
         const totals={ingredients:{},directEnergy:0,tastyBoost:0,potBoost:0};
         members.forEach(item=>{Object.entries(item.ingredients).forEach(([name,value])=>totals.ingredients[name]=(totals.ingredients[name]||0)+value);totals.directEnergy+=item.directEnergy;totals.tastyBoost+=item.tastyBoost;totals.potBoost+=item.potBoost;});
         const laneData=lanes.map(lane=>({lane:lane.index+1,scheduledHours:lane.start,unfilledHours:Math.max(0,windowHours-lane.start),segments:lane.segments}));
-        return {windowHours,members,lanes:laneData,filledPositionHours:laneData.reduce((sum,lane)=>sum+lane.scheduledHours,0),requiredPositionHours:windowHours*5,isFullyStaffed:laneData.every(lane=>lane.unfilledHours<0.001),totals};
+        return {windowHours,members,lanes:laneData,filledPositionHours:laneData.reduce((sum,lane)=>sum+lane.scheduledHours,0),requiredPositionHours:windowHours*5,isFullyStaffed:laneData.every(lane=>lane.unfilledHours<0.001),totals,source:firstCycle?'next_meal_cycle':'global_allocation'};
     }
     function renderLiveCookingNearTermAdvice(plan){
         const advice=buildLiveCookingNearTermAdvice(plan);
@@ -26709,11 +26754,19 @@ async function calculateAndRenderWeeklyCooking() {
         const totalFood=Object.entries(advice.totals.ingredients).filter(([,value])=>value>0.01).map(([name,value])=>`${name}${value.toFixed(1)}`).join('、')||'无显著食材';
         return `<details open class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-3"><summary class="cursor-pointer text-xs font-black text-indigo-900">接下来${advice.windowHours.toFixed(0)}小时建议队伍与预期效果</summary><div class="mt-2 text-[8px] font-bold leading-relaxed text-indigo-700">这是全局最优工时方案的第一段执行切片；窗口结束后应按届时库存、暴击与扩锅状态重新续算，不把当前5只永久锁死。</div><div class="mt-3 grid gap-2 sm:grid-cols-2">${rows}</div><div class="mt-3 rounded-xl bg-white p-2 text-[8px] font-bold leading-relaxed text-slate-600">合计预计：${liveCookingEscape(totalFood)} · 树果／直接能量约${liveCookingFormatNumber(advice.totals.directEnergy)}${advice.totals.tastyBoost>0.05?` · 爆锅约+${advice.totals.tastyBoost.toFixed(1)}%`:''}${advice.totals.potBoost>0.05?` · 扩锅约${advice.totals.potBoost.toFixed(1)}格`:''}</div></details>`;
     }
+    function renderLiveCookingUntilNextMeal(plan){
+        const audit=plan?.global?.audit||{},cycle=(audit.skillCycles||[])[0],nextMeal=(plan?.global?.plans||[]).find(item=>!item.skipped);if(!cycle||!nextMeal)return '';
+        const deadline=Math.max(.01,Number(cycle.durationHours)||8),targetFoods=Object.entries(cycle.ingredients||{}).map(([name,need])=>{const start=Math.max(0,Number(cycle.stockBefore?.[name])||0),produced=Math.max(0,Number(cycle.ingredientProduction?.[name])||0),atMeal=Math.max(0,Number(cycle.stockAtMeal?.[name])||0);return {name,need:Number(need)||0,start,produced,atMeal};});
+        const grouped=new Map();[...(cycle.entries||[]),...(cycle.passiveEntries||[])].forEach(item=>{const key=String(item.rowId||item.nickname),current=grouped.get(key)||{nickname:item.nickname||item.species,species:item.species||'',hours:0,reasons:new Set(),ingredients:{},directEnergy:0,pot:0,tasty:0,wasted:0};current.hours+=Number(item.hours)||0;current.reasons.add(item.reason||'站场');current.directEnergy+=Number(item.directEnergy)||0;Object.entries(item.ingredients||{}).forEach(([name,value])=>current.ingredients[name]=(current.ingredients[name]||0)+Number(value||0));if(item.key==='__pot')current.pot+=Number(item.produced)||0;if(item.key==='__tasty')current.tasty+=Number(item.produced)||0;current.wasted+=Number(item.wasted)||0;grouped.set(key,current);});
+        const contributionRows=[...grouped.values()].sort((a,b)=>b.hours-a.hours).map(item=>{const foods=Object.entries(item.ingredients).filter(([,value])=>value>.01).map(([name,value])=>`${name}${value.toFixed(1)}`).join('、')||'无关键食材';const ratio=Math.min(100,item.hours/deadline*100);return `<div class="rounded-xl border border-amber-100 bg-white p-2"><div class="flex items-start justify-between gap-2"><div><div class="text-[10px] font-black text-slate-800">${liveCookingEscape(item.nickname)}</div><div class="mt-0.5 text-[8px] font-bold text-slate-500">${liveCookingEscape([...item.reasons].join('／'))}</div></div><div class="text-right text-[10px] font-black text-amber-700">${item.hours.toFixed(1)}h · ${ratio.toFixed(0)}%</div></div><div class="mt-1 text-[8px] font-bold text-slate-600">${liveCookingEscape(foods)} · 直接能量约${liveCookingFormatNumber(item.directEnergy)}${item.pot>.01?` · 有效扩锅${item.pot.toFixed(1)}格`:''}${item.tasty>.01?` · 有效爆锅+${item.tasty.toFixed(1)}%`:''}${item.wasted>.01?` · 到上限后溢出${item.wasted.toFixed(1)}`:''}</div></div>`;}).join('');
+        const foodTargets=targetFoods.map(item=>`<div class="rounded-lg bg-white p-2 text-[8px]"><div class="font-black text-slate-700">${liveCookingEscape(item.name)} ${item.atMeal.toFixed(1)} / ${item.need.toFixed(0)}</div><div class="mt-0.5 font-bold text-slate-400">当前${item.start.toFixed(1)} · 餐前预计新增${item.produced.toFixed(1)}</div></div>`).join('');
+        return `<details open class="rounded-2xl border border-amber-300 bg-amber-50/70 p-3"><summary class="cursor-pointer text-xs font-black text-amber-950">⏳ 直到下一次开饭：${liveCookingSlotLabel(nextMeal.slot)}前的执行目标</summary><div class="mt-2 rounded-xl bg-white/80 p-2 text-[9px] font-bold leading-relaxed text-amber-900">预计准备窗口约 <b>${deadline.toFixed(1)}小时</b>，目标料理为 <b>${liveCookingEscape(nextMeal.meal?.recipe||cycle.recipe||'')}</b>。到餐前需新增爆锅约 <b>+${Number(cycle.tastyDemand||0).toFixed(1)}%</b>、扩锅约 <b>${Number(cycle.potDemand||0).toFixed(1)}格</b>；逐餐求解器已把食材与附带技能同时计算。</div><div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">${foodTargets}</div><div class="mt-3 text-[9px] font-black text-amber-900">这段期限内各宝可梦预计贡献</div><div class="mt-2 grid gap-2 sm:grid-cols-2">${contributionRows}</div></details>`;
+    }
     function renderLiveCookingSkillCycles(plan){
         const cycles=plan?.global?.audit?.skillCycles||[],cooked=(plan?.global?.plans||[]).filter(item=>!item.skipped);
         if(!cycles.length)return '';
-        const rows=cycles.map((cycle,index)=>{const slot=cooked[index],entries=(cycle.entries||[]).map(item=>`${item.nickname||item.species} ${Number(item.hours||0).toFixed(1)}h→${item.key==='__tasty'?'爆锅+':'扩锅'}${Number(item.produced||0).toFixed(1)}`).join(' · ')||'不需要新增功能工时';return `<div class="rounded-xl border border-teal-100 bg-white p-2"><div class="flex items-start justify-between gap-2"><div><div class="text-[9px] font-black text-slate-800">${slot?liveCookingSlotLabel(slot.slot):`第${index+1}餐`} · ${liveCookingEscape(cycle.recipe||'')}</div><div class="mt-1 text-[8px] font-bold text-slate-500">${liveCookingEscape(entries)}</div></div><div class="shrink-0 text-right text-[8px] font-black text-teal-700">新增爆锅 ${Number(cycle.tastyDemand||0).toFixed(1)}%<br>新增扩锅 ${Number(cycle.potDemand||0).toFixed(1)}格</div></div></div>`;}).join('');
-        return `<details class="rounded-2xl border border-teal-200 bg-teal-50/50 p-3"><summary class="cursor-pointer text-xs font-black text-teal-900">逐餐爆锅／扩锅封顶工时</summary><div class="mt-2 text-[8px] font-bold leading-relaxed text-teal-700">每餐独立结算。显示暴击加成最多70%；扩锅只补到下一顿食谱需要的容量。达到目标后的额外触发不保存给下下顿。</div><div class="mt-3 grid gap-2">${rows}</div></details>`;
+        const rows=cycles.map((cycle,index)=>{const slot=cooked[index],entries=(cycle.entries||[]).map(item=>{const foods=Object.entries(item.ingredients||{}).filter(([,value])=>Number(value)>.01).map(([name,value])=>`${name}${Number(value).toFixed(1)}`).join('、');const effect=item.key==='__tasty'?`有效爆锅+${Number(item.produced||0).toFixed(1)}%`:item.key==='__pot'?`有效扩锅${Number(item.produced||0).toFixed(1)}格`:foods?`食材${foods}`:'直接能量';const extra=[Number(item.directEnergy)>1?`直接能量${liveCookingFormatNumber(item.directEnergy)}`:'',Number(item.wasted)>.01?`封顶溢出${Number(item.wasted).toFixed(1)}`:''].filter(Boolean).join('、');return `${item.nickname||item.species} ${Number(item.hours||0).toFixed(1)}h（${item.reason||'站场'}）→${effect}${extra?'，'+extra:''}`;}).join(' · ')||'本餐无需新增站场工时';return `<div class="rounded-xl border border-teal-100 bg-white p-2"><div class="flex items-start justify-between gap-2"><div><div class="text-[9px] font-black text-slate-800">${slot?liveCookingSlotLabel(slot.slot):`第${index+1}餐`} · ${liveCookingEscape(cycle.recipe||'')}</div><div class="mt-1 text-[8px] font-bold text-slate-500">${liveCookingEscape(entries)}</div></div><div class="shrink-0 text-right text-[8px] font-black text-teal-700">有效爆锅 ${Number(cycle.tastyProduced||0).toFixed(1)} / ${Number(cycle.tastyDemand||0).toFixed(1)}%<br>有效扩锅 ${Number(cycle.potProduced||0).toFixed(1)} / ${Number(cycle.potDemand||0).toFixed(1)}格</div></div></div>`;}).join('');
+        return `<details class="rounded-2xl border border-teal-200 bg-teal-50/50 p-3"><summary class="cursor-pointer text-xs font-black text-teal-900">逐餐食材／爆锅／扩锅与封顶明细</summary><div class="mt-2 text-[8px] font-bold leading-relaxed text-teal-700">每段站场同时结算食材、树果能量和主技能。显示暴击加成最多70%；扩锅只补到下一顿食谱需要的容量，达到目标后的额外触发不保存给下下顿。</div><div class="mt-3 grid gap-2">${rows}</div></details>`;
     }
     function renderLiveCookingSharedCorePlan(plan){
         const global=plan.global, first=global.plans[0], audit=global.audit, periodHours=Math.max(1,Number(audit.settings?.periodHours)||(global.plans.length*8)), access=getLiveCookingSlotAccess(liveCookingState.viewWeek,plan.next);
@@ -26782,7 +26835,7 @@ async function calculateAndRenderWeeklyCooking() {
         const adviceHeading=adviceSection?.querySelector('h3');
         if(adviceHeading&&liveCookingPlan?.global?.source==='ideal-shared-core'){
             const remaining=Math.max(0,Number(liveCookingPlan.global.score)||0),current=Math.max(0,Number(liveCookingState.currentTotalEnergy)||0),finalEnergy=current+remaining;
-            adviceHeading.insertAdjacentHTML('afterend',`<div class="mb-3 grid grid-cols-[1fr_auto_auto] gap-2"><div class="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-3"><div class="text-[8px] font-black text-violet-500">预计本周最终总能量</div><div class="mt-1 text-xl font-black text-violet-900">${current>0?liveCookingFormatNumber(finalEnergy):'请填写当前总能量'}</div><div class="mt-1 text-[8px] font-bold text-violet-600">${current>0?`${liveCookingFormatNumber(current)} ＋ 剩余期望 ${liveCookingFormatNumber(remaining)}`:`剩余周期预计增加 ${liveCookingFormatNumber(remaining)}`}</div></div><button onclick="recalculateLiveCookingNow()" class="rounded-2xl bg-gradient-to-br from-amber-500 to-fuchsia-500 px-3 py-2 text-[10px] font-black text-white shadow-sm hover:brightness-105"><i class="fa-solid fa-calculator"></i><br>开始／重新<br>计算</button><button onclick="exportLiveCookingAudit()" class="rounded-2xl bg-slate-900 px-3 py-2 text-[10px] font-black text-white shadow-sm hover:bg-slate-700"><i class="fa-solid fa-file-export"></i><br>导出详细<br>自检数据</button></div>${renderLiveCookingNearTermAdvice(liveCookingPlan)}${renderLiveCookingSkillCycles(liveCookingPlan)}`);
+            adviceHeading.insertAdjacentHTML('afterend',`<div class="mb-3 grid grid-cols-[1fr_auto_auto] gap-2"><div class="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-3"><div class="text-[8px] font-black text-violet-500">预计本周最终总能量</div><div class="mt-1 text-xl font-black text-violet-900">${current>0?liveCookingFormatNumber(finalEnergy):'请填写当前总能量'}</div><div class="mt-1 text-[8px] font-bold text-violet-600">${current>0?`${liveCookingFormatNumber(current)} ＋ 剩余期望 ${liveCookingFormatNumber(remaining)}`:`剩余周期预计增加 ${liveCookingFormatNumber(remaining)}`}</div></div><button onclick="recalculateLiveCookingNow()" class="rounded-2xl bg-gradient-to-br from-amber-500 to-fuchsia-500 px-3 py-2 text-[10px] font-black text-white shadow-sm hover:brightness-105"><i class="fa-solid fa-calculator"></i><br>开始／重新<br>计算</button><button onclick="exportLiveCookingAudit()" class="rounded-2xl bg-slate-900 px-3 py-2 text-[10px] font-black text-white shadow-sm hover:bg-slate-700"><i class="fa-solid fa-file-export"></i><br>导出详细<br>自检数据</button></div>${renderLiveCookingUntilNextMeal(liveCookingPlan)}${renderLiveCookingNearTermAdvice(liveCookingPlan)}${renderLiveCookingSkillCycles(liveCookingPlan)}`);
         }
     }
     function rerenderLiveCookingPreserveScroll(){
