@@ -900,6 +900,9 @@
                     <button onclick="openIdealStrategyModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-cyan-100 text-cyan-900 shadow-sm flex items-center gap-1 hover:bg-cyan-200" title="用确定性的理想连续工时模型，在料理、树果与爆锅之间比较整周最高期望能量">
                         <i class="fa-solid fa-brain text-cyan-700"></i> 🧠 理论最优策略
                     </button>
+                    <button onclick="openLiveCookingPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-900 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="记录本周已经吃过的料理，并根据当前食材与暴击率重新规划后续餐位">
+                        <i class="fa-solid fa-calendar-check text-amber-600"></i> 🍽️ 实时料理规划
+                    </button>
                     <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="记录最近30次浅浅、安然、深深比例，并规划下一觉适合争取的睡眠类型">
                         <i class="fa-solid fa-chart-line text-violet-600"></i> 🌙 睡眠类型规划
                     </button>
@@ -1511,7 +1514,8 @@ function mergeBallPlannerStateLogs(existing, candidate) {
 function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
-        isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log);
+        isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
+        !!(log && (log.type === 'live_cooking_state' || log.type === 'live_cooking_meal'));
 }
 
 function isBallPlannerEnabled() {
@@ -25182,6 +25186,8 @@ async function calculateAndRenderWeeklyCooking() {
     }
     function getDatabaseMeals(type) { return cookingMeals.filter(item => item.type === type); }
     function getDatabaseMeal(id) { return cookingMeals.find(item => item.id === Number(id)) || null; }
+    window.getCookingDatabaseMeals = getDatabaseMeals;
+    window.getCookingDatabaseMeal = getDatabaseMeal;
     function cloneDatabaseMeal(id) {
         const meal = getDatabaseMeal(id);
         if (!meal) return null;
@@ -25381,6 +25387,7 @@ async function calculateAndRenderWeeklyCooking() {
             return Array.isArray(list) ? list : [];
         } catch (_) { return []; }
     }
+    window.getCookingGraduationEntries = getGraduationEntries;
     function getAutoProductionBundle(state) {
         const ingredientNames = typeof getMealPrepIngredientNames === 'function' ? getMealPrepIngredientNames(state) : [];
         const entries = getGraduationEntries();
@@ -25521,6 +25528,7 @@ async function calculateAndRenderWeeklyCooking() {
         if (value > 10) value /= 100;
         return value;
     }
+    window.getCookingRecipeLevelBonus = getRecipeLevelBonus;
     function weeklyRecipeFromMealId(id) {
         const recipe = cloneDatabaseMeal(id);
         if (!recipe) return null;
@@ -26238,6 +26246,330 @@ async function calculateAndRenderWeeklyCooking() {
     window.updateIdealStrategyFavorite=function(index,value){state.favorite[index]=Number(value)||0;save();renderModal();};
     window.calculateIdealStrategy=function(){try{calculate();}catch(error){console.error(error);if(typeof showToast==='function')showToast(`理论优化失败：${error.message||error}`);}};
     window.exportIdealStrategyAudit=function(){if(!lastAudit){if(typeof showToast==='function')showToast('请先完成一次理论优化');return;}const blob=new Blob([JSON.stringify(lastAudit,null,2)],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`理论最优策略自检-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+})();
+</script>
+<script>
+// ==========================================
+// 🍽️ 实时料理记录与续程规划（独立于理论最优策略）
+// ==========================================
+(function () {
+    const LIVE_COOKING_STATE_LOG_ID = 'live_cooking_state_v1';
+    const LIVE_COOKING_DAYS = ['周一','周二','周三','周四','周五','周六','周日'];
+    const LIVE_COOKING_SLOTS = [
+        { key:'breakfast', label:'早餐', icon:'☀️' },
+        { key:'lunch', label:'午餐', icon:'🍲' },
+        { key:'dinner', label:'晚餐', icon:'🌙' }
+    ];
+    const LIVE_COOKING_TYPES = {
+        curry:{ label:'咖喱', icon:'🍛', accent:'orange' },
+        salad:{ label:'沙拉', icon:'🥗', accent:'emerald' },
+        dessert:{ label:'甜品', icon:'🍰', accent:'pink' }
+    };
+    const LIVE_COOKING_INGREDIENTS = [
+        '粗枝大葱','品鲜蘑菇','特选蛋','窝心土豆','特选苹果','火辣香草','豆制肉',
+        '哞哞鲜奶','甜甜蜜','纯粹油','暖暖姜','好眠番茄','放松可可','美味尾巴',
+        '萌绿大豆','萌绿玉米','醒脑咖啡豆','沉甸甸南瓜','嫩亮牛油果'
+    ];
+    let liveCookingState = null;
+    let liveCookingRecords = [];
+    let liveCookingPlan = null;
+    let liveCookingCloudTimer = null;
+
+    function liveCookingDateKey(date) {
+        const year=date.getFullYear(), month=String(date.getMonth()+1).padStart(2,'0'), day=String(date.getDate()).padStart(2,'0');
+        return `${year}-${month}-${day}`;
+    }
+    function liveCookingParseDate(value) {
+        const parts=String(value||'').split('-').map(Number);
+        return new Date(parts[0]||2000,(parts[1]||1)-1,parts[2]||1,12,0,0,0);
+    }
+    function liveCookingMonday(value=new Date()) {
+        const date=value instanceof Date?new Date(value):liveCookingParseDate(value);
+        date.setHours(12,0,0,0);
+        const day=(date.getDay()+6)%7;
+        date.setDate(date.getDate()-day);
+        return liveCookingDateKey(date);
+    }
+    function liveCookingShiftWeek(weekStart, delta) {
+        const date=liveCookingParseDate(weekStart); date.setDate(date.getDate()+Number(delta||0)*7); return liveCookingDateKey(date);
+    }
+    function liveCookingWeekDate(weekStart, dayIndex) {
+        const date=liveCookingParseDate(weekStart); date.setDate(date.getDate()+Number(dayIndex||0)); return date;
+    }
+    function liveCookingSlotId(weekStart,index){ return `live_cooking_meal:${weekStart}:${index}`; }
+    function liveCookingStorageKey(){ return currentCloudUser?`sleep_live_cooking_${currentCloudUser.id}`:'sleep_live_cooking_guest'; }
+    function liveCookingEscape(value){ return typeof escapeHtml==='function'?escapeHtml(String(value??'')):String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function liveCookingClamp(value,min,max){ return Math.max(min,Math.min(max,Number(value)||0)); }
+    function liveCookingCanonical(name){ return typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(name):String(name||'').trim(); }
+
+    function getDefaultLiveCookingState(){
+        const week=liveCookingMonday();
+        return {
+            viewWeek:week,
+            weekTypes:{ [week]:(typeof mealPrepPlannerState!=='undefined'&&mealPrepPlannerState.nextWeekType!=='random'?mealPrepPlannerState.nextWeekType:'curry') },
+            inventory:Object.fromEntries(LIVE_COOKING_INGREDIENTS.map(name=>[name,0])),
+            visibleCritBonus:0,
+            basePot:Number(typeof weeklyCookingState!=='undefined'?weeklyCookingState.basePot:57)||57,
+            goodCamp:!!(typeof weeklyCookingState!=='undefined'&&weeklyCookingState.goodCamp),
+            cookingBoost:!!(typeof weeklyCookingState!=='undefined'&&weeklyCookingState.cookingBoost),
+            islandBonus:0,
+            recipeLevel:70,
+            updatedAt:''
+        };
+    }
+    function normalizeLiveCookingState(raw={}){
+        const def=getDefaultLiveCookingState(), inventory={...def.inventory};
+        Object.entries(raw.inventory||{}).forEach(([name,value])=>{ const key=liveCookingCanonical(name); if(key)inventory[key]=Math.max(0,Math.floor(Number(value)||0)); });
+        const weekTypes={...(raw.weekTypes||{})};
+        const viewWeek=/^\d{4}-\d{2}-\d{2}$/.test(String(raw.viewWeek||''))?String(raw.viewWeek):def.viewWeek;
+        if(!LIVE_COOKING_TYPES[weekTypes[viewWeek]])weekTypes[viewWeek]=def.weekTypes[def.viewWeek]||'curry';
+        return {
+            viewWeek, weekTypes, inventory,
+            visibleCritBonus:liveCookingClamp(raw.visibleCritBonus,0,70),
+            basePot:Math.max(1,Math.min(999,Math.floor(Number(raw.basePot??def.basePot)||def.basePot))),
+            goodCamp:raw.goodCamp===true,
+            cookingBoost:raw.cookingBoost===true,
+            islandBonus:liveCookingClamp(raw.islandBonus,0,999),
+            recipeLevel:Math.max(1,Math.min(70,Math.floor(Number(raw.recipeLevel??70)||70))),
+            updatedAt:String(raw.updatedAt||'')
+        };
+    }
+    function normalizeLiveCookingRecord(raw={}){
+        const weekStart=/^\d{4}-\d{2}-\d{2}$/.test(String(raw.weekStart||''))?String(raw.weekStart):liveCookingMonday();
+        const slotIndex=Math.max(0,Math.min(20,Math.floor(Number(raw.slotIndex)||0)));
+        return {
+            id:liveCookingSlotId(weekStart,slotIndex), type:'live_cooking_meal', weekStart, slotIndex,
+            mealType:LIVE_COOKING_TYPES[raw.mealType]?raw.mealType:'curry',
+            mealId:Number(raw.mealId)||0,
+            mealName:String(raw.mealName||'').trim().slice(0,60),
+            energy:Math.max(0,Math.floor(Number(raw.energy)||0)),
+            extraTasty:raw.extraTasty===true,
+            visibleCritBonus:liveCookingClamp(raw.visibleCritBonus,0,70),
+            skipped:raw.skipped===true,
+            removed:raw.removed===true,
+            note:String(raw.note||'').trim().slice(0,160),
+            createdAt:String(raw.createdAt||new Date().toISOString()),
+            updatedAt:String(raw.updatedAt||raw.createdAt||new Date().toISOString())
+        };
+    }
+    function isLiveCookingStateLog(log){ return !!(log&&log.type==='live_cooking_state'); }
+    function isLiveCookingMealLog(log){ return !!(log&&log.type==='live_cooking_meal'); }
+    function liveCookingNewest(a,b){
+        if(!a)return b;if(!b)return a;
+        return (Date.parse(b.updatedAt||b.createdAt||'')||0)>=(Date.parse(a.updatedAt||a.createdAt||'')||0)?b:a;
+    }
+    function loadLiveCookingData(){
+        let local={};try{local=JSON.parse(localStorage.getItem(liveCookingStorageKey())||'{}')||{};}catch(_){}
+        const cloudState=(Array.isArray(historyLogs)?historyLogs:[]).filter(isLiveCookingStateLog).reduce(liveCookingNewest,null);
+        const localState=normalizeLiveCookingState(local.state||{});
+        const remoteState=cloudState?normalizeLiveCookingState(cloudState.state||{}):null;
+        liveCookingState=remoteState&&((Date.parse(remoteState.updatedAt)||0)>=(Date.parse(localState.updatedAt)||0))?remoteState:localState;
+        const map=new Map();
+        (Array.isArray(local.records)?local.records:[]).map(normalizeLiveCookingRecord).forEach(item=>map.set(item.id,liveCookingNewest(map.get(item.id),item)));
+        (Array.isArray(historyLogs)?historyLogs:[]).filter(isLiveCookingMealLog).map(normalizeLiveCookingRecord).forEach(item=>map.set(item.id,liveCookingNewest(map.get(item.id),item)));
+        liveCookingRecords=[...map.values()];
+        persistLiveCookingLocal();
+        return liveCookingState;
+    }
+    function persistLiveCookingLocal(){
+        try{localStorage.setItem(liveCookingStorageKey(),JSON.stringify({state:liveCookingState,records:liveCookingRecords}));}catch(_){}
+    }
+    function scheduleLiveCookingCloudSave(){
+        clearTimeout(liveCookingCloudTimer);
+        const status=document.getElementById('live-cooking-sync-status');
+        if(status)status.innerHTML=currentCloudUser?'<i class="fa-solid fa-cloud-arrow-up fa-bounce"></i> 正在同步账号数据':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机';
+        liveCookingCloudTimer=setTimeout(async()=>{
+            if(!currentCloudUser)return;
+            try{
+                const result=await saveHistoryToCloudNow();
+                if(!result?.ok)throw(result?.error||new Error('同步失败'));
+                const el=document.getElementById('live-cooking-sync-status');if(el)el.innerHTML='<i class="fa-solid fa-cloud-circle-check"></i> 已同步到账号';
+            }catch(error){
+                console.error('实时料理规划同步失败：',error);
+                const el=document.getElementById('live-cooking-sync-status');if(el)el.innerHTML='<i class="fa-solid fa-triangle-exclamation"></i> 云端同步失败，本机记录已保留 <button onclick="retryLiveCookingSync()" class="ml-1 underline">重试</button>';
+            }
+        },450);
+    }
+    function saveLiveCookingState(options={}){
+        liveCookingState=normalizeLiveCookingState({...liveCookingState,updatedAt:new Date().toISOString()});
+        persistLiveCookingLocal();
+        if(currentCloudUser){
+            const now=new Date().toISOString(), existing=(Array.isArray(historyLogs)?historyLogs:[]).find(isLiveCookingStateLog);
+            historyLogs=(Array.isArray(historyLogs)?historyLogs:[]).filter(item=>!isLiveCookingStateLog(item));
+            historyLogs.push({id:LIVE_COOKING_STATE_LOG_ID,type:'live_cooking_state',state:liveCookingState,createdAt:existing?.createdAt||now,updatedAt:now});
+            historyLogs=mergeHistoryLogs([],historyLogs);saveHistoryToLocal();if(options.cloud!==false)scheduleLiveCookingCloudSave();
+        }
+    }
+    function saveLiveCookingRecord(record){
+        const normalized=normalizeLiveCookingRecord({...record,updatedAt:new Date().toISOString()});
+        const existing=liveCookingRecords.find(item=>item.id===normalized.id);
+        if(existing)normalized.createdAt=existing.createdAt;
+        liveCookingRecords=liveCookingRecords.filter(item=>item.id!==normalized.id);liveCookingRecords.push(normalized);persistLiveCookingLocal();
+        if(currentCloudUser){
+            historyLogs=(Array.isArray(historyLogs)?historyLogs:[]).filter(item=>String(item?.id)!==normalized.id);historyLogs.push(normalized);historyLogs=mergeHistoryLogs([],historyLogs);saveHistoryToLocal();scheduleLiveCookingCloudSave();
+        }
+    }
+    window.retryLiveCookingSync=function(){ scheduleLiveCookingCloudSave(); };
+
+    function getLiveCookingWeekRecords(weekStart){
+        return liveCookingRecords.filter(item=>item.weekStart===weekStart&&!item.removed).sort((a,b)=>a.slotIndex-b.slotIndex);
+    }
+    function getLiveCookingRecord(weekStart,index){ return getLiveCookingWeekRecords(weekStart).find(item=>item.slotIndex===index)||null; }
+    function getLiveCookingLatestSlot(weekStart){ return getLiveCookingWeekRecords(weekStart).reduce((max,item)=>Math.max(max,item.slotIndex),-1); }
+    function getLiveCookingWeekType(weekStart){ return LIVE_COOKING_TYPES[liveCookingState.weekTypes?.[weekStart]]?liveCookingState.weekTypes[weekStart]:'curry'; }
+    function getLiveCookingMeals(type){
+        const list=typeof window.getCookingDatabaseMeals==='function'?window.getCookingDatabaseMeals(type):[];
+        return [...list].sort((a,b)=>b.ingredients.reduce((s,x)=>s+Number(x.amount||0),0)-a.ingredients.reduce((s,x)=>s+Number(x.amount||0),0)||String(a.name).localeCompare(String(b.name),'zh-CN'));
+    }
+    function getLiveCookingProductionRates(){
+        const entries=(()=>{try{return typeof window.getCookingGraduationEntries==='function'?window.getCookingGraduationEntries():(typeof getWeeklyCookingGraduationEntries==='function'?getWeeklyCookingGraduationEntries():(Array.isArray(graduationDex)?graduationDex:[]));}catch(_){return[];}})();
+        const byIngredient={};
+        entries.forEach(entry=>{
+            const result=typeof window.calculateCookingPokemonEstimate==='function'?window.calculateCookingPokemonEstimate(entry):null;
+            if(!result?.ok)return;
+            Object.entries(result.map||{}).forEach(([name,value])=>{
+                const key=liveCookingCanonical(name), amount=Math.max(0,Number(value)||0);if(!amount)return;
+                (byIngredient[key]||(byIngredient[key]=[])).push({rate:amount,species:result.species||'未命名个体',level:result.level||0});
+            });
+        });
+        const night=typeof getNightCapPikachuDailyProduction==='function'?getNightCapPikachuDailyProduction():{};
+        Object.entries(night||{}).forEach(([name,value])=>{const key=liveCookingCanonical(name),amount=Math.max(0,Number(value)||0);if(amount)(byIngredient[key]||(byIngredient[key]=[])).push({rate:amount,species:'睡帽皮卡丘',level:nightCapPikachuState?.level||0,passive:true});});
+        Object.values(byIngredient).forEach(rows=>rows.sort((a,b)=>b.rate-a.rate));
+        return byIngredient;
+    }
+    function getLiveCookingMealStrength(meal,dayIndex){
+        const level=liveCookingState.recipeLevel, bonus=typeof window.getCookingRecipeLevelBonus==='function'?Number(window.getCookingRecipeLevelBonus(level)||0):(level===70?2.58:2.58*(level-1)/69);
+        const base=Math.round((Number(meal.baseStrength)||0)*(1+bonus)*(1+Number(liveCookingState.islandBonus||0)/100)*(liveCookingState.cookingBoost?1.5:1));
+        const actualChance=Math.min(100,10+Number(liveCookingState.visibleCritBonus||0)+(dayIndex===6?20:0));
+        const extraMultiplier=dayIndex===6?3:2;
+        return {base,actualChance,expected:Math.round(base*(1+actualChance/100*(extraMultiplier-1))),extraMultiplier};
+    }
+    function assessLiveCookingMeals(nextSlot){
+        const type=getLiveCookingWeekType(liveCookingState.viewWeek), inventory=liveCookingState.inventory||{}, rates=getLiveCookingProductionRates();
+        const effectivePot=Math.floor(Number(liveCookingState.basePot||0)*(liveCookingState.goodCamp?1.5:1));
+        return getLiveCookingMeals(type).map(meal=>{
+            const shortage={}, missing=[], contributors=[];
+            (meal.ingredients||[]).forEach(item=>{
+                const name=liveCookingCanonical(item.name), need=Math.max(0,Number(item.amount)||0), have=Math.max(0,Number(inventory[name])||0), gap=Math.max(0,need-have);
+                if(gap){shortage[name]=gap;const producer=rates[name]?.[0];if(!producer)missing.push(name);else contributors.push({name,gap,...producer,hours:gap/producer.rate*24});}
+            });
+            const total=(meal.ingredients||[]).reduce((sum,item)=>sum+Number(item.amount||0),0), potGap=Math.max(0,total-effectivePot);
+            const readyHours=missing.length?Infinity:(contributors.length?Math.max(...contributors.map(item=>item.hours)):0);
+            const strength=getLiveCookingMealStrength(meal,Math.floor(nextSlot/3));
+            const feasible=!missing.length;
+            const score=feasible?strength.expected/Math.max(1,readyHours+1):0;
+            return {meal,shortage,missing,contributors,total,potGap,readyHours,strength,feasible,score};
+        }).sort((a,b)=>{
+            const ar=a.readyHours===0&&a.potGap===0,br=b.readyHours===0&&b.potGap===0;if(ar!==br)return ar?-1:1;
+            if(ar&&br)return b.strength.expected-a.strength.expected;
+            return b.score-a.score||b.strength.expected-a.strength.expected;
+        });
+    }
+    function buildLiveCookingPlan(){
+        const week=liveCookingState.viewWeek, latest=getLiveCookingLatestSlot(week), next=Math.min(20,latest+1), complete=latest>=20;
+        if(complete)return {complete,latest,next,assessments:[],best:null};
+        const assessments=assessLiveCookingMeals(next), best=assessments.find(row=>row.feasible)||assessments[0]||null;
+        return {complete,latest,next,assessments,best};
+    }
+
+    function getLiveCookingSlotAccess(weekStart,slotIndex){
+        const targetDate=liveCookingDateKey(liveCookingWeekDate(weekStart,Math.floor(slotIndex/3))), targetSlot=slotIndex%3;
+        function at(timestamp,offset){
+            const local=new Date(timestamp+offset*3600000),hour=local.getUTCHours()+local.getUTCMinutes()/60;
+            let date=new Date(Date.UTC(local.getUTCFullYear(),local.getUTCMonth(),local.getUTCDate())),slot;
+            if(hour<6){date.setUTCDate(date.getUTCDate()-1);slot=2;}else if(hour<12)slot=0;else if(hour<18)slot=1;else slot=2;
+            const key=`${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}`;
+            return key===targetDate&&slot===targetSlot;
+        }
+        const now=Date.now(), offsets=[];for(let offset=-11;offset<=13;offset++)if(at(now,offset))offsets.push(offset);
+        let waitHours=0;
+        if(!offsets.length){
+            outer:for(let step=1;step<=192;step++){const time=now+step*15*60000;for(let offset=-11;offset<=13;offset++)if(at(time,offset)){waitHours=step/4;break outer;}}
+        }
+        const name=offset=>offset===-11?'帕果帕果（UTC−11）':offset===13?'汤加（UTC+13）':`UTC${offset>=0?'+':''}${offset}`;
+        return {available:!!offsets.length,offsets,waitHours,label:offsets.length?name(offsets.reduce((best,value)=>Math.abs(value)<Math.abs(best)?value:best,offsets[0])):''};
+    }
+
+    function liveCookingFormatNumber(value){return Math.round(Number(value)||0).toLocaleString('zh-CN');}
+    function liveCookingSlotLabel(index){return `${LIVE_COOKING_DAYS[Math.floor(index/3)]}${LIVE_COOKING_SLOTS[index%3].label}`;}
+    function liveCookingDishIcon(type){return LIVE_COOKING_TYPES[type]?.icon||'🍽️';}
+    function renderLiveCookingCalendar(){
+        const week=liveCookingState.viewWeek, latest=getLiveCookingLatestSlot(week), plan=liveCookingPlan||buildLiveCookingPlan(), records=new Map(getLiveCookingWeekRecords(week).map(item=>[item.slotIndex,item]));
+        const rows=LIVE_COOKING_DAYS.map((day,dayIndex)=>{
+            const date=liveCookingWeekDate(week,dayIndex), cells=LIVE_COOKING_SLOTS.map((slot,slotIndex)=>{
+                const index=dayIndex*3+slotIndex,record=records.get(index),isNext=!plan.complete&&index===plan.next,isClosed=index<latest&&!record;
+                if(record?.skipped)return `<button onclick="openLiveCookingMealEditor(${index})" class="live-cooking-cell bg-slate-50 text-slate-400"><span class="text-lg">🍴</span><span class="text-[9px] font-black">未吃／跳过</span><span class="text-[8px]">点击补录</span></button>`;
+                if(record)return `<button onclick="openLiveCookingMealEditor(${index})" class="live-cooking-cell ${record.extraTasty?'bg-gradient-to-br from-fuchsia-50 to-amber-50 ring-1 ring-fuchsia-200':'bg-white'}"><span class="text-xl">${liveCookingDishIcon(record.mealType)}</span><span class="line-clamp-2 text-[9px] font-black text-slate-700">${liveCookingEscape(record.mealName||'已记录料理')}</span><span class="text-sm font-black ${record.extraTasty?'text-fuchsia-600':'text-slate-900'}">${liveCookingFormatNumber(record.energy)}</span><span class="rounded-full ${record.extraTasty?'bg-fuchsia-500 text-white':'bg-slate-100 text-slate-500'} px-1.5 py-0.5 text-[8px] font-black">+${record.visibleCritBonus}%${record.extraTasty?' · 暴击！':''}</span></button>`;
+                if(isNext&&plan.best)return `<button onclick="openLiveCookingMealEditor(${index})" class="live-cooking-cell bg-gradient-to-br from-amber-50 to-orange-50 ring-2 ring-amber-300"><span class="text-xl">${liveCookingDishIcon(getLiveCookingWeekType(week))}</span><span class="text-[8px] font-black text-amber-600">下一餐建议</span><span class="line-clamp-2 text-[9px] font-black text-slate-700">${liveCookingEscape(plan.best.meal.name)}</span><span class="text-[8px] font-bold text-slate-500">${plan.best.readyHours===0?'食材已齐':Number.isFinite(plan.best.readyHours)?`约${plan.best.readyHours.toFixed(1)}h备齐`:'存在零产能食材'}</span></button>`;
+                if(isClosed)return `<button onclick="openLiveCookingMealEditor(${index})" class="live-cooking-cell bg-slate-50 text-slate-300"><span class="text-lg">🍴</span><span class="text-[8px] font-black">已过餐位</span><span class="text-[8px]">可补录</span></button>`;
+                return `<button onclick="openLiveCookingMealEditor(${index})" class="live-cooking-cell bg-white text-slate-300"><span class="text-lg">🍴</span><span class="text-[8px] font-black">尚未记录</span></button>`;
+            }).join('');
+            return `<div class="contents"><div class="flex min-h-[92px] flex-col items-center justify-center border-r border-b border-amber-100 bg-amber-50/50 px-1"><span class="text-[10px] font-black text-slate-700">${day}</span><span class="text-[8px] font-bold text-slate-400">${date.getMonth()+1}/${date.getDate()}</span></div>${cells}</div>`;
+        }).join('');
+        return `<div class="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm"><div class="live-cooking-grid bg-amber-50"><div></div>${LIVE_COOKING_SLOTS.map(slot=>`<div class="py-2 text-center text-[10px] font-black text-slate-700">${slot.icon} ${slot.label}</div>`).join('')}${rows}</div></div>`;
+    }
+    function renderLiveCookingPlan(){
+        const plan=liveCookingPlan||buildLiveCookingPlan();
+        if(plan.complete)return `<div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-black text-emerald-800">本周21个餐位已经推进完成，可以切换周次查看记录。</div>`;
+        if(!plan.best)return `<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-black text-amber-800">料理资料尚未准备好，请稍后重新打开本模块。</div>`;
+        const row=plan.best, shortage=Object.entries(row.shortage), ready=row.readyHours===0?'当前库存已经能直接制作':Number.isFinite(row.readyHours)?`按Box中各食材最快个体的满体产能基准，瓶颈约需${row.readyHours.toFixed(1)}小时`:'Box中存在完全无法生产的必要食材';
+        const detail=shortage.length?shortage.map(([name,value])=>`${name}缺${value}`).join('、'):'食材已齐';
+        const producerText=row.contributors.length?row.contributors.sort((a,b)=>b.hours-a.hours).map(item=>`${item.name}：${item.species} Lv.${item.level}，约${item.hours.toFixed(1)}h`).join('；'):'无需临时补产';
+        const critActual=Math.min(100,10+Number(liveCookingState.visibleCritBonus||0)+(Math.floor(plan.next/3)===6?20:0)),access=getLiveCookingSlotAccess(liveCookingState.viewWeek,plan.next);
+        const accessText=access.available?`当前可通过${access.label}进入该餐位`:(access.waitHours?`按帕果帕果至汤加的可选时区范围，约${access.waitHours<1?Math.round(access.waitHours*60)+'分钟':access.waitHours.toFixed(1)+'小时'}后可进入该餐位`:'当前时区窗口暂不可达，请以游戏内显示为准');
+        return `<div class="space-y-3"><div class="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-4"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-amber-600">下一可用餐位 · ${liveCookingSlotLabel(plan.next)}</div><div class="mt-1 text-xl font-black text-slate-900">${liveCookingDishIcon(getLiveCookingWeekType(liveCookingState.viewWeek))} ${liveCookingEscape(row.meal.name)}</div><div class="mt-1 text-[10px] font-bold text-slate-500">${liveCookingEscape((row.meal.ingredients||[]).map(item=>`${item.name}×${item.amount}`).join(' · '))}</div></div><div class="rounded-xl bg-white px-3 py-2 text-right shadow-sm"><div class="text-[8px] font-black text-slate-400">预计料理能量</div><div class="text-lg font-black text-fuchsia-600">${liveCookingFormatNumber(row.strength.expected)}</div><div class="text-[8px] font-bold text-slate-500">基础${liveCookingFormatNumber(row.strength.base)} · 实际暴击率${critActual}%</div></div></div><div class="mt-3 rounded-xl border border-amber-100 bg-amber-100/60 px-3 py-2 text-[9px] font-black text-amber-900"><i class="fa-solid fa-earth-asia"></i> ${accessText}。餐位一旦向后推进，之前的餐只能补录，不能再实际开饭。</div><div class="mt-2 rounded-xl bg-white/80 px-3 py-2 text-[10px] font-bold leading-relaxed text-slate-700"><b>${ready}</b>。${detail}。${row.potGap?`当前有效锅容量还差${row.potGap}格，需要扩锅后再做。`:'当前锅容量足够。'}</div></div><details class="rounded-2xl border border-slate-200 bg-white p-3"><summary class="cursor-pointer text-xs font-black text-slate-700">查看产能依据与其他料理候选</summary><div class="mt-2 text-[9px] font-bold leading-relaxed text-slate-500">${liveCookingEscape(producerText)}</div><div class="mt-3 grid gap-2 md:grid-cols-2">${plan.assessments.slice(0,8).map((item,index)=>`<div class="rounded-xl border ${index===0?'border-amber-200 bg-amber-50':'border-slate-200 bg-slate-50'} p-2"><div class="text-[10px] font-black text-slate-700">${liveCookingEscape(item.meal.name)}</div><div class="mt-1 text-[8px] font-bold text-slate-500">期望${liveCookingFormatNumber(item.strength.expected)} · ${item.readyHours===0?'现在可做':Number.isFinite(item.readyHours)?`瓶颈约${item.readyHours.toFixed(1)}h`:`缺${item.missing.join('、')}`}${item.potGap?` · 缺锅${item.potGap}格`:''}</div></div>`).join('')}</div></details><div class="rounded-2xl border border-sky-200 bg-sky-50 p-3 text-[9px] font-bold leading-relaxed text-sky-800"><i class="fa-solid fa-rotate"></i> 这是“从当前真实状态继续”的滚动建议：每次录入料理、修改库存或暴击加成后都会重算。第一版的备齐时间采用各食材最快个体的独立满体产能作参考；复杂的多人动态轮换仍由独立的“理论最优策略”模块负责。</div></div>`;
+    }
+    function renderLiveCookingWeekSummary(){
+        const records=getLiveCookingWeekRecords(liveCookingState.viewWeek).filter(item=>!item.skipped), crits=records.filter(item=>item.extraTasty).length, totalEnergy=records.reduce((sum,item)=>sum+Number(item.energy||0),0), avg=records.length?records.reduce((sum,item)=>sum+Number(item.visibleCritBonus||0),0)/records.length:0;
+        return `<div class="mt-3 grid grid-cols-3 gap-2"><div class="rounded-xl border border-fuchsia-200 bg-fuchsia-50 p-2 text-center"><div class="text-[8px] font-black text-fuchsia-500">暴击成功</div><div class="text-base font-black text-fuchsia-700">${crits}/${records.length}</div></div><div class="rounded-xl border border-amber-200 bg-amber-50 p-2 text-center"><div class="text-[8px] font-black text-amber-600">本周料理能量</div><div class="text-base font-black text-amber-800">${liveCookingFormatNumber(totalEnergy)}</div></div><div class="rounded-xl border border-violet-200 bg-violet-50 p-2 text-center"><div class="text-[8px] font-black text-violet-500">平均显示加成</div><div class="text-base font-black text-violet-700">+${avg.toFixed(1)}%</div></div></div>`;
+    }
+    function renderLiveCookingInventory(){
+        return `<details open class="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3"><summary class="cursor-pointer text-xs font-black text-emerald-900">🥬 当前食材库存（用于下一次续程计算）</summary><div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">${LIVE_COOKING_INGREDIENTS.map(name=>`<label class="rounded-xl border border-emerald-100 bg-white p-2"><span class="block truncate text-[8px] font-black text-slate-500">${name}</span><input type="number" min="0" max="9999" value="${Math.max(0,Number(liveCookingState.inventory[name])||0)}" onchange="updateLiveCookingInventory('${name}',this.value)" class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1 text-sm font-black text-slate-800"></label>`).join('')}</div><div class="mt-2 text-[8px] font-bold text-slate-500">这里保存的是玩家当前看到的真实库存快照。料理记录可以自动扣除配方食材，收菜后也可以随时直接修正。</div></details>`;
+    }
+    function renderLiveCookingModal(){
+        const modal=document.getElementById('live-cooking-planner-modal');if(!modal)return;
+        liveCookingPlan=buildLiveCookingPlan();
+        const week=liveCookingState.viewWeek, start=liveCookingParseDate(week), end=liveCookingWeekDate(week,6), type=getLiveCookingWeekType(week), meta=LIVE_COOKING_TYPES[type];
+        modal.innerHTML=`<style>.live-cooking-grid{display:grid;grid-template-columns:54px repeat(3,minmax(0,1fr))}.live-cooking-cell{min-height:92px;border-right:1px solid #fef3c7;border-bottom:1px solid #fef3c7;padding:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;transition:.15s}.live-cooking-cell:hover{filter:brightness(.98);transform:translateY(-1px)}@media(max-width:520px){.live-cooking-grid{grid-template-columns:44px repeat(3,minmax(0,1fr))}.live-cooking-cell{min-height:88px;padding:4px}}</style><div class="fixed inset-0 z-[105] bg-slate-950/70 p-0 backdrop-blur-sm sm:p-3"><div class="mx-auto flex h-full max-w-6xl flex-col overflow-hidden bg-slate-50 shadow-2xl sm:h-[calc(100vh-24px)] sm:rounded-3xl"><header class="sticky top-0 z-10 flex items-start justify-between gap-3 bg-gradient-to-r from-amber-500 via-orange-500 to-fuchsia-500 px-4 py-3 text-white"><div><h2 class="text-lg font-black">🍽️ 实时料理记录与续程规划</h2><p class="mt-0.5 text-[9px] font-bold text-white/85">图片周历记录实际结果；库存与暴击状态驱动下一餐建议。不会覆盖理论最优策略。</p></div><button onclick="closeLiveCookingPlannerModal()" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-xl font-black hover:bg-white/25" aria-label="关闭">×</button></header><div id="live-cooking-scroll-body" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5"><div class="mb-3 flex flex-wrap items-center justify-between gap-2"><div class="flex items-center gap-2"><button onclick="shiftLiveCookingWeek(-1)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black">‹</button><div class="rounded-xl bg-white px-3 py-2 text-center shadow-sm"><div class="text-xs font-black text-slate-800">${start.getMonth()+1}/${start.getDate()}－${end.getMonth()+1}/${end.getDate()}</div><div class="text-[8px] font-bold text-slate-400">餐位记录只认星期与早／午／晚</div></div><button onclick="shiftLiveCookingWeek(1)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black">›</button><button onclick="goLiveCookingCurrentWeek()" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black">本周</button></div><label class="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-900">本周类型<select onchange="updateLiveCookingWeekType(this.value)" class="rounded-lg border border-amber-200 bg-white px-2 py-1">${Object.entries(LIVE_COOKING_TYPES).map(([key,item])=>`<option value="${key}" ${key===type?'selected':''}>${item.icon} ${item.label}</option>`).join('')}</select></label></div>${renderLiveCookingCalendar()}${renderLiveCookingWeekSummary()}<div class="mt-4 grid gap-4 lg:grid-cols-[1.05fr_.95fr]"><section class="space-y-3"><div class="rounded-2xl border border-violet-200 bg-violet-50 p-3"><div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><label><span class="text-[9px] font-black text-violet-800">当前显示的技能暴击加成</span><div class="mt-1 flex items-center gap-1"><span class="text-sm font-black">+</span><input type="number" min="0" max="70" value="${liveCookingState.visibleCritBonus}" onchange="updateLiveCookingSetting('visibleCritBonus',this.value)" class="w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-black"><span class="text-sm font-black">%</span></div><span class="mt-1 block text-[8px] font-bold text-violet-500">网站另加隐藏基础10%；周日再加20%</span></label><label><span class="text-[9px] font-black text-violet-800">基础锅容量</span><input type="number" min="1" max="999" value="${liveCookingState.basePot}" onchange="updateLiveCookingSetting('basePot',this.value)" class="mt-1 w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-black"></label><label><span class="text-[9px] font-black text-violet-800">统一食谱等级</span><input type="number" min="1" max="70" value="${liveCookingState.recipeLevel}" onchange="updateLiveCookingSetting('recipeLevel',this.value)" class="mt-1 w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-black"></label><label><span class="text-[9px] font-black text-violet-800">岛屿加成</span><div class="mt-1 flex items-center gap-1"><input type="number" min="0" max="999" value="${liveCookingState.islandBonus}" onchange="updateLiveCookingSetting('islandBonus',this.value)" class="w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-black"><span class="text-sm font-black">%</span></div></label><label class="flex items-center gap-2 rounded-xl bg-white p-2 text-[9px] font-black"><input type="checkbox" ${liveCookingState.goodCamp?'checked':''} onchange="updateLiveCookingSetting('goodCamp',this.checked)"> 开启露营卷（锅×1.5）</label><label class="flex items-center gap-2 rounded-xl bg-white p-2 text-[9px] font-black"><input type="checkbox" ${liveCookingState.cookingBoost?'checked':''} onchange="updateLiveCookingSetting('cookingBoost',this.checked)"> 料理周能量×1.5</label></div></div>${renderLiveCookingInventory()}</section><section><h3 class="mb-2 text-sm font-black text-slate-800">📍 从现在开始的文字建议</h3>${renderLiveCookingPlan()}</section></div><div id="live-cooking-sync-status" class="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[9px] font-black text-slate-500">${currentCloudUser?'<i class="fa-solid fa-cloud-circle-check"></i> 记录将同步到账号':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机'}</div></div></div></div>`;
+    }
+    function rerenderLiveCookingPreserveScroll(){
+        const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
+    }
+
+    window.openLiveCookingPlannerModal=async function(){
+        if(typeof loadCookingMaster==='function')try{await loadCookingMaster();}catch(_){}
+        loadLiveCookingData();
+        let modal=document.getElementById('live-cooking-planner-modal');if(!modal){modal=document.createElement('div');modal.id='live-cooking-planner-modal';document.body.appendChild(modal);}
+        renderLiveCookingModal();document.body.classList.add('overflow-hidden');
+    };
+    window.closeLiveCookingPlannerModal=function(){document.getElementById('live-cooking-planner-modal')?.remove();document.body.classList.remove('overflow-hidden');};
+    window.shiftLiveCookingWeek=function(delta){liveCookingState.viewWeek=liveCookingShiftWeek(liveCookingState.viewWeek,delta);if(!LIVE_COOKING_TYPES[liveCookingState.weekTypes[liveCookingState.viewWeek]])liveCookingState.weekTypes[liveCookingState.viewWeek]='curry';saveLiveCookingState({cloud:false});renderLiveCookingModal();};
+    window.goLiveCookingCurrentWeek=function(){liveCookingState.viewWeek=liveCookingMonday();if(!LIVE_COOKING_TYPES[liveCookingState.weekTypes[liveCookingState.viewWeek]])liveCookingState.weekTypes[liveCookingState.viewWeek]='curry';saveLiveCookingState({cloud:false});renderLiveCookingModal();};
+    window.updateLiveCookingWeekType=function(value){if(!LIVE_COOKING_TYPES[value])return;liveCookingState.weekTypes[liveCookingState.viewWeek]=value;saveLiveCookingState();renderLiveCookingModal();};
+    window.updateLiveCookingSetting=function(field,value){if(['goodCamp','cookingBoost'].includes(field))liveCookingState[field]=!!value;else liveCookingState[field]=Number(value)||0;saveLiveCookingState();rerenderLiveCookingPreserveScroll();};
+    window.updateLiveCookingInventory=function(name,value){liveCookingState.inventory[liveCookingCanonical(name)]=Math.max(0,Math.floor(Number(value)||0));saveLiveCookingState();liveCookingPlan=buildLiveCookingPlan();if(document.getElementById('live-cooking-planner-modal'))rerenderLiveCookingPreserveScroll();};
+
+    window.openLiveCookingMealEditor=function(slotIndex){
+        const week=liveCookingState.viewWeek,index=Math.max(0,Math.min(20,Number(slotIndex)||0)),existing=getLiveCookingRecord(week,index),type=existing?.mealType||getLiveCookingWeekType(week),meals=getLiveCookingMeals(type),currentId=existing?.mealId||0;
+        document.getElementById('live-cooking-meal-editor')?.remove();
+        const editor=document.createElement('div');editor.id='live-cooking-meal-editor';editor.className='fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-3 backdrop-blur-sm';editor.onclick=event=>{if(event.target===editor)editor.remove();};
+        editor.innerHTML=`<div class="w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl"><div class="flex items-center justify-between bg-gradient-to-r from-amber-500 to-fuchsia-500 px-4 py-3 text-white"><div><div class="text-base font-black">${liveCookingSlotLabel(index)}</div><div class="text-[9px] font-bold text-white/80">记录属于这个餐位，不保存实际时间或时区</div></div><button onclick="document.getElementById('live-cooking-meal-editor')?.remove()" class="h-8 w-8 rounded-full bg-white/20 text-lg font-black">×</button></div><div class="space-y-3 p-4"><label class="block"><span class="text-[9px] font-black text-slate-500">料理</span><select id="live-cooking-edit-meal" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-black"><option value="0">未选择／自定义记录</option>${meals.map(meal=>`<option value="${meal.id}" ${Number(currentId)===Number(meal.id)?'selected':''}>${liveCookingEscape(meal.name)}（${meal.ingredients.reduce((s,x)=>s+Number(x.amount||0),0)}格）</option>`).join('')}</select></label><div class="grid grid-cols-2 gap-3"><label><span class="text-[9px] font-black text-slate-500">实际获得能量</span><input id="live-cooking-edit-energy" type="number" min="0" value="${existing?.energy||''}" placeholder="例如 128000" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-black"></label><label><span class="text-[9px] font-black text-slate-500">当时显示的暴击加成</span><div class="mt-1 flex items-center"><span class="rounded-l-xl border border-r-0 border-slate-200 bg-slate-50 px-2 py-2 text-sm font-black">+</span><input id="live-cooking-edit-crit" type="number" min="0" max="70" value="${existing?.visibleCritBonus??liveCookingState.visibleCritBonus}" class="w-full rounded-r-xl border border-slate-200 px-3 py-2 text-sm font-black"></div></label></div><label class="flex items-center gap-2 rounded-xl border border-fuchsia-200 bg-fuchsia-50 p-3 text-xs font-black text-fuchsia-800"><input id="live-cooking-edit-tasty" type="checkbox" ${existing?.extraTasty?'checked':''}> 这顿料理发生了暴击</label><label class="block"><span class="text-[9px] font-black text-slate-500">备注（可选）</span><input id="live-cooking-edit-note" value="${liveCookingEscape(existing?.note||'')}" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="例如临时改做小菜"></label><label class="flex items-start gap-2 rounded-xl bg-slate-50 p-3 text-[9px] font-bold text-slate-600"><input id="live-cooking-edit-deduct" type="checkbox" ${existing?'':'checked'} class="mt-0.5"><span>保存时按所选食谱从当前库存扣除食材。若你填写的已经是饭后库存，请取消勾选。</span></label><div class="flex flex-wrap justify-end gap-2 pt-1">${existing?'<button onclick="deleteLiveCookingMeal('+index+')" class="mr-auto rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">删除记录</button>':''}<button onclick="skipLiveCookingMeal(${index})" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-600">标记未吃／跳过</button><button onclick="saveLiveCookingMeal(${index})" class="rounded-xl bg-slate-900 px-5 py-2 text-xs font-black text-white">保存并重新规划</button></div></div></div>`;
+        document.body.appendChild(editor);
+    };
+    window.saveLiveCookingMeal=function(slotIndex){
+        const week=liveCookingState.viewWeek,index=Number(slotIndex),mealId=Number(document.getElementById('live-cooking-edit-meal')?.value)||0,meal=typeof window.getCookingDatabaseMeal==='function'?window.getCookingDatabaseMeal(mealId):null,existing=getLiveCookingRecord(week,index),extraTasty=!!document.getElementById('live-cooking-edit-tasty')?.checked;
+        const record={...(existing||{}),weekStart:week,slotIndex:index,mealType:getLiveCookingWeekType(week),mealId,mealName:meal?.name||(existing?.mealName||'自定义料理'),energy:Number(document.getElementById('live-cooking-edit-energy')?.value)||0,visibleCritBonus:Number(document.getElementById('live-cooking-edit-crit')?.value)||0,extraTasty,skipped:false,removed:false,note:document.getElementById('live-cooking-edit-note')?.value||''};
+        const previousLatest=getLiveCookingLatestSlot(week),deduct=!!document.getElementById('live-cooking-edit-deduct')?.checked;
+        if(deduct&&meal)(meal.ingredients||[]).forEach(item=>{const name=liveCookingCanonical(item.name);liveCookingState.inventory[name]=Math.max(0,(Number(liveCookingState.inventory[name])||0)-Number(item.amount||0));});
+        if(index>=previousLatest)liveCookingState.visibleCritBonus=extraTasty?0:record.visibleCritBonus;
+        saveLiveCookingRecord(record);saveLiveCookingState();document.getElementById('live-cooking-meal-editor')?.remove();renderLiveCookingModal();if(typeof showToast==='function')showToast(`${liveCookingSlotLabel(index)}已记录，后续建议已更新`);
+    };
+    window.skipLiveCookingMeal=function(slotIndex){
+        const week=liveCookingState.viewWeek,index=Number(slotIndex),existing=getLiveCookingRecord(week,index);saveLiveCookingRecord({...(existing||{}),weekStart:week,slotIndex:index,mealType:getLiveCookingWeekType(week),mealId:0,mealName:'',energy:0,visibleCritBonus:0,extraTasty:false,skipped:true,removed:false});document.getElementById('live-cooking-meal-editor')?.remove();renderLiveCookingModal();
+    };
+    window.deleteLiveCookingMeal=function(slotIndex){
+        const week=liveCookingState.viewWeek,index=Number(slotIndex),existing=getLiveCookingRecord(week,index);if(!existing)return;if(!confirm(`删除${liveCookingSlotLabel(index)}的料理记录？`))return;saveLiveCookingRecord({...existing,removed:true});document.getElementById('live-cooking-meal-editor')?.remove();renderLiveCookingModal();
+    };
 })();
 </script>
 </body>
