@@ -26247,16 +26247,14 @@ async function calculateAndRenderWeeklyCooking() {
                 if(!chronologicalFeasible)break;
             }
             if(!chronologicalFeasible)break;
-            // 当前餐与本餐功能满足后，空余位置优先提前生产后续已选料理确定会消耗的食材。
-            // 这会把后续位置释放给爆锅／扩锅／树果，而不是因为“目前还赶得上”就用低收益树果手填满当前空位。
-            // 但若某个食材手此刻的扩锅／爆锅已经无效，则继续延后，避免为了囤食材浪费不可跨餐保存的技能。
-            guard=0;
-            while(guard++<800&&cycleUsed<capacity-0.0001){
-                const futureDef=remainingTotal();if(ingredientKeys.every(key=>futureDef[key]<=.001))break;let best=null;
-                nonHealer.forEach(row=>{const available=Math.min(duration-(cycleHours[row.id]||0),horizon-(hours[row.id]||0),capacity-cycleUsed);if(available<=.0001)return;const skillKey=row.skill?.key==='pot'?'__pot':row.skill?.key==='tasty'?'__tasty':'',skillRate=skillKey?resourceRate(row,skillKey):0,skillNeed=skillKey==='__pot'?Math.max(0,Number(cycle.potDemand||0)-localPot):skillKey==='__tasty'?Math.max(0,Number(cycle.tastyDemand||0)-localTasty):0;if(skillRate>0&&skillNeed<=.001)return;let coverage=0;ingredientKeys.forEach(key=>{if(futureDef[key]>0)coverage+=Math.min(resourceRate(row,key),futureDef[key])/Math.max(1,demand[key]);});if(coverage<=0)return;const loss=Math.max(0,topEnergy-(Number(row.directEnergyPerHour)||0)),score=coverage/(1+loss/(mode===0?700:mode===1?1800:3600));if(!best||score>best.score)best={row,available,score};});
-                if(!best)break;const times=ingredientKeys.map(key=>{const rate=resourceRate(best.row,key);return rate>0&&futureDef[key]>0?futureDef[key]/rate:Infinity;}).filter(Number.isFinite);if(!times.length)break;addEntry(best.row,Math.min(best.available,Math.max(.05,Math.min(...times))),'提前准备后续餐食材');
-            }
-            // 所有仍值得提前做、且不会造成当前功能溢出的食材安排完后，才用真正剩余的位置补直接能量。
+            // 当前餐满足后，只提前生产“若现在不做，后续共享位置将赶不上截止餐位”的食材。
+            // 不能因为整周以后会消耗某食材，就在本周期强制把全部未来需求做完：功能手在后续站场时
+            // 还会附带产出食材，过早囤满会虚占位置，并把本可用于爆锅升级或直接能量的工时挤掉。
+            // mandatoryByDeadlines 已同时检查单项最快产速与所有食材/功能共用的队伍位置，因此
+            // 非强制的未来备料留到更接近对应餐位时再安排，仍能提前备料，但不会制造无收益余量。
+            // 其余位置直接进入全局机会成本比较；当提高本餐暴击率确实比树果能量更值时，外层的
+            // 餐档替换搜索会选择更高 tastyTarget，并在这里得到真实可用的站场空间。
+            // 所有赶截止时间所必需的食材安排完后，用真正剩余的位置补直接能量。
             guard=0;
             while(guard++<800&&cycleUsed<capacity-0.0001){
                 const totalDef=mandatoryByDeadlines();let best=null;
@@ -26322,7 +26320,7 @@ async function calculateAndRenderWeeklyCooking() {
         const week=makeMealOptions('weekday',weekday,rows),sun=makeMealOptions('sunday',sunday,rows),optimized=optimizeMeals(week.options,sun.options,rows,healer,prep.stock),solution=optimized.solution,finalPlan=solution.scheduledPlan||scheduleIdealMeals(optimized.plan);
         const grouped={};finalPlan.forEach(meal=>{const key=`${meal.dayKind}|${meal.recipeId}|${meal.tastyTarget}`;if(!grouped[key])grouped[key]=Object.assign({count:0},meal);grouped[key].count++;});
         const audit={version:'ideal-global-resource-v2.3-shared-core',generatedAt:new Date().toISOString(),model:'deterministic_global_shared_resource_dynamic_team',settings:Object.assign({},state),initialStock:{source:prep.source,nextWeekType:prep.nextWeekType||'',used:prep.used||0,items:prep.stock},assumptions:['奶妈按选择固定整个剩余周期；其食材与技能进入同一个资源池','其余个体没有常驻身份：食材、开锅、爆锅与树果收益共同竞争动态站场工时','扩锅与爆锅只按主技能识别，不限制专长类型；食材型、树果型和技能型均可承担功能位','同一站场小时同时产生树果、食材、扩锅与爆锅，不重复计时','萌绿之岛 EX 按主果间隔×0.90、另外两果×1.00、非三果×1.15统一修正树果、食材与技能产出','爆锅在暴击后才清零；未暴击保留，下一餐只补到目标累计','所有剩余餐次共同消耗食材和技能资源；平日与周日同时比较','不强制吃满；即使某种食材单独效率低，只要整顿料理提高总能量就会安排生产','料理暴击采用期望值，工时可连续切分；结果是确定性的理想模型','当前采用全局增量选择＋替换改良，并对三种资源分配顺序取最好结果','树果爆发已估算；其他复杂直接能量技能仍待逐类补全'],healer:healer?rowAudit(healer):null,roster:rows.map(rowAudit),candidateCounts:{weekday:week.options.length,sunday:sun.options.length},excluded:[...week.rejected,...sun.rejected],selectedMeals:finalPlan,selectedGroups:Object.values(grouped),decisions:optimized.decisions,allocation:solution.allocations,demand:solution.demand,supply:solution.supply,requiredWorkerHours:solution.requiredHours,totalWorkerHours:solution.totalHours,summary:{weekdayMeals:optimized.weekdayCount,sundayMeals:optimized.sundayCount,skippedMeals:(Number(state.weekdayMeals)||0)+(Number(state.sundayMeals)||0)-optimized.plan.length,cookingEnergy:solution.cookingEnergy,directEnergy:solution.directEnergy,totalExpectedEnergy:solution.totalExpectedEnergy}};
-        audit.version='ideal-chronological-multi-output-v2.7';audit.model='deterministic_theoretical_chronological_multi_output_optimizer';
+        audit.version='ideal-chronological-multi-output-v2.8';audit.model='deterministic_theoretical_chronological_multi_output_optimizer';
         audit.skillCycles=solution.cycleSkillSchedule||[];
         audit.chronologicalFeasible=solution.chronologicalFeasible===true;
         audit.finalStock=solution.finalStock||{};
