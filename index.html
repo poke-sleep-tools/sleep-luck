@@ -26340,6 +26340,7 @@ async function calculateAndRenderWeeklyCooking() {
             weekTypes:{ [week]:(typeof mealPrepPlannerState!=='undefined'&&mealPrepPlannerState.nextWeekType!=='random'?mealPrepPlannerState.nextWeekType:'curry') },
             inventory:Object.fromEntries(LIVE_COOKING_INGREDIENTS.map(name=>[name,0])),
             visibleCritBonus:0,
+            currentTotalEnergy:0,
             basePot:Number(typeof weeklyCookingState!=='undefined'?weeklyCookingState.basePot:57)||57,
             currentPotBoost:Number(typeof weeklyCookingState!=='undefined'?weeklyCookingState.startingPotBoost:0)||0,
             goodCamp:!!(typeof weeklyCookingState!=='undefined'&&weeklyCookingState.goodCamp),
@@ -26359,6 +26360,7 @@ async function calculateAndRenderWeeklyCooking() {
         return {
             viewWeek, weekTypes, inventory,
             visibleCritBonus:liveCookingClamp(raw.visibleCritBonus,0,70),
+            currentTotalEnergy:Math.max(0,Math.min(999999999999,Math.floor(Number(raw.currentTotalEnergy)||0))),
             basePot:Math.max(1,Math.min(999,Math.floor(Number(raw.basePot??def.basePot)||def.basePot))),
             currentPotBoost:Math.max(0,Math.min(999,Math.floor(Number(raw.currentPotBoost??raw.startingPotBoost??def.currentPotBoost)||0))),
             goodCamp:raw.goodCamp===true,
@@ -26637,6 +26639,35 @@ async function calculateAndRenderWeeklyCooking() {
         }).join('');
         return `<div class="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm"><div class="live-cooking-grid bg-amber-50"><div></div>${LIVE_COOKING_SLOTS.map(slot=>`<div class="py-2 text-center text-[10px] font-black text-slate-700">${slot.icon} ${slot.label}</div>`).join('')}${rows}</div></div>`;
     }
+    function buildLiveCookingNearTermAdvice(plan){
+        const global=plan?.global,audit=global?.audit||{},periodHours=Math.max(1,Number(audit.settings?.periodHours)||(global?.plans?.length||1)*8),windowHours=Math.min(4,periodHours);
+        const first=global?.plans?.find(item=>!item.skipped),needed=new Set(Object.keys(first?.meal?.ingredients||{}));
+        const ranked=(global?.allocations||[]).map(item=>{
+            const role=String(item.role||''),hours=Math.max(0,Number(item.hours)||0),foods=Object.entries(item.ingredients||{}).filter(([,value])=>Number(value)>0);
+            const firstFood=foods.reduce((sum,[name,value])=>sum+(needed.has(name)?Number(value):0),0);
+            let urgency=(role.includes('奶妈')?100000:0)+(firstFood>0?50000+firstFood:0)+(first?.requiredNewPot&&Number(item.potBoost)>0?40000:0)+(Number(item.tastyBoost)>0?15000:0)+hours;
+            return {...item,hours,foods,urgency};
+        }).filter(item=>item.hours>0.001).sort((a,b)=>b.urgency-a.urgency||b.hours-a.hours);
+        const lanes=Array.from({length:5},(_,index)=>({index,start:0,segments:[]})),members=[];
+        ranked.forEach(item=>{
+            const lane=[...lanes].sort((a,b)=>(windowHours-a.start)-(windowHours-b.start))[0];
+            if(!lane||lane.start>=windowHours-0.001)return;
+            const startHour=lane.start,activeHours=Math.min(windowHours-startHour,item.hours),factor=item.hours>0?activeHours/item.hours:0;
+            const ingredients=Object.fromEntries(item.foods.map(([name,value])=>[name,Number(value)*factor]));
+            const segment={lane:lane.index+1,startHour,endHour:startHour+activeHours,nickname:item.nickname||item.species,species:item.species,role:item.role,activeHours,windowHours,ingredients,directEnergy:Number(item.directEnergy||0)*factor,tastyBoost:Number(item.tastyBoost||0)*factor,potBoost:Number(item.potBoost||0)*factor};
+            lane.segments.push(segment);lane.start+=activeHours;members.push(segment);
+        });
+        const totals={ingredients:{},directEnergy:0,tastyBoost:0,potBoost:0};
+        members.forEach(item=>{Object.entries(item.ingredients).forEach(([name,value])=>totals.ingredients[name]=(totals.ingredients[name]||0)+value);totals.directEnergy+=item.directEnergy;totals.tastyBoost+=item.tastyBoost;totals.potBoost+=item.potBoost;});
+        return {windowHours,members,lanes:lanes.map(lane=>({lane:lane.index+1,segments:lane.segments})),totals};
+    }
+    function renderLiveCookingNearTermAdvice(plan){
+        const advice=buildLiveCookingNearTermAdvice(plan);
+        if(!advice.members.length)return '';
+        const rows=advice.members.map(item=>{const food=Object.entries(item.ingredients).filter(([,value])=>value>0.01).map(([name,value])=>`${name}${value.toFixed(1)}`).join('、')||'无显著食材';const effects=[`食材 ${food}`,item.directEnergy>0.5?`直接能量约${liveCookingFormatNumber(item.directEnergy)}`:'',item.tastyBoost>0.05?`爆锅约+${item.tastyBoost.toFixed(1)}%`:'',item.potBoost>0.05?`扩锅约${item.potBoost.toFixed(1)}格`:''].filter(Boolean).join(' · ');return `<div class="rounded-xl border border-indigo-100 bg-white p-2"><div class="flex items-start justify-between gap-2"><div><div class="text-[10px] font-black text-slate-800">第${item.lane}格 · ${liveCookingEscape(item.nickname)} <span class="text-[8px] text-indigo-600">${liveCookingEscape(item.role)}</span></div><div class="mt-1 text-[8px] font-bold text-slate-500">${liveCookingEscape(effects)}</div></div><div class="shrink-0 text-right text-[10px] font-black text-indigo-700">第${item.startHour.toFixed(1)}－${item.endHour.toFixed(1)}h${item.endHour<advice.windowHours-0.01?'<div class="text-[7px] text-amber-600">随后换下</div>':''}</div></div></div>`;}).join('');
+        const totalFood=Object.entries(advice.totals.ingredients).filter(([,value])=>value>0.01).map(([name,value])=>`${name}${value.toFixed(1)}`).join('、')||'无显著食材';
+        return `<details open class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-3"><summary class="cursor-pointer text-xs font-black text-indigo-900">接下来${advice.windowHours.toFixed(0)}小时建议队伍与预期效果</summary><div class="mt-2 text-[8px] font-bold leading-relaxed text-indigo-700">这是全局最优工时方案的第一段执行切片；窗口结束后应按届时库存、暴击与扩锅状态重新续算，不把当前5只永久锁死。</div><div class="mt-3 grid gap-2 sm:grid-cols-2">${rows}</div><div class="mt-3 rounded-xl bg-white p-2 text-[8px] font-bold leading-relaxed text-slate-600">合计预计：${liveCookingEscape(totalFood)} · 树果／直接能量约${liveCookingFormatNumber(advice.totals.directEnergy)}${advice.totals.tastyBoost>0.05?` · 爆锅约+${advice.totals.tastyBoost.toFixed(1)}%`:''}${advice.totals.potBoost>0.05?` · 扩锅约${advice.totals.potBoost.toFixed(1)}格`:''}</div></details>`;
+    }
     function renderLiveCookingSharedCorePlan(plan){
         const global=plan.global, first=global.plans[0], audit=global.audit, periodHours=Math.max(1,Number(audit.settings?.periodHours)||(global.plans.length*8)), access=getLiveCookingSlotAccess(liveCookingState.viewWeek,plan.next);
         const accessText=access.available?`当前可通过${access.label}进入该餐位`:(access.waitHours?`约${access.waitHours<1?Math.round(access.waitHours*60)+'分钟':access.waitHours.toFixed(1)+'小时'}后进入可用时区窗口`:'当前时区窗口暂不可达');
@@ -26696,6 +26727,15 @@ async function calculateAndRenderWeeklyCooking() {
             if(islandLabel)islandLabel.innerHTML=`<span class="text-[9px] font-black text-violet-800">当前已累计扩锅</span><div class="mt-1 flex items-center gap-1"><span class="text-sm font-black">+</span><input type="number" min="0" max="999" value="${liveCookingState.currentPotBoost}" onchange="updateLiveCookingSetting('currentPotBoost',this.value)" class="w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-black"><span class="text-[9px] font-black">格</span></div><span class="mt-1 block text-[8px] font-bold text-violet-500">例如当前显示72+62，就填写62；仅作为下一顿的现有扩锅</span>`;
             const recipeLabel=[...settingsSection.querySelectorAll('label')].find(label=>label.textContent.includes('统一食谱等级'));
             if(recipeLabel)recipeLabel.outerHTML=`<div class="rounded-xl bg-white p-2"><div class="text-[9px] font-black text-violet-800">食谱等级</div><div class="mt-1 text-[10px] font-black text-slate-700">沿用“食谱×Box适配度／理论最优策略”中保存的各食谱等级</div><div class="mt-1 text-[8px] font-bold text-violet-500">实时续算不再维护另一套统一等级</div></div>`;
+            const critLabel=[...settingsSection.querySelectorAll('label')].find(label=>label.textContent.includes('当前显示的技能暴击加成'));
+            const settingGrid=critLabel?.parentElement;
+            if(settingGrid)settingGrid.insertAdjacentHTML('beforeend',`<label><span class="text-[9px] font-black text-violet-800">当前卡比兽总能量</span><input type="number" min="0" max="999999999999" value="${liveCookingState.currentTotalEnergy||0}" onchange="updateLiveCookingSetting('currentTotalEnergy',this.value)" class="mt-1 w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-black"><span class="mt-1 block text-[8px] font-bold text-violet-500">预计最终＝当前总能量＋剩余周期期望增量</span></label>`);
+        }
+        const adviceSection=[...modal.querySelectorAll('#live-cooking-scroll-body section')].find(section=>section.querySelector('h3')?.textContent.includes('从现在开始'));
+        const adviceHeading=adviceSection?.querySelector('h3');
+        if(adviceHeading&&liveCookingPlan?.global?.source==='ideal-shared-core'){
+            const remaining=Math.max(0,Number(liveCookingPlan.global.score)||0),current=Math.max(0,Number(liveCookingState.currentTotalEnergy)||0),finalEnergy=current+remaining;
+            adviceHeading.insertAdjacentHTML('afterend',`<div class="mb-3 grid grid-cols-[1fr_auto] gap-2"><div class="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-3"><div class="text-[8px] font-black text-violet-500">预计本周最终总能量</div><div class="mt-1 text-xl font-black text-violet-900">${current>0?liveCookingFormatNumber(finalEnergy):'请填写当前总能量'}</div><div class="mt-1 text-[8px] font-bold text-violet-600">${current>0?`${liveCookingFormatNumber(current)} ＋ 剩余期望 ${liveCookingFormatNumber(remaining)}`:`剩余周期预计增加 ${liveCookingFormatNumber(remaining)}`}</div></div><button onclick="exportLiveCookingAudit()" class="rounded-2xl bg-slate-900 px-3 py-2 text-[10px] font-black text-white shadow-sm hover:bg-slate-700"><i class="fa-solid fa-file-export"></i><br>导出详细<br>自检数据</button></div>${renderLiveCookingNearTermAdvice(liveCookingPlan)}`);
         }
     }
     function rerenderLiveCookingPreserveScroll(){
@@ -26728,6 +26768,28 @@ async function calculateAndRenderWeeklyCooking() {
     window.updateLiveCookingFavoriteBerry=function(index,value){liveCookingState.favoriteBerries[index]=Math.max(0,Math.min(18,Number(value)||0));saveLiveCookingState();rerenderLiveCookingPreserveScroll();};
     window.updateLiveCookingSetting=function(field,value){if(['goodCamp','cookingBoost'].includes(field))liveCookingState[field]=!!value;else liveCookingState[field]=Number(value)||0;saveLiveCookingState();rerenderLiveCookingPreserveScroll();};
     window.updateLiveCookingInventory=function(name,value){liveCookingState.inventory[liveCookingCanonical(name)]=Math.max(0,Math.floor(Number(value)||0));saveLiveCookingState();liveCookingPlan=buildLiveCookingPlan();if(document.getElementById('live-cooking-planner-modal'))rerenderLiveCookingPreserveScroll();};
+    window.exportLiveCookingAudit=function(){
+        try{
+            const plan=liveCookingPlan||buildLiveCookingPlan(),global=plan?.global;
+            if(!global?.audit)throw new Error('当前还没有可导出的理论续算结果');
+            const audit=global.audit,records=getLiveCookingWeekRecords(liveCookingState.viewWeek),currentEnergy=Math.max(0,Number(liveCookingState.currentTotalEnergy)||0),remainingExpected=Math.max(0,Number(global.score)||0);
+            const allocationHours=(global.allocations||[]).reduce((sum,item)=>sum+Number(item.hours||0),0),periodHours=Math.max(1,Number(audit.settings?.periodHours)||(global.plans?.length||1)*8),nearTerm=buildLiveCookingNearTermAdvice(plan);
+            const payload={
+                format:'poke-sleep-tools-live-cooking-audit',version:1,generatedAt:new Date().toISOString(),
+                purpose:'供实时料理规划逐项复核；包含原始输入、已记录餐位、理论最优策略续算原始结果、逐餐输出、站场工时与近期执行切片。',
+                week:{weekStart:liveCookingState.viewWeek,type:getLiveCookingWeekType(liveCookingState.viewWeek),recordedMeals:records},
+                inputs:{state:JSON.parse(JSON.stringify(liveCookingState)),selectedIsland:liveCookingState.selectedIsland,islandBonus:typeof getLiveCookingIslandBonus==='function'?getLiveCookingIslandBonus():0,favoriteBerries:[...(liveCookingState.favoriteBerries||[])],inventory:{...(liveCookingState.inventory||{})}},
+                energySummary:{currentTotalEnergy:currentEnergy,recordedCookingEnergy:records.filter(item=>!item.skipped).reduce((sum,item)=>sum+Number(item.energy||0),0),remainingExpectedCookingEnergy:Number(global.cookingScore||0),remainingExpectedDirectEnergy:Number(global.directScore||0),remainingExpectedIncrease:remainingExpected,expectedFinalTotalEnergy:currentEnergy+remainingExpected},
+                continuation:{source:global.source,nextSlot:plan.next,periodHours,plannedMeals:(global.plans||[]).filter(item=>!item.skipped).length,skippedMeals:Number(global.skips||0),plans:(global.plans||[]).map(item=>({slot:item.slot,slotLabel:liveCookingSlotLabel(item.slot),skipped:!!item.skipped,recipe:item.meal?.recipe||'',ingredients:item.meal?.ingredients||{},baseEnergy:Number(item.meal?.baseEnergy||0),expectedEnergy:Number(item.expectedEnergy||0),visibleCritChance:Number(item.visibleCritChance||0),actualCritChance:Number(item.actualCritChance||0),expectedNewBoost:Number(item.expectedNewBoost||0),requiredNewPot:Number(item.requiredNewPot||0)})),allocations:global.allocations||[],nearTerm},
+                consistencyChecks:{allocationHours,teamCapacityHours:periodHours*5,allocationUtilizationPercent:periodHours>0?allocationHours/(periodHours*5)*100:0,demand:audit.demand||{},supply:audit.supply||{},shortage:audit.shortage||{},scoreFromParts:Number(global.cookingScore||0)+Number(global.directScore||0),reportedRemainingScore:remainingExpected},
+                rawTheoryAudit:audit,
+                modelNotes:['当前总能量仅用于预计最终总能量，不参与队伍优化。','预计最终总能量＝当前总能量＋从下一未完成餐位开始的料理与树果／直接能量期望。','近期4小时队伍是全局工时解的第一段执行建议，库存、暴击或扩锅变化后需重新续算。','暴击采用期望值和状态分布，不代表某次实际一定暴击。']
+            };
+            const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');
+            anchor.href=url;anchor.download=`实时料理规划自检-${liveCookingState.viewWeek}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+            if(typeof showToast==='function')showToast('详细自检数据已导出');
+        }catch(error){console.error(error);if(typeof showToast==='function')showToast(`导出失败：${error?.message||error}`);else alert(`导出失败：${error?.message||error}`);}
+    };
 
     window.openLiveCookingMealEditor=function(slotIndex){
         const week=liveCookingState.viewWeek,index=Math.max(0,Math.min(20,Number(slotIndex)||0)),existing=getLiveCookingRecord(week,index),type=existing?.mealType||getLiveCookingWeekType(week),meals=getLiveCookingMeals(type),currentId=existing?.mealId||0;
