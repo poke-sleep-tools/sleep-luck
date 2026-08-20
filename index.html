@@ -25981,6 +25981,7 @@ async function calculateAndRenderWeeklyCooking() {
             return {rows,healer,recipes:selected,results};
         },
         recipes,
+        energy(recipe){loadState();return recipeEnergy(recipe);},
         roster(){loadState();return roster();}
     };
     window.openRecipeBoxFitModal=function(){loadState();renderModal();};
@@ -26092,20 +26093,22 @@ async function calculateAndRenderWeeklyCooking() {
         try{if(typeof weeklyCookingState!=='undefined'){if(prevIsland!=null)weeklyCookingState.selectedIsland=prevIsland;if(prevBonus==null)delete weeklyCookingState.islandBonuses[state.island];else weeklyCookingState.islandBonuses[state.island]=prevBonus;}}catch(_){}
         return out;
     }
-    function makeMealOptions(dayKind,analysis,rows){
+    function makeMealOptions(dayKind,analysis,rows,initialStock={}){
         const options=[],rejected=[];
         const hasTasty=rows.some(row=>row.skill?.key==='tasty'&&row.triggersPerHour>0);
         const potSize=(Number(state.basePot)||0)*(state.goodCamp?1.5:1);
         analysis.results.forEach(result=>{
-            if(!result?.feasible){rejected.push({dayKind,recipe:result?.recipe?.name||'未知料理',reason:result?.excluded?'box_zero_ingredient':'infeasible',missing:result?.missing||[]});return;}
-            const normal=Number(result.energy?.normal)||Number(result.alternatives?.[0]?.energy?.normal)||0;
+            const stockCovered=!!result?.excluded&&Array.isArray(result?.recipe?.ingredients)&&(result.missing||[]).every(name=>{const key=typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(name):name,need=result.recipe.ingredients.find(item=>(typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(item.name):item.name)===key)?.amount||0;return (Number(initialStock[key])||0)>=need;});
+            if(!result?.feasible&&!stockCovered){rejected.push({dayKind,recipe:result?.recipe?.name||'未知料理',reason:result?.excluded?'box_zero_ingredient':'infeasible',missing:result?.missing||[]});return;}
+            const fallbackEnergy=stockCovered?window.__recipeBoxFitApi?.energy?.(result.recipe):null;
+            const normal=Number(result.energy?.normal)||Number(result.alternatives?.[0]?.energy?.normal)||Number(fallbackEnergy?.normal)||0;
             if(!normal)return;
             const ingredients=Object.fromEntries(result.recipe.ingredients.map(item=>[item.name,Number(item.amount)||0]));
             const total=Object.values(ingredients).reduce((a,b)=>a+b,0);
             const maxTier=hasTasty?7:0;
             for(let tier=0;tier<=maxTier;tier++){
                 const visible=tier*10,actual=Math.min(100,(dayKind==='sunday'?30:10)+visible),critExtra=dayKind==='sunday'?2:1;
-                options.push({dayKind,recipeId:result.recipe.id,recipe:result.recipe.name,tastyTarget:tier,tastyDemand:visible,potDemand:Math.max(0,total-potSize),ingredients,normalCookingEnergy:normal,actualCritChance:actual,visibleCritChance:visible,expectedCookingEnergy:normal*(1+critExtra*actual/100)});
+                options.push({dayKind,recipeId:result.recipe.id,recipe:result.recipe.name,tastyTarget:tier,tastyDemand:visible,potDemand:Math.max(0,total-potSize),ingredients,normalCookingEnergy:normal,actualCritChance:actual,visibleCritChance:visible,expectedCookingEnergy:normal*(1+critExtra*actual/100),stockOnly:stockCovered});
             }
         });
         return {options,rejected};
@@ -26256,12 +26259,14 @@ async function calculateAndRenderWeeklyCooking() {
             // 餐档替换搜索会选择更高 tastyTarget，并在这里得到真实可用的站场空间。
             // 餐单和暴击目标已经锁定后，还会另跑一次 eagerPrep 精修方案：它允许把未来确定会
             // 消耗的食材前移，以便将来的高能量个体多站场；最终只在整周总能量确实更高时采用。
-            if(eagerPrep){
+            const eagerPrepFraction=Math.max(0,Math.min(1,Number(typeof eagerPrep==='object'?eagerPrep.fraction:eagerPrep)||0)),eagerPrepOnly=typeof eagerPrep==='object'?(eagerPrep.onlyKey||''):'';
+            if(eagerPrepFraction>0){
+                const prepRemaining=Object.fromEntries(Object.entries(remainingTotal()).map(([key,value])=>[key,eagerPrepOnly&&key!==eagerPrepOnly?0:Math.max(0,Number(value)||0)*eagerPrepFraction]));
                 guard=0;
                 while(guard++<800&&cycleUsed<capacity-0.0001){
-                    const futureDef=remainingTotal();if(ingredientKeys.every(key=>futureDef[key]<=.001))break;let best=null;
+                    const futureDef=prepRemaining;if(ingredientKeys.every(key=>futureDef[key]<=.001))break;let best=null;
                     nonHealer.forEach(row=>{const available=Math.min(duration-(cycleHours[row.id]||0),horizon-(hours[row.id]||0),capacity-cycleUsed);if(available<=.0001)return;const skillKey=row.skill?.key==='pot'?'__pot':row.skill?.key==='tasty'?'__tasty':'',skillRate=skillKey?resourceRate(row,skillKey):0,skillNeed=skillKey==='__pot'?Math.max(0,Number(cycle.potDemand||0)-localPot):skillKey==='__tasty'?Math.max(0,Number(cycle.tastyDemand||0)-localTasty):0;if(skillRate>0&&skillNeed<=.001)return;let coverage=0;ingredientKeys.forEach(key=>{if(futureDef[key]>0)coverage+=Math.min(resourceRate(row,key),futureDef[key])/Math.max(1,demand[key]);});if(coverage<=0)return;const loss=Math.max(0,topEnergy-(Number(row.directEnergyPerHour)||0)),score=coverage/(1+loss/(mode===0?700:mode===1?1800:3600));if(!best||score>best.score)best={row,available,score};});
-                    if(!best)break;const times=ingredientKeys.map(key=>{const rate=resourceRate(best.row,key);return rate>0&&futureDef[key]>0?futureDef[key]/rate:Infinity;}).filter(Number.isFinite);if(!times.length)break;addEntry(best.row,Math.min(best.available,Math.max(.05,Math.min(...times))),'收益精修：提前准备后续餐食材');
+                    if(!best)break;const times=ingredientKeys.map(key=>{const rate=resourceRate(best.row,key);return rate>0&&futureDef[key]>0?futureDef[key]/rate:Infinity;}).filter(Number.isFinite);if(!times.length)break;const step=Math.min(best.available,Math.max(.05,Math.min(...times)));addEntry(best.row,step,'收益精修：提前准备后续餐食材');ingredientKeys.forEach(key=>prepRemaining[key]=Math.max(0,(prepRemaining[key]||0)-resourceRate(best.row,key)*step));
                 }
             }
             // 所有赶截止时间所必需的食材安排完后，用真正剩余的位置补直接能量。
@@ -26305,44 +26310,70 @@ async function calculateAndRenderWeeklyCooking() {
         let plan=[],solution=solveAllocation(plan,rows,healer,initialStock),weekdayCount=0,sundayCount=0;
         const maxWeek=Math.max(0,Math.min(18,Number(state.weekdayMeals)||0)),maxSun=Math.max(0,Math.min(3,Number(state.sundayMeals)||0));
         const decisions=[];
+        // 每道菜至少保留一个“不额外等待暴击”的版本，再补充少量高能量／高工时效率版本。
+        // 这样不会漏掉可由副产物直接做出的冷门小菜，也避免对同一道菜的八档暴击目标反复
+        // 进行完整周计算。餐位布局只在最终方案上搜索一次。
+        const allOptions=[...weekdayOptions,...sundayOptions],maxResourceRate=key=>Math.max(.000001,...rows.filter(row=>row.id!==healer?.id).map(row=>resourceRate(row,key))),roughCost=option=>Object.entries(option.ingredients||{}).reduce((sum,[key,value])=>sum+Number(value||0)/maxResourceRate(key),0)+Number(option.potDemand||0)/maxResourceRate('__pot')+Number(option.tastyDemand||0)/maxResourceRate('__tasty');
+        const compactOptions=[];['weekday','sunday'].forEach(kind=>{const source=allOptions.filter(option=>option.dayKind===kind),zeroTier=[...source].filter(option=>Number(option.tastyTarget)===0).sort((a,b)=>Object.values(a.ingredients||{}).reduce((s,v)=>s+Number(v||0),0)-Object.values(b.ingredients||{}).reduce((s,v)=>s+Number(v||0),0)),picked=[...source].sort((a,b)=>b.expectedCookingEnergy-a.expectedCookingEnergy).slice(0,3).concat([...source].sort((a,b)=>(b.expectedCookingEnergy/(1+roughCost(b)))-(a.expectedCookingEnergy/(1+roughCost(a)))).slice(0,3),zeroTier);const seen=new Set();picked.forEach(option=>{const key=`${option.dayKind}:${option.recipeId}:${option.tastyTarget}`;if(!seen.has(key)){seen.add(key);compactOptions.push(option);}});});
         for(let step=0;step<maxWeek+maxSun;step++){
             let best=null;
-            const pool=[...(weekdayCount<maxWeek?weekdayOptions:[]),...(sundayCount<maxSun?sundayOptions:[])];
-            pool.forEach(option=>{const next=[...plan,option],sunCount=next.filter(item=>item.dayKind==='sunday').length,trial=solveAllocationForDecision(next,rows,healer,initialStock,option.dayKind==='sunday'&&sunCount>1);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(!best||gain>best.gain)best={option,trial,gain};});
+            const pool=compactOptions.filter(option=>(option.dayKind==='weekday'?weekdayCount<maxWeek:sundayCount<maxSun));
+            pool.forEach(option=>{const next=[...plan,option],trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(!best||gain>best.gain)best={option,trial,gain};});
             if(!best||best.gain<=0.01)break;
             plan.push(best.option);solution=best.trial;if(best.option.dayKind==='sunday')sundayCount++;else weekdayCount++;decisions.push({step:step+1,action:'add',meal:best.option,gain:best.gain,total:solution.totalExpectedEnergy});
         }
         // 跨平日／周日替换改良：资源满时仍会主动比较“少吃一顿平日、换成周日餐”。
         for(let pass=0;pass<5;pass++){
             let bestSwap=null;
-            plan.forEach((old,index)=>{const pool=[...weekdayOptions,...sundayOptions];pool.forEach(option=>{const next=[...plan];next[index]=option;const wc=next.filter(item=>item.dayKind==='weekday').length,sc=next.length-wc;if(wc>maxWeek||sc>maxSun)return;const trial=solveAllocationForDecision(next,rows,healer,initialStock,option.dayKind!==old.dayKind||sc>1);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option,trial,gain};});const removed=plan.filter((_,i)=>i!==index),removeTrial=solveAllocation(removed,rows,healer,initialStock),gain=removeTrial.feasible?removeTrial.totalExpectedEnergy-solution.totalExpectedEnergy:-Infinity;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option:null,trial:removeTrial,gain};});
+            plan.forEach((old,index)=>{compactOptions.forEach(option=>{const next=[...plan];next[index]=option;const wc=next.filter(item=>item.dayKind==='weekday').length,sc=next.length-wc;if(wc>maxWeek||sc>maxSun)return;const trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option,trial,gain};});const removed=plan.filter((_,i)=>i!==index),removeTrial=solveAllocation(removed,rows,healer,initialStock),gain=removeTrial.feasible?removeTrial.totalExpectedEnergy-solution.totalExpectedEnergy:-Infinity;if(gain>0.01&&(!bestSwap||gain>bestSwap.gain))bestSwap={index,old,option:null,trial:removeTrial,gain};});
             if(!bestSwap)break;
             if(bestSwap.option)plan[bestSwap.index]=bestSwap.option;else plan.splice(bestSwap.index,1);
             solution=bestSwap.trial;decisions.push({action:bestSwap.option?'replace':'remove',old:bestSwap.old,new:bestSwap.option,gain:bestSwap.gain,total:solution.totalExpectedEnergy});
+        }
+        // 一换二邻域：单纯的一顿换一顿无法发现“少一顿大菜，改吃两顿小菜”更高分的组合。
+        // 为控制耗时，只保留能量最高、粗略工时效率最高和食材量最小的代表候选；先找移除后
+        // 最好的第一顿，再尝试补入第二顿。它不是强制多吃，只有总能量严格提高才接受。
+        let bestPair=null;
+        plan.forEach((old,index)=>{
+            const removed=plan.filter((_,i)=>i!==index);let firstBest=null;
+            compactOptions.forEach(first=>{const next=[...removed,first],wc=next.filter(item=>item.dayKind==='weekday').length,sc=next.length-wc;if(wc>maxWeek||sc>maxSun)return;const trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;if(!firstBest||trial.totalExpectedEnergy>firstBest.trial.totalExpectedEnergy)firstBest={first,plan:next,trial};});
+            if(!firstBest)return;
+            compactOptions.forEach(second=>{const next=[...firstBest.plan,second],wc=next.filter(item=>item.dayKind==='weekday').length,sc=next.length-wc;if(wc>maxWeek||sc>maxSun)return;const trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(gain>0.01&&(!bestPair||gain>bestPair.gain))bestPair={old,first:firstBest.first,second,plan:next,trial,gain};});
+        });
+        if(bestPair){plan=bestPair.plan;solution=bestPair.trial;decisions.push({action:'replace_one_with_two',old:bestPair.old,new:[bestPair.first,bestPair.second],gain:bestPair.gain,total:solution.totalExpectedEnergy});}
+        // 用功能位和主菜生产附带留下的库存补空餐位。这里重新尝试低暴击、低食材量的小菜，
+        // 其成本由当前整份计划的真实库存增量决定；若食材已经是附赠余量，新增料理几乎不占工时。
+        for(let pass=0;pass<4;pass++){
+            let bestExtra=null;
+            compactOptions.forEach(option=>{const next=[...plan,option],wc=next.filter(item=>item.dayKind==='weekday').length,sc=next.length-wc;if(wc>maxWeek||sc>maxSun)return;const trial=solveAllocation(next,rows,healer,initialStock);if(!trial.feasible)return;const gain=trial.totalExpectedEnergy-solution.totalExpectedEnergy;if(gain>0.01&&(!bestExtra||gain>bestExtra.gain))bestExtra={option,plan:next,trial,gain};});
+            if(!bestExtra)break;plan=bestExtra.plan;solution=bestExtra.trial;decisions.push({action:'fill_skipped_slot_with_surplus_meal',meal:bestExtra.option,gain:bestExtra.gain,total:solution.totalExpectedEnergy});
         }
         // 餐数与菜式确定后，再比较多种合法餐位布局；不再把“均匀隔一顿吃”当成固定答案。
         const scheduledSolution=solveAllocationWithScheduleSearch(plan,rows,healer,initialStock);if(scheduledSolution.feasible){const gain=scheduledSolution.totalExpectedEnergy-solution.totalExpectedEnergy;solution=scheduledSolution;decisions.push({action:'schedule_search',variants:scheduleIdealMealVariants(plan).length,gain,total:solution.totalExpectedEnergy});}
         // 第二阶段不再改变餐数、菜式或暴击目标，只比较是否值得把确定会用的食材提前生产，
         // 从而释放未来位置给更高能量个体。精修方案必须严格提高整周总能量才会采用。
-        const prepRefined=solveAllocationWithScheduleSearch(plan,rows,healer,initialStock,true);if(prepRefined.feasible&&prepRefined.totalExpectedEnergy>solution.totalExpectedEnergy+0.01){const gain=prepRefined.totalExpectedEnergy-solution.totalExpectedEnergy;solution=prepRefined;decisions.push({action:'energy_aware_prep_refine',gain,total:solution.totalExpectedEnergy});}
+        const fixedSchedule=solution.scheduledPlan||scheduleIdealMeals(plan),prepTrials=[],refineKeys=[...new Set(plan.flatMap(meal=>Object.keys(meal.ingredients||{})))],refineMode=Number.isFinite(solution.mode)?solution.mode:0;
+        [0.25,0.5,1].forEach(fraction=>['',...refineKeys].forEach(onlyKey=>{const trial=solveAllocationOnce(plan,rows,healer,refineMode,initialStock,fixedSchedule,{fraction,onlyKey});if(trial.feasible)prepTrials.push({fraction,onlyKey,trial});}));
+        prepTrials.sort((a,b)=>b.trial.totalExpectedEnergy-a.trial.totalExpectedEnergy);const prepRefined=prepTrials[0];if(prepRefined&&prepRefined.trial.totalExpectedEnergy>solution.totalExpectedEnergy+0.01){const gain=prepRefined.trial.totalExpectedEnergy-solution.totalExpectedEnergy;solution=prepRefined.trial;decisions.push({action:'energy_aware_prep_refine',fraction:prepRefined.fraction,gain,total:solution.totalExpectedEnergy});}
         return {plan,solution,decisions,weekdayCount:plan.filter(x=>x.dayKind==='weekday').length,sundayCount:plan.filter(x=>x.dayKind==='sunday').length};
     }
     function buildIdealStrategyAudit(options={}){
         const weekday=apiRun('weekday'),sunday=apiRun('sunday'),rows=decorateRows(weekday.rows||[]),byId=new Map(rows.map(row=>[row.id,row])),healer=weekday.healer?byId.get(weekday.healer.id):null;
         const prep=options.initialStock?{ok:true,stock:{...options.initialStock},source:options.source||'current_state',nextWeekType:''}:getImportedMealPrepStock();if(!prep.ok)throw new Error(`无法导入备料建议：${prep.reason}`);
-        const week=makeMealOptions('weekday',weekday,rows),sun=makeMealOptions('sunday',sunday,rows),optimized=optimizeMeals(week.options,sun.options,rows,healer,prep.stock),solution=optimized.solution,finalPlan=solution.scheduledPlan||scheduleIdealMeals(optimized.plan);
+        const week=makeMealOptions('weekday',weekday,rows,prep.stock),sun=makeMealOptions('sunday',sunday,rows,prep.stock),optimized=optimizeMeals(week.options,sun.options,rows,healer,prep.stock),solution=optimized.solution,finalPlan=solution.scheduledPlan||scheduleIdealMeals(optimized.plan);
         const grouped={};finalPlan.forEach(meal=>{const key=`${meal.dayKind}|${meal.recipeId}|${meal.tastyTarget}`;if(!grouped[key])grouped[key]=Object.assign({count:0},meal);grouped[key].count++;});
         const audit={version:'ideal-global-resource-v2.3-shared-core',generatedAt:new Date().toISOString(),model:'deterministic_global_shared_resource_dynamic_team',settings:Object.assign({},state),initialStock:{source:prep.source,nextWeekType:prep.nextWeekType||'',used:prep.used||0,items:prep.stock},assumptions:['奶妈按选择固定整个剩余周期；其食材与技能进入同一个资源池','其余个体没有常驻身份：食材、开锅、爆锅与树果收益共同竞争动态站场工时','扩锅与爆锅只按主技能识别，不限制专长类型；食材型、树果型和技能型均可承担功能位','同一站场小时同时产生树果、食材、扩锅与爆锅，不重复计时','萌绿之岛 EX 按主果间隔×0.90、另外两果×1.00、非三果×1.15统一修正树果、食材与技能产出','爆锅在暴击后才清零；未暴击保留，下一餐只补到目标累计','所有剩余餐次共同消耗食材和技能资源；平日与周日同时比较','不强制吃满；即使某种食材单独效率低，只要整顿料理提高总能量就会安排生产','料理暴击采用期望值，工时可连续切分；结果是确定性的理想模型','当前采用全局增量选择＋替换改良，并对三种资源分配顺序取最好结果','树果爆发已估算；其他复杂直接能量技能仍待逐类补全'],healer:healer?rowAudit(healer):null,roster:rows.map(rowAudit),candidateCounts:{weekday:week.options.length,sunday:sun.options.length},excluded:[...week.rejected,...sun.rejected],selectedMeals:finalPlan,selectedGroups:Object.values(grouped),decisions:optimized.decisions,allocation:solution.allocations,demand:solution.demand,supply:solution.supply,requiredWorkerHours:solution.requiredHours,totalWorkerHours:solution.totalHours,summary:{weekdayMeals:optimized.weekdayCount,sundayMeals:optimized.sundayCount,skippedMeals:(Number(state.weekdayMeals)||0)+(Number(state.sundayMeals)||0)-optimized.plan.length,cookingEnergy:solution.cookingEnergy,directEnergy:solution.directEnergy,totalExpectedEnergy:solution.totalExpectedEnergy}};
-        audit.version='ideal-chronological-multi-output-v2.9';audit.model='deterministic_theoretical_chronological_multi_output_optimizer';
+        audit.version='ideal-chronological-multi-output-v3.0';audit.model='deterministic_theoretical_chronological_multi_output_optimizer';
         audit.skillCycles=solution.cycleSkillSchedule||[];
         audit.chronologicalFeasible=solution.chronologicalFeasible===true;
         audit.finalStock=solution.finalStock||{};
         audit.assumptions.push('爆锅与扩锅按逐餐周期独立结算：爆锅显示加成上限70%，扩锅上限为下一顿食谱缺口；达到上限后的额外触发不进入后续餐次库存');
         audit.assumptions.push('本模型使用确定性连续工时与暴击概率分布的数学期望，不进行随机抽样仿真');
-        audit.assumptions.push('当前餐满足后，剩余位置优先提前生产后续已选料理必定消耗且不会造成当前扩锅／爆锅溢出的食材；全部有效需求有保障后才以树果／直接能量补位');
+        audit.assumptions.push('当前餐满足后，会比较不同食材的分段提前备料比例；只有能严格提高整段总能量的提前生产才会采用，避免机械式备料挤掉高收益个体');
         audit.assumptions.push('逐餐按时间顺序验证库存：每顿开饭前必须已经实际拥有该食谱的全部食材，不能只用期末总产量倒推可行');
         audit.assumptions.push('食材、树果、扩锅和爆锅在同一站场小时同步结算；非技能型专长的扩锅／爆锅宝可梦也会贡献主技能');
         audit.assumptions.push('餐位布局会比较均匀、靠前、靠后与边界分布；平日和周日餐允许跨类型替换，不把初次贪心结果直接当作最终答案');
+        audit.assumptions.push('每道可做料理均保留零额外暴击候选；主菜生产与功能位附带留下的食材会尝试填入原本跳过的餐位，并比较一顿大菜换两顿小菜，只有整段总能量提高才采用');
         audit.assumptions.push('食材按各餐截止时间及时生产：只有后续最快产能也来不及时才会提前备料，避免新叶喵等复合个体在锅已足够的周期过早上场浪费主技能');
         if(state.deadlineHours)audit.assumptions.push('实时续算的每个餐位使用当前时刻到该餐最晚合法时区截止的实际小时数，不再统一按每餐8小时估算');
         audit.nightCapPikachu={...normalizeNightCapPikachuState(nightCapPikachuState),weeklyIngredients:getNightCapPikachuProductionForHours(getIdealPlanningHours())};
