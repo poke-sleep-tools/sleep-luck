@@ -1208,7 +1208,7 @@ function loadHistoryFromLocal() {
         encounterHistoryReady = true;
     }
 }
-function saveHistoryToLocal() {
+function saveHistoryToLocal(options = {}) {
     try {
         localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
     } catch (e) {
@@ -1218,7 +1218,7 @@ function saveHistoryToLocal() {
         }
         throw e;
     }
-    scheduleSaveHistoryToCloud();
+    if (options.syncCloud !== false) scheduleSaveHistoryToCloud();
 }
 
 
@@ -1541,7 +1541,7 @@ function saveBallPlannerStateToHistory(options = {}) {
     historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !isBallPlannerStateLog(item));
     historyLogs.push(log);
     historyLogs = mergeHistoryLogs([], historyLogs);
-    saveHistoryToLocal();
+    saveHistoryToLocal({ syncCloud: options.syncCloud !== false });
     updateBallPlannerButton();
     if (options.saveCloudNow && currentCloudUser) return syncBallPlannerStateWithCloud();
     return Promise.resolve({ ok: true, guest: !currentCloudUser });
@@ -1556,7 +1556,8 @@ function setBallPlannerSyncStatus(status, detail = '') {
         return;
     }
     const configs = {
-        syncing: ['border-sky-200 bg-sky-50 text-sky-700', 'fa-cloud-arrow-up fa-bounce', '正在同步账号数据，请暂时不要关闭网页'],
+        syncing: ['border-sky-200 bg-sky-50 text-sky-700', 'fa-cloud-arrow-up fa-bounce', detail || '正在同步账号数据，请暂时不要关闭网页'],
+        loaded: ['border-sky-200 bg-sky-50 text-sky-700', 'fa-cloud-arrow-down', detail || '已读取账号中的最新记录'],
         success: ['border-emerald-200 bg-emerald-50 text-emerald-700', 'fa-cloud-circle-check', '已同步到账号，手机和电脑会使用同一份记录'],
         error: ['border-amber-200 bg-amber-50 text-amber-700', 'fa-triangle-exclamation', detail || '账号同步失败，记录目前仅保存在本机']
     };
@@ -1583,6 +1584,34 @@ async function performBallPlannerCloudSync() {
         return { ok: false, error };
     } finally {
         ballPlannerSyncPending = false;
+    }
+}
+
+// 打开精灵球规划中心时只做“只读刷新”：立即展示本机数据，后台读取云端并合并。
+// 过去这里复用了完整保存流程，导致仅仅打开页面也要经历读取→整包上传→再次读取校验。
+async function refreshBallPlannerFromCloudReadOnly() {
+    if (!currentCloudUser) return { ok: true, guest: true, changed: false };
+    const userId = currentCloudUser.id;
+    try {
+        const { data, error } = await supabaseClient
+            .from('player_boxes')
+            .select('history_logs')
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (error) throw error;
+        if (!currentCloudUser || currentCloudUser.id !== userId) return { ok: false, staleUser: true };
+
+        const before = stableHistoryJson(ballPlannerState || {});
+        const remote = prepareEncounterStatisticsLogsForMerge(data && Array.isArray(data.history_logs) ? data.history_logs : []);
+        historyLogs = mergeHistoryLogs(remote, historyLogs);
+        const needsUpload = stableHistoryJson(mergeHistoryLogs([], remote)) !== stableHistoryJson(historyLogs);
+        saveHistoryToLocal({ syncCloud: false });
+        loadEncounterStatisticsFromHistory({ refresh: false });
+        loadBallPlannerStateFromHistory();
+        return { ok: true, guest: false, changed: before !== stableHistoryJson(ballPlannerState || {}), needsUpload };
+    } catch (error) {
+        console.error('精灵球规划后台读取失败：', error);
+        return { ok: false, error };
     }
 }
 
@@ -1675,7 +1704,7 @@ function syncResearchSessionDefaults(context, dateId, sessionId) {
     bonusInput.disabled = isSecondSleep;
 }
 
-function applyResearchBallUsageInventoryDelta(oldUsage, newUsage) {
+function applyResearchBallUsageInventoryDelta(oldUsage, newUsage, options = {}) {
     if (!isBallPlannerEnabled()) return;
     const oldU = normalizeResearchBallUsage(oldUsage || {});
     const newU = normalizeResearchBallUsage(newUsage || {});
@@ -1683,7 +1712,7 @@ function applyResearchBallUsageInventoryDelta(oldUsage, newUsage) {
         const deltaUsed = (Number(newU[k]) || 0) - (Number(oldU[k]) || 0);
         ballPlannerState.currentInventory[k] = Math.floor(Number(ballPlannerState.currentInventory[k]) || 0) - deltaUsed;
     });
-    saveBallPlannerStateToHistory();
+    saveBallPlannerStateToHistory({ syncCloud: options.syncCloud !== false });
 }
 
 function isBallPlannerEntryActualInventoryStatus(entry) {
@@ -2258,9 +2287,35 @@ async function openBallPlannerModal() {
         <div id="ball-planner-content"><div class="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-8 text-center text-xs font-black text-sky-700"><i class="fa-solid fa-cloud-arrow-down fa-bounce mr-2"></i>${currentCloudUser ? '正在读取账号中的最新记录…' : '正在读取本机记录…'}</div></div>
     </div>`;
     document.body.appendChild(modal);
-    if (currentCloudUser) await syncBallPlannerStateWithCloud();
-    else setBallPlannerSyncStatus('local');
+    // 先完整显示本机库存与统计，不能让一次网络请求阻塞整个面板。
     renderBallPlannerModal();
+    if (!currentCloudUser) {
+        setBallPlannerSyncStatus('local');
+        return;
+    }
+    setBallPlannerSyncStatus('syncing', '正在后台读取账号中的最新记录');
+    refreshBallPlannerFromCloudReadOnly().then(result => {
+        if (!document.getElementById('ball-planner-modal')) return;
+        if (result?.ok) {
+            const scrollBox = document.querySelector('#ball-planner-modal > div');
+            const oldTop = scrollBox?.scrollTop || 0;
+            if (result.changed) renderBallPlannerModal();
+            const nextScrollBox = document.querySelector('#ball-planner-modal > div');
+            if (nextScrollBox) nextScrollBox.scrollTop = oldTop;
+            if (result.needsUpload) {
+                setBallPlannerSyncStatus('syncing', '已合并账号记录，正在补传本机尚未同步的数据');
+                syncBallPlannerStateWithCloud().then(syncResult => {
+                    if (!document.getElementById('ball-planner-modal')) return;
+                    if (syncResult?.ok) setBallPlannerSyncStatus('success');
+                    else setBallPlannerSyncStatus('error', '本机记录已保留，但尚未完整同步到账号');
+                });
+            } else {
+                setBallPlannerSyncStatus('loaded', '已读取账号中的最新记录');
+            }
+        } else {
+            setBallPlannerSyncStatus('error', '云端读取失败，当前显示的是本机记录');
+        }
+    });
 }
 
 function renderBallPlannerModal() {
@@ -2631,17 +2686,23 @@ async function addBallDailyRewardEntry() {
     applyBallPlannerEntryFullDelta(null, entry);
     ballPlannerState.entries.unshift(entry);
     if (ballPlannerState.entryTombstones) delete ballPlannerState.entryTombstones[String(entry.id)];
-    const syncResult = await saveBallPlannerStateToHistory({ saveCloudNow: true });
+    // 奖励先在本机即时落盘并恢复界面；账号同步转入后台，不再让用户盯着按钮等待整包历史校验。
+    const localResult = await saveBallPlannerStateToHistory({ saveCloudNow: false, syncCloud: false });
     renderBallPlannerModal();
-    if (!currentCloudUser || syncResult.guest) {
+    if (!currentCloudUser || localResult.guest) {
         setBallPlannerSyncStatus('local');
         showToast('已记录每日奖励（仅保存在当前设备）');
-    } else if (syncResult.ok) {
-        setBallPlannerSyncStatus('success');
-        showToast('已记录每日奖励，并同步到账号');
     } else {
-        setBallPlannerSyncStatus('error', '每日奖励已保存在本机，但尚未同步到账号');
-        showToast('每日奖励已保存在本机；账号同步失败，请稍后重试');
+        setBallPlannerSyncStatus('syncing', '每日奖励已保存在本机，正在后台同步账号');
+        showToast('每日奖励已记录，正在后台同步账号');
+        syncBallPlannerStateWithCloud().then(syncResult => {
+            if (syncResult?.ok) {
+                setBallPlannerSyncStatus('success');
+            } else {
+                setBallPlannerSyncStatus('error', '每日奖励已保存在本机，但尚未同步到账号');
+                showToast('每日奖励账号同步失败，本机记录已保留');
+            }
+        });
     }
 }
 
@@ -3672,7 +3733,7 @@ function openSleepResearchPhotoViewer(galleryId, index = 0) {
     enhanceDrySpellModalControls(modal);
 }
 
-function upsertSleepResearch(payload = {}) {
+function upsertSleepResearch(payload = {}, options = {}) {
     const date = normalizeSleepResearchDateValue(payload.date || getTodayLocalDateString());
     const session = normalizeSleepResearchSessionValue(payload.session || '一觉');
     const id = getSleepResearchId(date, session);
@@ -3718,7 +3779,7 @@ function upsertSleepResearch(payload = {}) {
     historyLogs = historyLogs.filter(log => !(log && isSleepResearchLog(log) && isSameSleepResearchKey(log, date, session)));
     historyLogs.unshift(next);
     historyLogs = mergeHistoryLogs([], historyLogs);
-    saveHistoryToLocal();
+    saveHistoryToLocal({ syncCloud: options.syncCloud !== false });
     return next;
 }
 
@@ -4277,12 +4338,12 @@ function loadGraduationDexFromLocal() {
     }
 }
 
-function saveGraduationDexToLocal() {
+function saveGraduationDexToLocal(options = {}) {
     normalizeGraduationDex();
     localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
     localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted || {}));
     // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
-    scheduleSaveGraduationDexToCloud();
+    if (options.syncCloud !== false) scheduleSaveGraduationDexToCloud();
 }
 
 function getGraduationCapture(item) {
@@ -4610,7 +4671,7 @@ function getGraduationDexAuditHTML(p) {
     </div>`;
 }
 
-function addGraduationDexEntry(payload) {
+function addGraduationDexEntry(payload, options = {}) {
     if (!isGraduationDexEligible(payload)) return;
 
     if (payload.sourceId) {
@@ -4622,7 +4683,7 @@ function addGraduationDexEntry(payload) {
     const entry = buildGraduationDexEntry(payload);
     delete graduationDexDeleted[String(entry.id)];
     graduationDex.unshift(entry);
-    saveGraduationDexToLocal();
+    saveGraduationDexToLocal({ syncCloud: options.syncCloud !== false });
 }
 
 function removeGraduationDexBySourceId(sourceId) {
@@ -13358,7 +13419,7 @@ function submitSleepResearchMeta(event) {
             const storedPhotos = await uploadSleepResearchPhotoDataUrls(date, session, photoDataUrls);
             const payload = { date, session, sleepScore, drowsyPower, note, encounterCount, photoDataUrls: storedPhotos };
             if (ballUsage) payload.ballUsage = ballUsage;
-            const research = upsertSleepResearch(payload);
+            const research = upsertSleepResearch(payload, { syncCloud: count <= 0 });
             if (encounterCount !== null) {
                 refreshEncounterStatisticsAfterResearchChange();
             }
@@ -13370,11 +13431,12 @@ function submitSleepResearchMeta(event) {
                     result: sleepTypeData.result,
                     measurementMode: sleepTypeData.measurementMode,
                     source: 'research'
-                });
+                }, { syncCloud: count <= 0 });
             }
-            if (ballUsage) applyResearchBallUsageInventoryDelta(null, ballUsage);
-            // Storage 已上传后，必须立刻把图片引用写回云端 history_logs；否则另一台设备只会看到 Storage 文件本体，看不到这次研究的照片索引。
-            if (currentCloudUser) await saveHistoryToCloudNow();
+            if (ballUsage) applyResearchBallUsageInventoryDelta(null, ballUsage, { syncCloud: count <= 0 });
+            // 有后续宝可梦时暂不在这里上传整份历史：全部录完后由统一收尾一次性保存。
+            // 没有宝可梦需要继续录入时，后台同步本次研究；本机详情无需等待网络即可打开。
+            // count=0 时，上面的本机保存会合并为一次防抖云同步；count>0 时留到最后一只统一收尾。
             stickyCheckInDate = date;
             stickyCheckInSession = session;
             const modal = document.getElementById('sleep-research-modal');
@@ -14372,7 +14434,7 @@ function upsertSleepTypeRecord(payload = {}, options = {}) {
     ));
     historyLogs.push(next);
     historyLogs = mergeHistoryLogs([], historyLogs);
-    saveHistoryToLocal();
+    saveHistoryToLocal({ syncCloud: options.syncCloud !== false });
     if (options.saveCloudNow && currentCloudUser) saveHistoryToCloudNow();
     return next;
 }
@@ -22921,9 +22983,69 @@ function syncToSystemRecommendation(e) {
  * ========================= */
 let captureFinalizePendingV42 = false;
 let captureFinalizeRetryV42 = null;
+let captureBatchCloudDirtyV42 = false;
+let captureBatchCloudRevisionV42 = 0;
+let captureBatchSafetyTimerV42 = null;
+let captureBundleCloudQueueV42 = Promise.resolve();
+
+function mergePlayerBoxForCaptureBundleV42(remoteBox = [], localBox = [], remoteHistory = [], localHistory = []) {
+    const result = new Map();
+    (Array.isArray(remoteBox) ? remoteBox : []).forEach(item => {
+        if (!item?.name) return;
+        result.set(String(item.name), JSON.parse(JSON.stringify(item)));
+    });
+
+    const remoteIds = new Set((Array.isArray(remoteHistory) ? remoteHistory : []).map(log => String(log?.id ?? '')));
+    const localOnlyCaptures = getVisibleHistoryLogs(Array.isArray(localHistory) ? localHistory : []).filter(log =>
+        log && !isHistorySystemLog(log) && log.name && !remoteIds.has(String(log.id ?? ''))
+    );
+    const localOnlyByName = new Map();
+    localOnlyCaptures.forEach(log => {
+        const name = pokemonDictionary[log.name]?.standard || String(log.name || '');
+        if (!name) return;
+        if (!localOnlyByName.has(name)) localOnlyByName.set(name, []);
+        localOnlyByName.get(name).push(log);
+    });
+
+    (Array.isArray(localBox) ? localBox : []).forEach(localItem => {
+        if (!localItem?.name) return;
+        const name = String(localItem.name);
+        const remoteItem = result.get(name);
+        if (!remoteItem) {
+            result.set(name, JSON.parse(JSON.stringify(localItem)));
+            return;
+        }
+
+        // 配置类字段以当前本机编辑为准；累计数字至少保留云端值。
+        const merged = Object.assign({}, remoteItem, JSON.parse(JSON.stringify(localItem)));
+        Object.keys(Object.assign({}, remoteItem, localItem)).forEach(key => {
+            if (typeof remoteItem[key] === 'number' && typeof localItem[key] === 'number') {
+                merged[key] = Math.max(remoteItem[key], localItem[key]);
+            }
+        });
+
+        // 若另一端云端快照仍是旧基数，把“仅存在于本机历史”的本次捕捉增量叠加到云端基数。
+        // 这样手机、电脑从同一个 5 同时各录 1 只时，最终能够得到 7，而不是后写者覆盖成 6。
+        const projected = JSON.parse(JSON.stringify(remoteItem));
+        (localOnlyByName.get(name) || []).forEach(log => {
+            projected.count = (Number(projected.count) || 0) + 1;
+            const track = log.track || getCheckInTrackMode(name, log.foodCombo || 'ABB');
+            if (log.result && log.result !== 'none') applyResultToBoxRecord(projected, log.result, track, 1);
+            if (log.isShiny) {
+                applyShinyTotalToBoxRecord(projected, 1);
+                if (log.result && log.result !== 'none') applyShinyUsefulToBoxRecord(projected, 1);
+            }
+        });
+        Object.keys(projected).forEach(key => {
+            if (typeof projected[key] === 'number') merged[key] = Math.max(Number(merged[key]) || 0, projected[key]);
+        });
+        result.set(name, merged);
+    });
+    return Array.from(result.values());
+}
 
 window.addEventListener('beforeunload', event => {
-    if (!captureFinalizePendingV42 && !ballPlannerSyncPending) return;
+    if (!captureFinalizePendingV42 && !captureBatchCloudDirtyV42 && !ballPlannerSyncPending) return;
     event.preventDefault();
     event.returnValue = '';
 });
@@ -22932,20 +23054,53 @@ function clearCaptureCloudTimersV42() {
     clearTimeout(saveHistoryTimer);
     clearTimeout(saveBoxTimer);
     clearTimeout(saveGraduationTimer);
+    clearTimeout(captureBatchSafetyTimerV42);
     saveHistoryTimer = null;
     saveBoxTimer = null;
     saveGraduationTimer = null;
+    captureBatchSafetyTimerV42 = null;
 }
 
 async function saveCaptureStateBundleToCloudV42() {
     if (!currentCloudUser) return { ok: true, guest: true };
     clearCaptureCloudTimersV42();
+    const userId = currentCloudUser.id;
     normalizePlayerBox();
     normalizeGraduationDex();
+    // 最后一只统一保存前，先吸收另一台设备在本次录入期间新增的历史和出货档案。
+    // 这两列都是整包 JSON，若直接用本机快照覆盖，会吞掉手机/电脑另一端刚写入的记录。
+    const localHistoryBeforeMerge = mergeHistoryLogs([], historyLogs);
+    const localBoxBeforeMerge = JSON.parse(JSON.stringify(playerBox));
+    const { data: remoteData, error: readError } = await supabaseClient
+        .from('player_boxes')
+        .select('box_data,history_logs,graduation_dex')
+        .eq('user_id', userId)
+        .maybeSingle();
+    if (readError) throw readError;
+    if (!currentCloudUser || currentCloudUser.id !== userId) throw new Error('账号已切换，本次同步已取消');
+
+    const remoteHistory = prepareEncounterStatisticsLogsForMerge(
+        remoteData && Array.isArray(remoteData.history_logs) ? remoteData.history_logs : []
+    );
+    playerBox = mergePlayerBoxForCaptureBundleV42(
+        remoteData && Array.isArray(remoteData.box_data) ? remoteData.box_data : [],
+        localBoxBeforeMerge,
+        remoteHistory,
+        localHistoryBeforeMerge
+    );
+    historyLogs = mergeHistoryLogs(remoteHistory, historyLogs);
+    const mergedGraduation = mergeGraduationDex(
+        remoteData && Array.isArray(remoteData.graduation_dex) ? remoteData.graduation_dex : [],
+        graduationDex,
+        graduationDexDeleted
+    );
+    graduationDex = mergedGraduation.entries;
+    graduationDexDeleted = mergedGraduation.deleted;
+
     const { error } = await supabaseClient
         .from('player_boxes')
         .upsert({
-            user_id: currentCloudUser.id,
+            user_id: userId,
             box_data: playerBox,
             history_logs: historyLogs,
             graduation_dex: getGraduationDexCloudPayload(),
@@ -22954,7 +23109,33 @@ async function saveCaptureStateBundleToCloudV42() {
             onConflict: 'user_id'
         });
     if (error) throw error;
+    localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+    localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
+    localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
+    localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted || {}));
     return { ok: true, guest: false };
+}
+
+function queueCaptureStateBundleToCloudV42() {
+    const task = captureBundleCloudQueueV42
+        .catch(() => ({ ok: false }))
+        .then(() => saveCaptureStateBundleToCloudV42());
+    captureBundleCloudQueueV42 = task;
+    return task;
+}
+
+function scheduleCaptureBatchSafetySyncV42() {
+    captureBatchCloudDirtyV42 = true;
+    const revision = ++captureBatchCloudRevisionV42;
+    clearTimeout(captureBatchSafetyTimerV42);
+    if (!currentCloudUser) return;
+    // 正常连续录入会在最后一只立即统一保存；只有用户长时间停留在中途时，才补做一次安全快照。
+    captureBatchSafetyTimerV42 = setTimeout(() => {
+        captureBatchSafetyTimerV42 = null;
+        queueCaptureStateBundleToCloudV42().then(result => {
+            if (result?.ok && revision === captureBatchCloudRevisionV42) captureBatchCloudDirtyV42 = false;
+        }).catch(error => console.warn('连续录入中途安全同步失败，本机记录仍已保留：', error));
+    }, 15000);
 }
 
 function waitCaptureFinalizePaintV42() {
@@ -23051,7 +23232,7 @@ async function finalizeDailyCheckInV42(state, resultInfo, batchTotal) {
             if (currentCloudUser) {
                 setCaptureFinalizeStageV42('cloud');
                 await waitCaptureFinalizePaintV42();
-                await saveCaptureStateBundleToCloudV42();
+                await queueCaptureStateBundleToCloudV42();
             }
 
             setCaptureFinalizeStageV42('score', {
@@ -23068,6 +23249,7 @@ async function finalizeDailyCheckInV42(state, resultInfo, batchTotal) {
             const icon = document.getElementById('capture-finalize-icon-v42');
             if (icon) icon.className = 'fa-solid fa-circle-check text-emerald-500';
             captureFinalizePendingV42 = false;
+            captureBatchCloudDirtyV42 = false;
             captureFinalizeRetryV42 = null;
             await new Promise(resolve => setTimeout(resolve, 900));
             closeCaptureFinalizeOverlayV42();
@@ -23152,7 +23334,7 @@ function stableWriteDailyCheckInV22(state, modalContext) {
     const modalResearchId = modalContext?.sleepResearchId || '';
     let sleepResearchId = modalResearchId || (findSleepResearch(stickyCheckInDate, stickyCheckInSession)?.id || '');
     if (!sleepResearchId) {
-        const research = upsertSleepResearch({ date: stickyCheckInDate, session: stickyCheckInSession });
+        const research = upsertSleepResearch({ date: stickyCheckInDate, session: stickyCheckInSession }, { syncCloud: false });
         sleepResearchId = research.id;
     }
 
@@ -23196,25 +23378,23 @@ function stableWriteDailyCheckInV22(state, modalContext) {
             ingredientIds: Array.isArray(state.ingredientIds) ? state.ingredientIds.slice(0, 3) : getPokemonIngredientIdSnapshot(standardName, state.foodCombo || 'ABB'),
             trainingLevel: Number.isFinite(Number(state.trainingLevel)) && Number(state.trainingLevel) >= 1 ? Math.min(100, Math.floor(Number(state.trainingLevel))) : null,
             isShiny: !!state.isShiny
-        });
+        }, { syncCloud: false });
     }
 
     try {
         saveTodayCheckInsToLocal();
-        saveHistoryToLocal();
-        saveGraduationDexToLocal();
+        saveHistoryToLocal({ syncCloud: false });
+        saveGraduationDexToLocal({ syncCloud: false });
         localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
     } catch (e) {
         console.warn('v22 录入后本地保存失败：', e);
         showToast('已录入，但本地保存可能失败，请刷新前先备份');
     }
 
-    if (currentCloudUser && Number(modalContext?.batchLeft || 0) > 1) {
-        // 连续录入尚未结束时保留防抖同步作为保险；最后一只由统一收尾流程立即保存三份数据。
-        scheduleSaveHistoryToCloud();
-        scheduleSaveBoxToCloud();
-        scheduleSaveGraduationDexToCloud();
-    }
+    // 连续录入期间只保存本机。旧逻辑每只宝可梦都安排历史、大仓、出货库三次云请求，
+    // 玩家填写下一只时这些请求往往已经启动，并在最后收尾阶段互相排队/争抢。
+    // 最后一只统一由 finalizeDailyCheckInV42 上传完整状态；中途停留较久时只补做一次安全快照。
+    scheduleCaptureBatchSafetySyncV42();
 
     renderTodayReportUI();
     return { standardName, sleepResearchId, checkInId };
