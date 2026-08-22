@@ -975,6 +975,9 @@
                     <button onclick="openBallPlannerModal()" id="ball-planner-main-btn" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-sky-100 text-sky-800 shadow-sm flex items-center gap-1 hover:bg-sky-200" title="记录精灵球库存、研究用球、活动/礼包计划和睡眠点数商店预算">
                         <i class="fa-solid fa-baseball text-sky-600"></i> 🎒 精灵球规划
                     </button>
+                    <button onclick="openDailyRewardQuickModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-900 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="用小日历快速检查、补录或修改每日奖励">
+                        <i class="fa-solid fa-gift text-amber-600"></i> 🎁 每日奖励
+                    </button>
                     <button onclick="openMealPrepPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-orange-100 text-orange-800 shadow-sm flex items-center gap-1 hover:bg-orange-200" title="支持下周类型未知或活动已确定，根据目标料理、背包容量与食材产速推荐提前备料库存">
                         <i class="fa-solid fa-utensils text-orange-600"></i> 🍲 料理备料规划
                     </button>
@@ -1370,6 +1373,7 @@ function getDefaultBallPlannerState() {
         enabled: false,
         currentInventory: { poke: 0, great: 0, ultra: 0 },
         entries: [],
+        dailyRewardStartDate: '',
         entryTombstones: {},
         templates: { bundle: [], event: [], dailyReward: [] },
         shop: {
@@ -1418,6 +1422,7 @@ function normalizeBallPlannerState(raw = {}) {
     state.enabled = !!state.enabled;
     state.currentInventory = normalizeBallCounts(state.currentInventory || {});
     state.entries = Array.isArray(state.entries) ? state.entries.map(normalizeBallPlannerEntry).filter(Boolean) : [];
+    state.dailyRewardStartDate = /^\d{4}-\d{2}-\d{2}$/.test(String(state.dailyRewardStartDate || '')) ? String(state.dailyRewardStartDate) : '';
     state.entryTombstones = Object.entries(state.entryTombstones && typeof state.entryTombstones === 'object' ? state.entryTombstones : {})
         .reduce((out, [id, timestamp]) => {
             const parsed = Date.parse(timestamp);
@@ -1464,6 +1469,9 @@ function normalizeBallTemplate(item = {}) {
         templateName: String(item.templateName || item.name || '自定义模板').trim() || '自定义模板',
         balls: normalizeBallCounts(item.balls || {}),
         diamonds: Math.max(0, Math.floor(Number(item.diamonds) || 0)),
+        rewardKind: ['ball', 'diamond', 'item'].includes(item.rewardKind) ? item.rewardKind : '',
+        itemName: String(item.itemName || '').trim(),
+        itemAmount: Math.max(0, Math.floor(Number(item.itemAmount) || 0)),
         note: String(item.note || '').trim(),
         createdAt: item.createdAt || new Date().toISOString()
     };
@@ -1485,6 +1493,9 @@ function normalizeBallPlannerEntry(item = {}) {
         date: item.date || getTodayLocalDateString(),
         balls: normalizeBallCounts(item.balls || {}),
         diamonds: Math.max(0, Math.floor(Number(item.diamonds) || 0)),
+        rewardKind: ['ball', 'diamond', 'item', 'unknown'].includes(item.rewardKind) ? item.rewardKind : '',
+        itemName: String(item.itemName || '').trim(),
+        itemAmount: Math.max(0, Math.floor(Number(item.itemAmount) || 0)),
         note: String(item.note || '').trim(),
         shopPurchase: {
             regularPoke: Math.max(0, Math.floor(Number(rawShopPurchase.regularPoke) || 0)),
@@ -1554,10 +1565,30 @@ function mergeBallPlannerStates(firstRaw = {}, secondRaw = {}) {
             }
         });
 
-    const mergedDailyEntries = Array.from(dailyMap.values()).filter(entry => {
+    const mergedDailyEntriesBeforeDateDedupe = Array.from(dailyMap.values()).filter(entry => {
         const deletedAt = tombstones[String(entry.id)];
         return !deletedAt || getBallPlannerSyncTime(entry.updatedAt || entry.createdAt) > getBallPlannerSyncTime(deletedAt);
     });
+    // 每日奖励每天只会有一个结果。电脑和手机若在尚未互相同步时分别补了同一天，
+    // 这里按更新时间保留较新的那条，并为旧条目留下删除标记，防止下次被旧设备重新带回来。
+    const dailyByDate = new Map();
+    mergedDailyEntriesBeforeDateDedupe.forEach(entry => {
+        const date = normalizeSleepResearchDateValue(entry.date || '');
+        const key = date || `id:${entry.id}`;
+        const old = dailyByDate.get(key);
+        if (!old) {
+            dailyByDate.set(key, entry);
+            return;
+        }
+        const oldTime = getBallPlannerSyncTime(old.updatedAt || old.createdAt);
+        const entryTime = getBallPlannerSyncTime(entry.updatedAt || entry.createdAt);
+        const winner = entryTime >= oldTime ? entry : old;
+        const loser = winner === entry ? old : entry;
+        dailyByDate.set(key, winner);
+        const deletedAt = winner.updatedAt || winner.createdAt || new Date().toISOString();
+        if (!tombstones[String(loser.id)] || getBallPlannerSyncTime(deletedAt) > getBallPlannerSyncTime(tombstones[String(loser.id)])) tombstones[String(loser.id)] = deletedAt;
+    });
+    const mergedDailyEntries = Array.from(dailyByDate.values());
     const baseDailyMap = new Map(base.entries.filter(entry => entry.sourceType === 'dailyReward').map(entry => [String(entry.id), entry]));
     const mergedDailyMap = new Map(mergedDailyEntries.map(entry => [String(entry.id), entry]));
     const inventory = normalizeBallCounts(base.currentInventory || {});
@@ -3001,6 +3032,367 @@ function renderBallEntryList() {
             ${isDaily ? `<div class="text-[10px] text-amber-700 font-bold">每日奖励实录：球类奖励会自动增加当前库存，并显示在库存曲线中。${e.inventoryApplied ? '（已应用到库存）' : '（旧记录未自动改库存）'}</div>` : (isShopPurchase ? `<div class="text-[10px] text-emerald-700 font-bold">商店实际购买：已自动加库存、扣睡眠点数、扣商店剩余，并显示在库存曲线中。${e.inventoryApplied && e.shopApplied ? '（已应用）' : '（旧记录未自动应用）'}</div>` : `<div class="flex flex-wrap gap-1.5">${e.status !== 'planned' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','planned')" class="px-2 py-1 rounded-lg bg-sky-50 text-sky-700 border border-sky-100 text-[10px] font-black">${plannedBtnText}</button>` : ''}${e.status !== 'received' && e.status !== 'purchased' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','${e.sourceType === 'bundle' ? 'purchased' : 'received'}')" class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">${doneBtnText}</button>` : ''}${e.status !== 'skipped' ? `<button onclick="setBallEntryStatus('${escapeHtmlAttr(e.id)}','skipped')" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-black">跳过</button>` : ''}${e.inventoryApplied ? `<span class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-black">已应用库存</span>` : ''}</div>`)}
         </div>`;
     }).join('');
+}
+
+/* =========================================================
+ * 每日奖励快捷打卡 v1
+ * 与精灵球规划共用同一批 dailyReward 条目；这里只提供更适合每日使用的日历入口。
+ * ========================================================= */
+let dailyRewardQuickUi = {
+    selectedDate: getTodayLocalDateString(),
+    fullMonth: false,
+    month: getTodayLocalDateString().slice(0, 7),
+    statsRange: '30',
+    dirty: false
+};
+
+function inferDailyRewardKind(entry = {}) {
+    if (['ball', 'diamond', 'item', 'unknown'].includes(entry.rewardKind)) return entry.rewardKind;
+    if (entry.status === 'skipped' && /记不清|不再补录|已放弃/.test(String(entry.displayName || entry.note || ''))) return 'unknown';
+    if (BALL_KEYS.some(key => Number(entry.balls?.[key]) > 0)) return 'ball';
+    if (Number(entry.diamonds) > 0 && /钻石/.test(String(entry.displayName || entry.templateName || ''))) return 'diamond';
+    if (Number(entry.itemAmount) > 0 || Number(entry.diamonds) > 0) return 'item';
+    return 'item';
+}
+
+function getDailyRewardItemPayload(entry = {}) {
+    const kind = inferDailyRewardKind(entry);
+    if (kind !== 'item') return { name: '', amount: 0 };
+    return {
+        name: String(entry.itemName || entry.displayName || entry.templateName || '其他道具').trim() || '其他道具',
+        amount: Math.max(0, Math.floor(Number(entry.itemAmount || entry.diamonds) || 0))
+    };
+}
+
+function getDailyRewardLatestByDate() {
+    const map = new Map();
+    (ballPlannerState.entries || []).forEach(raw => {
+        if (!raw || raw.sourceType !== 'dailyReward') return;
+        const entry = normalizeBallPlannerEntry(raw);
+        const date = normalizeSleepResearchDateValue(entry.date || '');
+        if (!date) return;
+        const old = map.get(date);
+        if (!old || getBallPlannerSyncTime(entry.updatedAt || entry.createdAt) >= getBallPlannerSyncTime(old.updatedAt || old.createdAt)) map.set(date, entry);
+    });
+    return map;
+}
+
+function getDailyRewardTrackingStartDate(entryMap = getDailyRewardLatestByDate()) {
+    const configured = normalizeSleepResearchDateValue(ballPlannerState.dailyRewardStartDate || '');
+    if (ballPlannerState.dailyRewardStartDate && configured) return configured;
+    const dates = Array.from(entryMap.keys()).sort();
+    return dates[0] || getTodayLocalDateString();
+}
+
+function addDaysToLocalDate(date, days) {
+    const ordinal = getBallDailyRewardDateOrdinal(date);
+    return getBallDailyRewardDateFromOrdinal(ordinal + Number(days || 0));
+}
+
+function getDailyRewardCalendarDates() {
+    const today = getTodayLocalDateString();
+    if (!dailyRewardQuickUi.fullMonth) return Array.from({ length: 14 }, (_, index) => addDaysToLocalDate(today, index - 13));
+    const match = String(dailyRewardQuickUi.month || today.slice(0, 7)).match(/^(\d{4})-(\d{2})$/);
+    const year = Number(match?.[1]) || new Date().getFullYear();
+    const month = Number(match?.[2]) || (new Date().getMonth() + 1);
+    const days = new Date(year, month, 0).getDate();
+    return Array.from({ length: days }, (_, index) => `${year}-${String(month).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`);
+}
+
+function renderDailyRewardCalendarHtml() {
+    const today = getTodayLocalDateString();
+    const entryMap = getDailyRewardLatestByDate();
+    const trackingStart = getDailyRewardTrackingStartDate(entryMap);
+    const selected = dailyRewardQuickUi.selectedDate;
+    const dates = getDailyRewardCalendarDates();
+    const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    const cells = dates.map(date => {
+        const entry = entryMap.get(date);
+        const kind = entry ? inferDailyRewardKind(entry) : '';
+        const ordinal = getBallDailyRewardDateOrdinal(date);
+        const todayOrdinal = getBallDailyRewardDateOrdinal(today);
+        const beforeStart = date < trackingStart;
+        const future = ordinal > todayOrdinal;
+        const isSelected = date === selected;
+        const isToday = date === today;
+        let tone = 'border-slate-200 bg-slate-50 text-slate-400';
+        let marker = future ? '未来' : (beforeStart ? '未统计' : '未录');
+        let markerClass = 'text-slate-400';
+        let style = '';
+        if (kind === 'unknown') {
+            tone = 'border-slate-300 text-slate-500';
+            marker = '记不清 · 略';
+            markerClass = 'text-slate-500';
+            style = 'background:repeating-linear-gradient(135deg,#f8fafc,#f8fafc 6px,#e2e8f0 6px,#e2e8f0 8px)';
+        } else if (entry) {
+            tone = 'border-emerald-300 bg-emerald-50 text-emerald-900';
+            marker = kind === 'ball' ? '球' : (kind === 'diamond' ? '钻石' : '道具');
+            markerClass = 'text-emerald-700';
+        } else if (!future && !beforeStart) {
+            tone = 'border-amber-300 bg-amber-50 text-amber-900';
+            marker = '待补录';
+            markerClass = 'text-amber-700';
+        }
+        if (isToday && !entry) tone = 'border-sky-400 bg-sky-50 text-sky-900';
+        const selectedRing = isSelected ? 'ring-2 ring-indigo-500 ring-offset-1' : '';
+        const dateObj = new Date(`${date}T12:00:00`);
+        return `<button type="button" onclick="selectDailyRewardQuickDate('${date}')" style="${style}" class="min-h-[44px] rounded-xl border px-1.5 py-1 text-left transition active:scale-95 ${tone} ${selectedRing}">
+            <div class="flex items-center justify-between gap-1"><span class="text-[11px] font-black">${Number(date.slice(8))}</span><span class="text-[8px] font-black ${isToday ? 'text-sky-600' : 'text-slate-400'}">${isToday ? '今天' : `周${dayNames[dateObj.getDay()]}`}</span></div>
+            <div class="mt-0.5 truncate text-[8px] font-black ${markerClass}">${marker}</div>
+        </button>`;
+    }).join('');
+    return `<div class="rounded-3xl border border-amber-100 bg-amber-50/40 p-3">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div><div class="text-xs font-black text-slate-800">${dailyRewardQuickUi.fullMonth ? `${dailyRewardQuickUi.month} 整月` : '最近 14 天'}</div><div class="text-[9px] font-bold text-slate-400">绿色已录 · 橙色待补 · 斜纹表示记不清且不再统计</div></div>
+            <div class="flex items-center gap-1">
+                ${dailyRewardQuickUi.fullMonth ? `<button type="button" onclick="shiftDailyRewardQuickMonth(-1)" class="h-8 w-8 rounded-xl border border-amber-100 bg-white text-amber-800"><i class="fa-solid fa-chevron-left"></i></button><button type="button" onclick="shiftDailyRewardQuickMonth(1)" class="h-8 w-8 rounded-xl border border-amber-100 bg-white text-amber-800"><i class="fa-solid fa-chevron-right"></i></button>` : ''}
+                <button type="button" onclick="toggleDailyRewardQuickCalendar()" class="h-8 rounded-xl border border-amber-100 bg-white px-2.5 text-[9px] font-black text-amber-800">${dailyRewardQuickUi.fullMonth ? '收起为14天' : '展开整月'}</button>
+            </div>
+        </div>
+        <label class="mb-2 flex items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white/80 px-2.5 py-1.5 text-[9px] font-black text-slate-500"><span>从哪天开始检查漏记</span><input type="date" value="${escapeHtmlAttr(ballPlannerState.dailyRewardStartDate || trackingStart)}" onchange="setDailyRewardTrackingStartDate(this.value)" class="min-w-0 rounded-lg border border-amber-100 bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-900"></label>
+        <div class="grid grid-cols-7 gap-1.5">${cells}</div>
+    </div>`;
+}
+
+function getDailyRewardQuickSelectedEntry() {
+    return getDailyRewardLatestByDate().get(dailyRewardQuickUi.selectedDate) || null;
+}
+
+function renderDailyRewardQuickEditorHtml() {
+    const entry = getDailyRewardQuickSelectedEntry();
+    const kind = dailyRewardQuickUi.draftKind || (entry ? inferDailyRewardKind(entry) : 'ball');
+    const item = entry ? getDailyRewardItemPayload(entry) : { name: '', amount: 0 };
+    const balls = normalizeBallCounts(entry?.balls || { poke: 1 });
+    const diamonds = kind === 'diamond' ? Math.max(0, Number(entry?.diamonds) || 0) : 15;
+    const isUnknown = kind === 'unknown';
+    return `<div class="rounded-3xl border border-slate-200 bg-white p-3 sm:p-4">
+        <div class="flex items-start justify-between gap-2">
+            <div><div class="text-xs font-black text-slate-900">${escapeHtml(dailyRewardQuickUi.selectedDate)} · ${entry ? (isUnknown ? '已标记记不清' : '修改当日奖励') : '补录每日奖励'}</div><div class="mt-0.5 text-[9px] font-bold text-slate-400">同一天再次保存会修改原记录，不会重复增加库存。</div></div>
+            ${entry ? `<button type="button" onclick="deleteDailyRewardQuickSelected()" class="rounded-xl border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-[9px] font-black text-rose-600">删除</button>` : ''}
+        </div>
+        <div class="mt-3 grid grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
+            ${[['ball','精灵球'],['diamond','钻石'],['item','其他道具']].map(([value,label]) => `<button type="button" onclick="setDailyRewardQuickKind('${value}')" class="rounded-xl px-2 py-2 text-[10px] font-black ${kind === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}">${label}</button>`).join('')}
+        </div>
+        <div id="daily-reward-quick-kind-fields" class="mt-3">
+            ${kind === 'ball' ? `<div class="grid grid-cols-3 gap-2">${BALL_KEYS.map((key, index) => `<label class="text-[9px] font-black text-slate-500">${BALL_LABELS[key]}<input type="number" min="0" id="daily-reward-quick-${key}" value="${balls[key] || (index === 0 && !entry ? 1 : 0)}" oninput="dailyRewardQuickUi.dirty=true" class="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-black"></label>`).join('')}</div>` : ''}
+            ${kind === 'diamond' ? `<label class="text-[9px] font-black text-slate-500">钻石数量<input type="number" min="1" id="daily-reward-quick-diamonds" value="${diamonds || 15}" oninput="dailyRewardQuickUi.dirty=true" class="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black"></label>` : ''}
+            ${kind === 'item' ? `<div class="grid grid-cols-[1fr_100px] gap-2"><label class="text-[9px] font-black text-slate-500">道具名称<input id="daily-reward-quick-item-name" value="${escapeHtmlAttr(item.name)}" placeholder="例如：食材券S / 梦之碎片M" oninput="dailyRewardQuickUi.dirty=true" class="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold"></label><label class="text-[9px] font-black text-slate-500">数量<input type="number" min="1" id="daily-reward-quick-item-amount" value="${item.amount || 1}" oninput="dailyRewardQuickUi.dirty=true" class="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-black"></label></div>` : ''}
+        </div>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+            <button type="button" id="daily-reward-quick-save" onclick="saveDailyRewardQuickSelected()" class="rounded-2xl bg-amber-500 px-4 py-2.5 text-xs font-black text-slate-950 hover:bg-amber-400">${entry && !isUnknown ? '保存修改' : '记录这一天'}</button>
+            <button type="button" onclick="markDailyRewardQuickUnknown()" class="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-[10px] font-black text-slate-600">记不清了，这天不再补录</button>
+        </div>
+    </div>`;
+}
+
+function buildDailyRewardQuickStats(range = dailyRewardQuickUi.statsRange) {
+    const today = getTodayLocalDateString();
+    const todayOrdinal = getBallDailyRewardDateOrdinal(today);
+    const map = getDailyRewardLatestByDate();
+    const start = getDailyRewardTrackingStartDate(map);
+    const requestedStart = range === '7' ? addDaysToLocalDate(today, -6) : (range === '30' ? addDaysToLocalDate(today, -29) : start);
+    const rangeStart = requestedStart > start ? requestedStart : start;
+    const selected = Array.from(map.entries()).filter(([date, entry]) => date >= rangeStart && date <= today && inferDailyRewardKind(entry) !== 'unknown');
+    const unknownCount = Array.from(map.entries()).filter(([date, entry]) => date >= rangeStart && date <= today && inferDailyRewardKind(entry) === 'unknown').length;
+    const eligibleDaysRaw = Math.max(0, todayOrdinal - getBallDailyRewardDateOrdinal(rangeStart) + 1);
+    const eligibleDays = Math.max(0, eligibleDaysRaw - unknownCount);
+    const ball = { days: 0, poke: 0, great: 0, ultra: 0 };
+    const diamond = { days: 0, amount: 0 };
+    const items = { days: 0, amount: 0, byName: {} };
+    selected.forEach(([, entry]) => {
+        const kind = inferDailyRewardKind(entry);
+        if (kind === 'ball') {
+            ball.days += 1;
+            BALL_KEYS.forEach(key => ball[key] += Number(entry.balls?.[key]) || 0);
+        } else if (kind === 'diamond') {
+            diamond.days += 1;
+            diamond.amount += Number(entry.diamonds) || 0;
+        } else if (kind === 'item') {
+            const payload = getDailyRewardItemPayload(entry);
+            items.days += 1;
+            items.amount += payload.amount;
+            items.byName[payload.name] = (items.byName[payload.name] || 0) + payload.amount;
+        }
+    });
+    return { range, rangeStart, today, recordedDays: selected.length, unknownCount, eligibleDays, missingDays: Math.max(0, eligibleDays - selected.length), ball, diamond, items };
+}
+
+function renderDailyRewardQuickStatsHtml() {
+    const stats = buildDailyRewardQuickStats();
+    const denominator = stats.recordedDays || 1;
+    const itemBreakdown = Object.entries(stats.items.byName).sort((a,b) => b[1] - a[1]).map(([name, amount]) => `${escapeHtml(name)} ×${amount}`).join(' · ') || '尚无道具记录';
+    return `<div class="rounded-3xl border border-indigo-100 bg-indigo-50/40 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2"><div><div class="text-xs font-black text-indigo-950">每日奖励分类统计</div><div class="text-[9px] font-bold text-indigo-600">${stats.rangeStart} ～ ${stats.today} · 记不清的 ${stats.unknownCount} 天不进入分母</div></div><div class="grid grid-cols-3 gap-1 rounded-xl bg-white p-1">${[['7','7天'],['30','30天'],['all','全部']].map(([value,label]) => `<button type="button" onclick="setDailyRewardQuickStatsRange('${value}')" class="rounded-lg px-2 py-1.5 text-[9px] font-black ${stats.range === value ? 'bg-indigo-600 text-white' : 'text-indigo-600'}">${label}</button>`).join('')}</div></div>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div class="rounded-2xl border border-sky-100 bg-white p-3"><div class="text-[9px] font-black text-sky-600">精灵球 · 单独统计</div><div class="mt-1 text-lg font-black text-slate-900">${stats.ball.days} 天 <span class="text-[10px] text-slate-400">${(stats.ball.days / denominator * 100).toFixed(1)}%</span></div><div class="text-[9px] font-bold text-slate-500">红白 ${stats.ball.poke} · 蓝 ${stats.ball.great} · 黑黄 ${stats.ball.ultra}</div></div>
+            <div class="rounded-2xl border border-cyan-100 bg-white p-3"><div class="text-[9px] font-black text-cyan-600">钻石 · 单独统计</div><div class="mt-1 text-lg font-black text-slate-900">${stats.diamond.amount} <span class="text-[10px] text-slate-400">共 ${stats.diamond.days} 天 · ${(stats.diamond.days / denominator * 100).toFixed(1)}%</span></div><div class="text-[9px] font-bold text-slate-500">日均 ${stats.diamond.days ? (stats.diamond.amount / stats.diamond.days).toFixed(1) : '0'} 钻石（仅钻石日）</div></div>
+            <div class="rounded-2xl border border-violet-100 bg-white p-3"><div class="text-[9px] font-black text-violet-600">其他道具 · 合并统计</div><div class="mt-1 text-lg font-black text-slate-900">${stats.items.amount} 件 <span class="text-[10px] text-slate-400">${stats.items.days} 天 · ${(stats.items.days / denominator * 100).toFixed(1)}%</span></div><div class="mt-1 text-[9px] font-bold leading-relaxed text-slate-500">${itemBreakdown}</div></div>
+        </div>
+        <div class="mt-2 rounded-xl bg-white/70 px-3 py-2 text-[9px] font-bold text-slate-500">有效统计日 ${stats.eligibleDays} 天 · 已录 ${stats.recordedDays} 天 · 尚未录 ${stats.missingDays} 天。梦之碎片等奖励按“道具件数”统计，不换算成碎片面值。</div>
+    </div>`;
+}
+
+function renderDailyRewardQuickModal() {
+    const content = document.getElementById('daily-reward-quick-content');
+    if (!content) return;
+    content.innerHTML = `${renderDailyRewardCalendarHtml()}${renderDailyRewardQuickEditorHtml()}${renderDailyRewardQuickStatsHtml()}`;
+}
+
+function setDailyRewardQuickSyncStatus(status, textValue = '') {
+    const el = document.getElementById('daily-reward-quick-sync');
+    if (!el) return;
+    const config = {
+        local: ['text-slate-500 bg-slate-100', 'fa-mobile-screen', '游客记录仅保存在当前设备'],
+        syncing: ['text-sky-700 bg-sky-50', 'fa-cloud-arrow-up fa-bounce', textValue || '本机已保存，正在后台同步账号'],
+        success: ['text-emerald-700 bg-emerald-50', 'fa-cloud-circle-check', textValue || '已同步到账号'],
+        error: ['text-amber-700 bg-amber-50', 'fa-triangle-exclamation', textValue || '同步失败，本机记录已保留']
+    }[status] || ['text-slate-500 bg-slate-100', 'fa-circle-info', textValue];
+    el.className = `inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-[9px] font-black ${config[0]}`;
+    el.innerHTML = `<i class="fa-solid ${config[1]}"></i>${escapeHtml(config[2])}`;
+}
+
+async function openDailyRewardQuickModal() {
+    document.getElementById('daily-reward-quick-modal')?.remove();
+    loadBallPlannerStateFromHistory();
+    dailyRewardQuickUi.selectedDate = getTodayLocalDateString();
+    dailyRewardQuickUi.month = dailyRewardQuickUi.selectedDate.slice(0, 7);
+    dailyRewardQuickUi.dirty = false;
+    const modal = document.createElement('div');
+    modal.id = 'daily-reward-quick-modal';
+    modal.className = 'fixed inset-0 z-[96] flex items-center justify-center bg-slate-950/60 p-2 sm:p-4 backdrop-blur-sm animate-fadeIn';
+    modal.onclick = event => { if (event.target === modal) modal.remove(); };
+    modal.innerHTML = `<div class="relative flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-amber-100 bg-[#fffdf8] shadow-2xl" onclick="event.stopPropagation()">
+        <div class="flex items-start justify-between gap-3 border-b border-amber-100 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-3 sm:px-5"><div><h3 class="text-base font-black text-slate-900"><i class="fa-solid fa-gift text-amber-500"></i> 每日奖励打卡</h3><p class="mt-0.5 text-[10px] font-bold text-slate-500">14 天小日历查漏；记不清的日期可以略过，不算漏记，也不进入统计比例。</p><div id="daily-reward-quick-sync" class="mt-1"></div></div><button type="button" onclick="document.getElementById('daily-reward-quick-modal')?.remove()" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm"><i class="fa-solid fa-xmark"></i></button></div>
+        <div id="daily-reward-quick-content" class="space-y-3 overflow-y-auto p-3 sm:p-4"></div>
+    </div>`;
+    document.body.appendChild(modal);
+    renderDailyRewardQuickModal();
+    setDailyRewardQuickSyncStatus(currentCloudUser ? 'syncing' : 'local', currentCloudUser ? '正在后台读取账号记录' : '');
+    if (currentCloudUser) refreshBallPlannerFromCloudReadOnly().then(result => {
+        if (!document.getElementById('daily-reward-quick-modal')) return;
+        if (result?.ok) {
+            if (result.changed && !dailyRewardQuickUi.dirty) renderDailyRewardQuickModal();
+            setDailyRewardQuickSyncStatus('success', '已读取账号中的最新记录');
+        } else setDailyRewardQuickSyncStatus('error', '云端读取失败，当前显示本机记录');
+    });
+}
+
+function selectDailyRewardQuickDate(date) {
+    dailyRewardQuickUi.selectedDate = normalizeSleepResearchDateValue(date);
+    dailyRewardQuickUi.draftKind = '';
+    dailyRewardQuickUi.dirty = false;
+    renderDailyRewardQuickModal();
+}
+
+function toggleDailyRewardQuickCalendar() {
+    dailyRewardQuickUi.fullMonth = !dailyRewardQuickUi.fullMonth;
+    if (dailyRewardQuickUi.fullMonth) dailyRewardQuickUi.month = dailyRewardQuickUi.selectedDate.slice(0, 7);
+    renderDailyRewardQuickModal();
+}
+
+function shiftDailyRewardQuickMonth(delta) {
+    const [year, month] = dailyRewardQuickUi.month.split('-').map(Number);
+    const next = new Date(year, month - 1 + Number(delta || 0), 1);
+    dailyRewardQuickUi.month = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+    renderDailyRewardQuickModal();
+}
+
+function setDailyRewardQuickStatsRange(range) {
+    dailyRewardQuickUi.statsRange = ['7', '30', 'all'].includes(range) ? range : '30';
+    renderDailyRewardQuickModal();
+}
+
+async function setDailyRewardTrackingStartDate(date) {
+    ballPlannerState.dailyRewardStartDate = normalizeSleepResearchDateValue(date || getTodayLocalDateString());
+    await persistDailyRewardQuickChange('每日奖励统计起点已更新');
+}
+
+function setDailyRewardQuickKind(kind) {
+    dailyRewardQuickUi.draftKind = kind;
+    dailyRewardQuickUi.dirty = true;
+    renderDailyRewardQuickModal();
+}
+
+async function persistDailyRewardQuickChange(successText) {
+    const localResult = await saveBallPlannerStateToHistory({ saveCloudNow: false, syncCloud: false });
+    dailyRewardQuickUi.dirty = false;
+    renderDailyRewardQuickModal();
+    if (!currentCloudUser || localResult.guest) {
+        setDailyRewardQuickSyncStatus('local');
+        showToast(`${successText}（仅保存在当前设备）`);
+        return;
+    }
+    setDailyRewardQuickSyncStatus('syncing');
+    showToast(`${successText}，正在后台同步账号`);
+    syncBallPlannerStateWithCloud().then(result => {
+        if (!document.getElementById('daily-reward-quick-modal')) return;
+        setDailyRewardQuickSyncStatus(result?.ok ? 'success' : 'error');
+    });
+}
+
+async function saveDailyRewardQuickSelected() {
+    const date = dailyRewardQuickUi.selectedDate;
+    const existing = getDailyRewardQuickSelectedEntry();
+    const kind = dailyRewardQuickUi.draftKind || (existing && inferDailyRewardKind(existing) !== 'unknown' ? inferDailyRewardKind(existing) : 'ball');
+    let balls = normalizeBallCounts({});
+    let diamonds = 0;
+    let itemName = '';
+    let itemAmount = 0;
+    let displayName = '每日奖励';
+    if (kind === 'ball') {
+        balls = normalizeBallCounts({ poke: document.getElementById('daily-reward-quick-poke')?.value, great: document.getElementById('daily-reward-quick-great')?.value, ultra: document.getElementById('daily-reward-quick-ultra')?.value });
+        if (!BALL_KEYS.some(key => balls[key] > 0)) { alert('请至少填写一种精灵球数量。'); return; }
+        displayName = BALL_KEYS.filter(key => balls[key] > 0).map(key => `${BALL_LABELS[key]} ×${balls[key]}`).join(' / ');
+    } else if (kind === 'diamond') {
+        diamonds = Math.max(0, Math.floor(Number(document.getElementById('daily-reward-quick-diamonds')?.value) || 0));
+        if (!diamonds) { alert('请填写钻石数量。'); return; }
+        displayName = `钻石 ×${diamonds}`;
+    } else {
+        itemName = String(document.getElementById('daily-reward-quick-item-name')?.value || '').trim();
+        itemAmount = Math.max(0, Math.floor(Number(document.getElementById('daily-reward-quick-item-amount')?.value) || 0));
+        if (!itemName || !itemAmount) { alert('请填写道具名称和数量。'); return; }
+        displayName = `${itemName} ×${itemAmount}`;
+    }
+    const now = new Date().toISOString();
+    const next = normalizeBallPlannerEntry({
+        ...(existing || {}),
+        id: existing?.id || `daily_reward_${date}`,
+        sourceType: 'dailyReward', status: 'received', date, rewardKind: kind, balls, diamonds, itemName, itemAmount,
+        displayName, templateName: displayName, note: '每日奖励快捷打卡记录', createdAt: existing?.createdAt || now, updatedAt: now
+    });
+    applyBallPlannerEntryFullDelta(existing, next);
+    if (existing) ballPlannerState.entries = (ballPlannerState.entries || []).map(entry => String(entry.id) === String(existing.id) ? next : entry);
+    else ballPlannerState.entries.unshift(next);
+    if (ballPlannerState.entryTombstones) delete ballPlannerState.entryTombstones[String(next.id)];
+    dailyRewardQuickUi.draftKind = '';
+    await persistDailyRewardQuickChange(existing ? '每日奖励已修改' : '每日奖励已记录');
+}
+
+async function markDailyRewardQuickUnknown() {
+    const existing = getDailyRewardQuickSelectedEntry();
+    const now = new Date().toISOString();
+    const next = normalizeBallPlannerEntry({
+        ...(existing || {}), id: existing?.id || `daily_reward_${dailyRewardQuickUi.selectedDate}`,
+        sourceType: 'dailyReward', status: 'skipped', date: dailyRewardQuickUi.selectedDate, rewardKind: 'unknown',
+        balls: {}, diamonds: 0, itemName: '', itemAmount: 0, displayName: '记不清 / 不再补录', templateName: '',
+        note: '玩家确认已经记不清当天奖励；该日期不计为漏记，也不进入奖励统计分母。', createdAt: existing?.createdAt || now, updatedAt: now
+    });
+    applyBallPlannerEntryFullDelta(existing, next);
+    if (existing) ballPlannerState.entries = (ballPlannerState.entries || []).map(entry => String(entry.id) === String(existing.id) ? next : entry);
+    else ballPlannerState.entries.unshift(next);
+    dailyRewardQuickUi.draftKind = '';
+    await persistDailyRewardQuickChange('该日期已标记为记不清');
+}
+
+async function deleteDailyRewardQuickSelected() {
+    const existing = getDailyRewardQuickSelectedEntry();
+    if (!existing || !confirm(`删除 ${dailyRewardQuickUi.selectedDate} 的每日奖励状态吗？`)) return;
+    applyBallPlannerEntryFullDelta(existing, null);
+    if (!ballPlannerState.entryTombstones || typeof ballPlannerState.entryTombstones !== 'object') ballPlannerState.entryTombstones = {};
+    ballPlannerState.entryTombstones[String(existing.id)] = new Date().toISOString();
+    ballPlannerState.entries = (ballPlannerState.entries || []).filter(entry => String(entry.id) !== String(existing.id));
+    dailyRewardQuickUi.draftKind = '';
+    await persistDailyRewardQuickChange('每日奖励状态已删除');
 }
 
 function isHistoryDeleteMarker(log) {
@@ -27539,7 +27931,7 @@ async function calculateAndRenderWeeklyCooking() {
     const STATE_ID = 'global_tool_launcher_state_v1';
     const STATE_TYPE = 'tool_launcher_state';
     const POSITION_KEY = 'global_tool_launcher_position_v1';
-    const DEFAULT_SHORTCUTS = ['sleepResearch', 'history', 'graduation', 'liveCooking', 'ballPlanner', 'sleepType'];
+    const DEFAULT_SHORTCUTS = ['sleepResearch', 'dailyReward', 'history', 'graduation', 'liveCooking', 'ballPlanner', 'sleepType'];
     const GROUPS = [
         { id: 'luck', label: '运气与捕捉', icon: 'fa-clover' },
         { id: 'pokemon', label: '宝可梦与培养', icon: 'fa-paw' },
@@ -27567,6 +27959,7 @@ async function calculateAndRenderWeeklyCooking() {
         { id: 'ideal', group: 'cooking', label: '理论最优策略', desc: '料理、树果与技能理想解', icon: 'fa-brain', tone: 'bg-cyan-50 text-cyan-800', action: 'openIdealStrategyModal' },
 
         { id: 'sleepType', group: 'sleep', label: '睡眠类型规划', desc: '记录比例并规划下一觉', icon: 'fa-moon', tone: 'bg-violet-50 text-violet-700', action: 'openSleepTypePlannerModal' },
+        { id: 'dailyReward', group: 'sleep', label: '每日奖励打卡', desc: '小日历查漏与快速补录', icon: 'fa-gift', tone: 'bg-amber-50 text-amber-800', action: 'openDailyRewardQuickModal' },
         { id: 'ballPlanner', group: 'sleep', label: '精灵球与每日奖励', desc: '库存、奖励和商店规划', icon: 'fa-baseball', tone: 'bg-sky-50 text-sky-700', action: 'openBallPlannerModal' },
 
         { id: 'weeklyCookingLegacy', group: 'legacy', label: '旧周料理随机仿真', desc: '兼容旧方案，不再推荐', icon: 'fa-calendar-week', tone: 'bg-slate-100 text-slate-500', action: 'openWeeklyCookingSimulatorModal' }
