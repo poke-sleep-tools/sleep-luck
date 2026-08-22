@@ -4046,7 +4046,7 @@ function mergeHistoryLogs(cloudLogs = [], localLogs = []) {
     });
 }
 
-async function loadHistoryFromCloud() {
+async function loadHistoryFromCloud(options = {}) {
     // “总遇到数”过去只存在当前设备的 localStorage。先把旧值迁移成隐藏的历史状态，
     // 再与云端按 updatedAt 合并；旧版没有时间戳的本地值使用极早时间，避免覆盖另一台设备已有的新值。
     loadEncounterStatisticsFromLocal();
@@ -4057,7 +4057,7 @@ async function loadHistoryFromCloud() {
 
     if (!currentCloudUser) {
         updateBoxUI(false);
-        return;
+        return { ok: true, guest: true };
     }
 
     const localSnapshot = Array.isArray(historyLogs) ? [...historyLogs] : [];
@@ -4072,7 +4072,7 @@ async function loadHistoryFromCloud() {
         console.error(error);
         showToast('读取云端历史库失败，请确认 player_boxes 已添加 history_logs 列');
         updateBoxUI(false);
-        return;
+        return { ok: false, error };
     }
 
     if (data && Array.isArray(data.history_logs)) {
@@ -4080,14 +4080,18 @@ async function loadHistoryFromCloud() {
         const remoteSnapshot = mergeHistoryLogs([], preparedRemoteLogs);
         // 云端是跨设备已经确认保存的快照。老版本记录没有 updatedAt 时，
         // 同 ID 无法按时间区分，故让云端处于后合并位置并在平局时覆盖本机旧缓存。
-        historyLogs = mergeHistoryLogs(localSnapshot, preparedRemoteLogs);
+        // 云端返回期间，玩家仍可能在本机新增、编辑或删除记录。合并时必须再次纳入
+        // “此刻”的内存记录，不能只使用请求发出前的快照，否则后台同步会吞掉等待期间的改动。
+        const latestLocalSnapshot = mergeHistoryLogs(localSnapshot, historyLogs);
+        historyLogs = mergeHistoryLogs(latestLocalSnapshot, preparedRemoteLogs);
         const backfilledResearch = ensureSleepResearchForExistingCaptures({ persist: false, syncCloud: false });
         loadEncounterStatisticsFromHistory({ refresh: false });
         localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
 
         // 如果本机有云端没有的旧历史，或旧流水被补建了睡眠研究空壳，顺手补回云端，避免换设备丢失
-        if (backfilledResearch || JSON.stringify(historyLogs) !== JSON.stringify(remoteSnapshot)) {
-            await saveHistoryToCloudNow();
+        if (backfilledResearch || stableHistoryJson(historyLogs) !== stableHistoryJson(remoteSnapshot)) {
+            if (options.deferRepairUpload) scheduleSaveHistoryToCloud();
+            else await saveHistoryToCloudNow();
         }
 
         loadBallPlannerStateFromHistory();
@@ -4096,15 +4100,17 @@ async function loadHistoryFromCloud() {
             rebuildTodayCheckInsFromHistory();
             renderTodayReportUI();
         }
-        return;
+        return { ok: true, guest: false };
     }
 
     // 老账号首次使用新版：云端还没有历史列数据时，用本地历史作为首份云端快照
-    historyLogs = localSnapshot;
+    historyLogs = mergeHistoryLogs(localSnapshot, historyLogs);
     loadEncounterStatisticsFromHistory({ refresh: false });
     loadBallPlannerStateFromHistory();
-    await saveHistoryToCloudNow();
+    if (options.deferRepairUpload) scheduleSaveHistoryToCloud();
+    else await saveHistoryToCloudNow();
     updateBoxUI(false);
+    return { ok: true, guest: false };
 }
 
 function saveHistoryToCloudNow() {
@@ -20472,12 +20478,14 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
 
 // 🚀 局部新增：历史抽卡时光库全景视窗渲染引擎
 function setHistoryViewMode(mode) {
+    const modal = document.getElementById('history-logs-modal');
     const research = document.getElementById('history-research-view');
     const captures = document.getElementById('history-captures-view');
     const researchBtn = document.getElementById('history-tab-research');
     const capturesBtn = document.getElementById('history-tab-captures');
     if (!research || !captures) return;
     const showResearch = mode !== 'captures';
+    if (modal) modal.dataset.historyView = showResearch ? 'research' : 'captures';
     research.classList.toggle('hidden', !showResearch);
     captures.classList.toggle('hidden', showResearch);
     if (researchBtn) researchBtn.className = showResearch ? 'bg-slate-900 text-white rounded-xl px-3 py-2 text-xs font-black' : 'bg-slate-100 text-slate-600 rounded-xl px-3 py-2 text-xs font-black';
@@ -20486,7 +20494,13 @@ function setHistoryViewMode(mode) {
 
 function filterHistoryResearchByDate() {
     const v = document.getElementById('history-date-search')?.value || '';
-    document.querySelectorAll('[data-research-date]').forEach(el => {
+    const rows = Array.from(document.querySelectorAll('[data-research-date]'));
+    if (v && historyModalResearchLimit !== Number.MAX_SAFE_INTEGER && !rows.some(el => el.getAttribute('data-research-date') === v)) {
+        historyModalResearchLimit = Number.MAX_SAFE_INTEGER;
+        reopenHistoryModalFromMemory({ view: 'research', date: v });
+        return;
+    }
+    rows.forEach(el => {
         el.classList.toggle('hidden', !!v && el.getAttribute('data-research-date') !== v);
     });
 }
@@ -21373,11 +21387,55 @@ function runGraduationDrySpellAnalysis() {
     saveDrySpellAnalysisSnapshot({ form: collectDrySpellFormSnapshot(), summary, savedAt: new Date().toISOString() });
     showToast(currentCloudUser ? '已完成毕业断档分析，并同步保存到账号' : '已完成毕业断档分析，并自动保存本次结果');
 }
+const HISTORY_MODAL_PAGE_SIZE = 30;
+let historyModalResearchLimit = HISTORY_MODAL_PAGE_SIZE;
+let historyModalCaptureDateLimit = HISTORY_MODAL_PAGE_SIZE;
+
+function captureHistoryModalUiState() {
+    const modal = document.getElementById('history-logs-modal');
+    return {
+        view: modal?.dataset.historyView || (document.getElementById('history-captures-view')?.classList.contains('hidden') ? 'research' : 'captures'),
+        date: document.getElementById('history-date-search')?.value || ''
+    };
+}
+
+async function reopenHistoryModalFromMemory(uiState = {}) {
+    document.getElementById('history-logs-modal')?.remove();
+    await openHistoryModal(true);
+    const dateInput = document.getElementById('history-date-search');
+    if (dateInput && uiState.date) {
+        dateInput.value = uiState.date;
+        filterHistoryResearchByDate();
+    }
+    setHistoryViewMode(uiState.view || 'research');
+}
+
+function applyHistoryCloudRefreshToOpenModal() {
+    if (!document.getElementById('history-logs-modal')) return;
+    reopenHistoryModalFromMemory(captureHistoryModalUiState());
+}
+
+function loadMoreHistoryModal(kind = 'research', loadAll = false) {
+    const uiState = captureHistoryModalUiState();
+    if (kind === 'captures') {
+        historyModalCaptureDateLimit = loadAll ? Number.MAX_SAFE_INTEGER : historyModalCaptureDateLimit + HISTORY_MODAL_PAGE_SIZE;
+        uiState.view = 'captures';
+    } else {
+        historyModalResearchLimit = loadAll ? Number.MAX_SAFE_INTEGER : historyModalResearchLimit + HISTORY_MODAL_PAGE_SIZE;
+        uiState.view = 'research';
+    }
+    reopenHistoryModalFromMemory(uiState);
+}
+
 async function openHistoryModal(skipCloudRefresh = false) {
     const openedModal = document.getElementById('history-logs-modal');
     if (openedModal) {
         if (openedModal.dataset.loading === '1') showToast('历史抽卡库正在加载，请稍候…');
         return;
+    }
+    if (!skipCloudRefresh) {
+        historyModalResearchLimit = HISTORY_MODAL_PAGE_SIZE;
+        historyModalCaptureDateLimit = HISTORY_MODAL_PAGE_SIZE;
     }
 
     // 云端历史可能需要数秒才能返回，因此先打开可见的加载弹窗，而不是让按钮点击后页面毫无变化。
@@ -21394,19 +21452,16 @@ async function openHistoryModal(skipCloudRefresh = false) {
         </div>
     </div>`;
     document.body.appendChild(modal);
-    const historySlowTimer = setTimeout(() => {
-        const detail = modal.querySelector('[data-history-loading-detail]');
-        if (detail && modal.dataset.loading === '1') detail.innerHTML = '<span class="text-amber-600">云端同步时间比平时更长，仍在等待…</span><span class="block mt-1 text-slate-400">可以继续等待，也可以点右上角关闭后稍后重试。</span>';
-    }, 10000);
+    let cloudRefreshPromise = null;
 
     // 登录状态优先拉云端最新历史；但删除/编辑后本地已是最新时，可跳过云端刷新，避免旧云端数据被合并回画面。
     try {
         if (skipCloudRefresh) {
             // 保持当前内存中的 historyLogs，不重新读取。
-        } else if (currentCloudUser) {
-            await loadHistoryFromCloud();
         } else {
             loadHistoryFromLocal();
+            // 本机完整缓存先用于画面；云端仍执行完整的双端合并，但不再阻塞弹窗。
+            if (currentCloudUser) cloudRefreshPromise = loadHistoryFromCloud({ deferRepairUpload: true });
         }
     } catch (err) {
         console.error('打开历史抽卡库失败，改用本机记录：', err);
@@ -21415,7 +21470,6 @@ async function openHistoryModal(skipCloudRefresh = false) {
     }
 
     // 用户可能在等待时主动关闭；加载结束后不要把弹窗重新强行弹出来。
-    clearTimeout(historySlowTimer);
     if (!modal.isConnected) return;
     modal.dataset.loading = '0';
     modal.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn';
@@ -21429,6 +21483,8 @@ async function openHistoryModal(skipCloudRefresh = false) {
         if (!grouped[log.date]) grouped[log.date] = [];
         grouped[log.date].push(log);
     });
+    const captureDates = Object.keys(grouped).sort((a, b) => String(b).localeCompare(String(a)));
+    const renderedCaptureDates = captureDates.slice(0, historyModalCaptureDateLimit);
     
     let historyHTML = "";
     const resultNames = { none: "没货", tied: "🔸和解", grad: "🟩毕业", bigGrad: "🔮大毕业", goldGrad: "👑金帮" };
@@ -21444,7 +21500,7 @@ async function openHistoryModal(skipCloudRefresh = false) {
         historyHTML = `<div class="text-center py-12 text-slate-400 text-xs font-medium"><i class="fa-solid fa-hourglass block text-2xl mb-2 text-slate-300"></i>时光书卷空无一字，快去完成你的第一发打卡开箱吧！</div>`;
     } else {
         // 遍历生成按天分块的优雅时间线布局
-        for (let date in grouped) {
+        for (const date of renderedCaptureDates) {
             let chips = grouped[date].map(it => {
                 let shapeText = getCheckInDisplayShapeTag(it);
                 let cls = resultColors[it.result] || "bg-slate-100 text-slate-600 border-slate-200";
@@ -21482,11 +21538,12 @@ async function openHistoryModal(skipCloudRefresh = false) {
         }
     });
     const researchItems = Array.from(researchGrouped.values()).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(a.session || '').localeCompare(String(b.session || '')));
+    const renderedResearchItems = researchItems.slice(0, historyModalResearchLimit);
     let researchHTML = '';
     if (researchItems.length === 0) {
         researchHTML = `<div class="text-center py-12 text-slate-400 text-xs font-medium"><i class="fa-solid fa-moon block text-2xl mb-2 text-slate-300"></i>还没有睡眠研究记录。</div>`;
     } else {
-        researchHTML = researchItems.map(r => {
+        researchHTML = renderedResearchItems.map(r => {
             const logs = getLogsForSleepResearch(r.date, r.session || '一觉');
             const sleepTypeRecord = findSleepTypeRecord(r.date, r.session || '一觉');
             const rDate = escapeHtmlAttr(r.date || '');
@@ -21508,6 +21565,14 @@ async function openHistoryModal(skipCloudRefresh = false) {
         }).join('');
     }
 
+    const researchMoreHTML = researchItems.length > renderedResearchItems.length
+        ? `<div class="sticky bottom-0 mt-2 grid grid-cols-2 gap-2 rounded-2xl border border-indigo-100 bg-white/95 p-2 shadow-sm backdrop-blur"><button type="button" onclick="loadMoreHistoryModal('research', false)" class="rounded-xl bg-indigo-50 px-3 py-2 text-[10px] font-black text-indigo-700">加载更多（再 ${Math.min(HISTORY_MODAL_PAGE_SIZE, researchItems.length - renderedResearchItems.length)} 条）</button><button type="button" onclick="loadMoreHistoryModal('research', true)" class="rounded-xl bg-slate-900 px-3 py-2 text-[10px] font-black text-white">加载全部 ${researchItems.length} 条</button></div>`
+        : (researchItems.length > HISTORY_MODAL_PAGE_SIZE ? `<div class="py-2 text-center text-[9px] font-bold text-slate-400">已加载全部 ${researchItems.length} 条睡眠研究</div>` : '');
+    const captureMoreHTML = captureDates.length > renderedCaptureDates.length
+        ? `<div class="sticky bottom-0 mt-2 grid grid-cols-2 gap-2 rounded-2xl border border-indigo-100 bg-white/95 p-2 shadow-sm backdrop-blur"><button type="button" onclick="loadMoreHistoryModal('captures', false)" class="rounded-xl bg-indigo-50 px-3 py-2 text-[10px] font-black text-indigo-700">加载更多日期</button><button type="button" onclick="loadMoreHistoryModal('captures', true)" class="rounded-xl bg-slate-900 px-3 py-2 text-[10px] font-black text-white">加载全部 ${captureDates.length} 天</button></div>`
+        : (captureDates.length > HISTORY_MODAL_PAGE_SIZE ? `<div class="py-2 text-center text-[9px] font-bold text-slate-400">已加载全部 ${captureDates.length} 天捕捉流水</div>` : '');
+    const renderedHistorySignature = stableHistoryJson(mergeHistoryLogs([], historyLogs));
+
     modal.innerHTML = `
     <div class="bg-white rounded-3xl border border-slate-200 p-6 max-w-2xl w-full shadow-2xl flex flex-col gap-4 relative max-h-[85vh]" onclick="event.stopPropagation()">
         <button onclick="document.getElementById('history-logs-modal').remove()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"><i class="fa-solid fa-xmark"></i></button>
@@ -21516,6 +21581,8 @@ async function openHistoryModal(skipCloudRefresh = false) {
             <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-book-open text-indigo-500"></i> 历史抽卡时光长卷</h3>
             <p class="text-[10px] text-slate-400 font-medium mt-0.5">可按睡眠研究查看，也可切回原始捕捉流水。</p>
         </div>
+
+        <div data-history-sync-status class="${cloudRefreshPromise ? '' : 'hidden '}rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-center text-[9px] font-black text-sky-700" role="status" aria-live="polite"><i class="fa-solid fa-cloud-arrow-down mr-1"></i>本机完整记录已显示，正在后台合并云端最新记录；现在可以正常查看和修改。</div>
 
         <button onclick="openGraduationDrySpellModal()" class="w-full bg-gradient-to-r from-rose-50 via-orange-50 to-rose-50 hover:from-rose-100 hover:via-orange-100 hover:to-rose-100 text-rose-700 border border-rose-100 font-black text-xs py-2.5 rounded-2xl transition flex items-center justify-center gap-2" title="基于历史抽卡库，点击后一次性分析距离上一个毕业宝后的断档情况">
             <i class="fa-solid fa-cloud-rain"></i> 📉 毕业断档分析
@@ -21529,15 +21596,55 @@ async function openHistoryModal(skipCloudRefresh = false) {
 
         <div id="history-research-view" class="flex-1 overflow-y-auto pr-1 space-y-2 max-h-[55vh]">
             ${researchHTML}
+            ${researchMoreHTML}
         </div>
         <div id="history-captures-view" class="hidden flex-1 overflow-y-auto pr-1 space-y-4 max-h-[55vh]">
             ${historyHTML}
+            ${captureMoreHTML}
         </div>
 
         <button onclick="document.getElementById('history-logs-modal').remove()" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2.5 rounded-xl transition duration-150 shadow-md">
             合上时光书卷
         </button>
     </div>`;
+
+    if (cloudRefreshPromise) {
+        cloudRefreshPromise.then(syncResult => {
+            const activeModal = document.getElementById('history-logs-modal');
+            if (!activeModal) return;
+            if (syncResult?.ok === false) {
+                const status = activeModal.querySelector('[data-history-sync-status]');
+                if (status) {
+                    status.className = 'rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-center text-[9px] font-black text-amber-700';
+                    status.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-1"></i>云端暂时未能完成同步；本机完整记录仍已保留，可继续使用。';
+                }
+                return;
+            }
+            const changed = renderedHistorySignature !== stableHistoryJson(mergeHistoryLogs([], historyLogs));
+            const editingAnotherHistorySurface = !!document.getElementById('daily-checkin-modal') || !!document.getElementById('sleep-research-detail-modal');
+            if (changed && !editingAnotherHistorySurface) {
+                const uiState = captureHistoryModalUiState();
+                reopenHistoryModalFromMemory(uiState).then(() => showToast('云端历史已合并，画面已更新'));
+                return;
+            }
+            const status = activeModal.querySelector('[data-history-sync-status]');
+            if (!status) return;
+            status.classList.remove('hidden');
+            if (changed) {
+                status.className = 'rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-center text-[9px] font-black text-amber-700';
+                status.innerHTML = '<i class="fa-solid fa-cloud-circle-check mr-1"></i>云端记录已安全合并；为避免打断当前编辑，下次重新打开历史库时显示最新结果。';
+            } else {
+                status.className = 'rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-center text-[9px] font-black text-emerald-700';
+                status.innerHTML = '<i class="fa-solid fa-cloud-circle-check mr-1"></i>云端同步完成，本机与云端记录一致。';
+            }
+        }).catch(error => {
+            console.error('历史库后台同步失败：', error);
+            const status = document.querySelector('#history-logs-modal [data-history-sync-status]');
+            if (!status) return;
+            status.className = 'rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-center text-[9px] font-black text-amber-700';
+            status.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-1"></i>云端暂时未能完成同步；本机完整记录仍已保留，可继续使用。';
+        });
+    }
     
 }
 
