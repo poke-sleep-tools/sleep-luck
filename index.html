@@ -78,6 +78,90 @@
                 max-height: 6rem;
             }
         }
+
+        /* 全站悬浮功能台：只新增导航，不替换任何原功能入口。 */
+        #tool-launcher-ball {
+            position: fixed;
+            z-index: 145;
+            width: 3.35rem;
+            height: 3.35rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,.78);
+            background: linear-gradient(145deg, #4f46e5 0%, #7c3aed 52%, #0ea5e9 100%);
+            color: #fff;
+            box-shadow: 0 12px 30px rgba(79,70,229,.34), inset 0 1px 0 rgba(255,255,255,.35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            transition: opacity .2s ease, transform .2s ease, box-shadow .2s ease;
+        }
+        #tool-launcher-ball:active { cursor: grabbing; transform: scale(.94); }
+        #tool-launcher-ball.tool-launcher-idle { opacity: .66; }
+        #tool-launcher-ball:hover { opacity: 1; box-shadow: 0 14px 34px rgba(79,70,229,.44), inset 0 1px 0 rgba(255,255,255,.4); }
+        .tool-launcher-dots { display:grid; grid-template-columns:repeat(2,.42rem); gap:.22rem; }
+        .tool-launcher-dots span { width:.42rem; height:.42rem; border-radius:.15rem; background:currentColor; box-shadow:0 1px 2px rgba(15,23,42,.2); }
+        #tool-launcher-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 150;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding: .75rem;
+            background: rgba(15,23,42,.52);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+        }
+        .tool-launcher-sheet {
+            width: min(100%, 42rem);
+            max-height: min(82vh, 50rem);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid rgba(226,232,240,.95);
+            border-radius: 1.75rem;
+            background: rgba(255,255,255,.98);
+            box-shadow: 0 28px 70px rgba(15,23,42,.28);
+            animation: toolLauncherRise .2s ease-out;
+        }
+        @keyframes toolLauncherRise { from { transform:translateY(1.2rem); opacity:0; } to { transform:translateY(0); opacity:1; } }
+        .tool-launcher-scroll { overflow-y:auto; overscroll-behavior:contain; padding:1rem; }
+        .tool-launcher-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.65rem; }
+        .tool-launcher-card {
+            min-width:0;
+            min-height:4.25rem;
+            display:flex;
+            align-items:center;
+            gap:.7rem;
+            padding:.78rem;
+            border:1px solid #e2e8f0;
+            border-radius:1.15rem;
+            background:#fff;
+            color:#334155;
+            text-align:left;
+            box-shadow:0 3px 10px rgba(15,23,42,.045);
+            transition:transform .15s ease, border-color .15s ease, background .15s ease;
+        }
+        .tool-launcher-card:hover { transform:translateY(-1px); border-color:#c7d2fe; background:#f8faff; }
+        .tool-launcher-card-icon { width:2.45rem; height:2.45rem; flex:none; display:flex; align-items:center; justify-content:center; border-radius:.85rem; font-size:1rem; }
+        .tool-launcher-card-copy { min-width:0; display:flex; flex-direction:column; gap:.14rem; }
+        .tool-launcher-card-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.76rem; font-weight:900; }
+        .tool-launcher-card-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#94a3b8; font-size:.56rem; font-weight:700; }
+        .tool-launcher-section-title { margin:.95rem 0 .5rem; display:flex; align-items:center; gap:.4rem; color:#64748b; font-size:.64rem; font-weight:900; letter-spacing:.08em; }
+        .tool-launcher-edit-row { display:flex; align-items:center; gap:.55rem; padding:.65rem; border:1px solid #e2e8f0; border-radius:1rem; background:#fff; }
+        .tool-launcher-mini-btn { width:2rem; height:2rem; flex:none; border-radius:.7rem; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; font-size:.7rem; font-weight:900; }
+        @media (min-width:640px) {
+            #tool-launcher-overlay { align-items:center; }
+            .tool-launcher-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+        }
+        @media (max-width:380px) {
+            .tool-launcher-grid { grid-template-columns:1fr; }
+            .tool-launcher-sheet { max-height:86vh; }
+        }
     </style>
 </head>
 <body class="p-4 md:p-8 min-h-screen flex flex-col items-center justify-start text-slate-800" onclick="closeSuggestionsOutside(event)">
@@ -1515,7 +1599,7 @@ function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
-        !!(log && (log.type === 'live_cooking_state' || log.type === 'live_cooking_meal'));
+        !!(log && (log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state'));
 }
 
 function isBallPlannerEnabled() {
@@ -27337,6 +27421,280 @@ async function calculateAndRenderWeeklyCooking() {
     window.deleteLiveCookingMeal=function(slotIndex){
         const week=liveCookingState.viewWeek,index=Number(slotIndex),existing=getLiveCookingRecord(week,index);if(!existing)return;if(!confirm(`删除${liveCookingSlotLabel(index)}的料理记录？`))return;saveLiveCookingRecord({...existing,removed:true});invalidateLiveCookingPlan();document.getElementById('live-cooking-meal-editor')?.remove();renderLiveCookingModal();
     };
+})();
+</script>
+<script>
+/* =========================================================
+ * 全站悬浮功能台 v1
+ * 两层结构：玩家自定义常用功能 / 全部功能。原页面入口全部保留。
+ * ========================================================= */
+(function () {
+    const STATE_ID = 'global_tool_launcher_state_v1';
+    const STATE_TYPE = 'tool_launcher_state';
+    const POSITION_KEY = 'global_tool_launcher_position_v1';
+    const DEFAULT_SHORTCUTS = ['sleepResearch', 'history', 'graduation', 'liveCooking', 'ballPlanner', 'sleepType'];
+    const GROUPS = [
+        { id: 'luck', label: '运气与捕捉', icon: 'fa-clover' },
+        { id: 'pokemon', label: '宝可梦与培养', icon: 'fa-paw' },
+        { id: 'cooking', label: '料理工具', icon: 'fa-utensils' },
+        { id: 'sleep', label: '睡眠与资源', icon: 'fa-moon' },
+        { id: 'legacy', label: '旧版与实验功能', icon: 'fa-box-archive' }
+    ];
+    const TOOLS = [
+        { id: 'luckHome', group: 'luck', label: '运气评分首页', desc: '回到评分与大仓顶部', icon: 'fa-clover', tone: 'bg-emerald-50 text-emerald-700', custom: 'home' },
+        { id: 'sleepResearch', group: 'luck', label: '完整睡眠研究', desc: '创建一觉并连续录入', icon: 'fa-bed', tone: 'bg-indigo-50 text-indigo-700', action: 'openSleepResearchModal' },
+        { id: 'dailyCheckIn', group: 'luck', label: '每日捕捉打卡', desc: '快速录入一只宝可梦', icon: 'fa-calendar-check', tone: 'bg-violet-50 text-violet-700', action: 'openDailyCheckInModal' },
+        { id: 'history', group: 'luck', label: '历史抽卡库', desc: '睡眠研究与捕捉流水', icon: 'fa-clock-rotate-left', tone: 'bg-slate-100 text-slate-700', action: 'openHistoryModal' },
+        { id: 'graduation', group: 'luck', label: '出货宝可梦库', desc: '查看已收录个体面板', icon: 'fa-trophy', tone: 'bg-amber-50 text-amber-700', action: 'openGraduationDexModal' },
+        { id: 'drySpell', group: 'luck', label: '毕业断档分析', desc: '查看距离上次毕业数据', icon: 'fa-cloud-rain', tone: 'bg-rose-50 text-rose-700', action: 'openGraduationDrySpellModal' },
+        { id: 'calibration', group: 'luck', label: '总捕捉数校准', desc: '调整老玩家捕捉补正', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', custom: 'calibration' },
+
+        { id: 'training', group: 'pokemon', label: '联合培养计算', desc: '经验、糖果与午睡岛规划', icon: 'fa-chart-line', tone: 'bg-indigo-50 text-indigo-700', action: 'openTrainingPlannerModal' },
+        { id: 'worker', group: 'pokemon', label: '补录打工个体', desc: '收录临时培养宝可梦', icon: 'fa-helmet-safety', tone: 'bg-sky-50 text-sky-700', action: 'openWorkerBackfillModal' },
+        { id: 'future', group: 'pokemon', label: '补录未来可期', desc: '收录高等级潜力个体', icon: 'fa-seedling', tone: 'bg-fuchsia-50 text-fuchsia-700', action: 'openFuturePotentialBackfillModal' },
+        { id: 'graduationBackfill', group: 'pokemon', label: '补录出货个体', desc: '手动补充毕业档案', icon: 'fa-plus', tone: 'bg-amber-50 text-amber-700', action: 'openGraduationBackfillModal' },
+
+        { id: 'liveCooking', group: 'cooking', label: '料理周历', desc: '记录料理并实时规划', icon: 'fa-calendar-days', tone: 'bg-orange-50 text-orange-700', action: 'openLiveCookingPlannerModal' },
+        { id: 'mealPrep', group: 'cooking', label: '料理备料规划', desc: '计算下周提前囤料', icon: 'fa-basket-shopping', tone: 'bg-orange-50 text-orange-700', action: 'openMealPrepPlannerModal' },
+        { id: 'recipeFit', group: 'cooking', label: '食谱 × Box适配', desc: '比较食谱与盒子效率', icon: 'fa-ranking-star', tone: 'bg-emerald-50 text-emerald-700', action: 'openRecipeBoxFitModal' },
+        { id: 'ideal', group: 'cooking', label: '理论最优策略', desc: '料理、树果与技能理想解', icon: 'fa-brain', tone: 'bg-cyan-50 text-cyan-800', action: 'openIdealStrategyModal' },
+
+        { id: 'sleepType', group: 'sleep', label: '睡眠类型规划', desc: '记录比例并规划下一觉', icon: 'fa-moon', tone: 'bg-violet-50 text-violet-700', action: 'openSleepTypePlannerModal' },
+        { id: 'ballPlanner', group: 'sleep', label: '精灵球与每日奖励', desc: '库存、奖励和商店规划', icon: 'fa-baseball', tone: 'bg-sky-50 text-sky-700', action: 'openBallPlannerModal' },
+
+        { id: 'weeklyCookingLegacy', group: 'legacy', label: '旧周料理随机仿真', desc: '兼容旧方案，不再推荐', icon: 'fa-calendar-week', tone: 'bg-slate-100 text-slate-500', action: 'openWeeklyCookingSimulatorModal' }
+    ];
+    const TOOL_MAP = new Map(TOOLS.map(tool => [tool.id, tool]));
+    let view = 'common';
+    let lastDragEndedAt = 0;
+    let idleTimer = null;
+
+    function accountLocalKey() {
+        return currentCloudUser ? `tool_launcher_state_${currentCloudUser.id}` : 'tool_launcher_state_guest';
+    }
+
+    function normalizeState(raw = {}) {
+        const seen = new Set();
+        const shortcuts = (Array.isArray(raw.shortcuts) ? raw.shortcuts : DEFAULT_SHORTCUTS)
+            .map(String)
+            .filter(id => TOOL_MAP.has(id) && !seen.has(id) && seen.add(id));
+        return {
+            shortcuts,
+            updatedAt: raw.updatedAt || new Date(0).toISOString()
+        };
+    }
+
+    function readState() {
+        let local = null;
+        try { local = JSON.parse(localStorage.getItem(accountLocalKey()) || 'null'); } catch (_) {}
+        const historyRecord = (Array.isArray(historyLogs) ? historyLogs : [])
+            .filter(item => item && item.type === STATE_TYPE && String(item.id) === STATE_ID)
+            .reduce((best, item) => typeof chooseNewerHistoryLog === 'function' ? chooseNewerHistoryLog(best, item) : item, null);
+        const historyState = historyRecord?.state || null;
+        const localTime = Date.parse(local?.updatedAt || '') || 0;
+        const historyTime = Date.parse(historyState?.updatedAt || historyRecord?.updatedAt || '') || 0;
+        const state = normalizeState(historyTime >= localTime && historyState ? historyState : (local || {}));
+        try { localStorage.setItem(accountLocalKey(), JSON.stringify(state)); } catch (_) {}
+        return state;
+    }
+
+    function saveState(next) {
+        const state = normalizeState(Object.assign({}, next, { updatedAt: new Date().toISOString() }));
+        try { localStorage.setItem(accountLocalKey(), JSON.stringify(state)); } catch (_) {}
+        const existing = (Array.isArray(historyLogs) ? historyLogs : []).find(item => item && item.type === STATE_TYPE && String(item.id) === STATE_ID);
+        const record = {
+            id: STATE_ID,
+            type: STATE_TYPE,
+            state,
+            createdAt: existing?.createdAt || new Date().toISOString(),
+            updatedAt: state.updatedAt
+        };
+        historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !(item && item.type === STATE_TYPE && String(item.id) === STATE_ID));
+        historyLogs.push(record);
+        if (typeof mergeHistoryLogs === 'function') historyLogs = mergeHistoryLogs([], historyLogs);
+        if (typeof saveHistoryToLocal === 'function') saveHistoryToLocal();
+        return state;
+    }
+
+    function esc(value) {
+        if (typeof escapeHtml === 'function') return escapeHtml(String(value ?? ''));
+        return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
+    }
+
+    function toolCard(tool, options = {}) {
+        const star = options.star ? `<button type="button" onclick="event.stopPropagation();toggleToolLauncherShortcut('${tool.id}')" class="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border ${options.added ? 'border-amber-200 bg-amber-50 text-amber-500' : 'border-slate-200 bg-white text-slate-300'}" title="${options.added ? '从常用功能移出' : '加入常用功能'}"><i class="fa-${options.added ? 'solid' : 'regular'} fa-star"></i></button>` : '';
+        return `<div class="relative min-w-0" data-tool-search="${esc(`${tool.label} ${tool.desc} ${tool.group}`.toLowerCase())}"><button type="button" onclick="launchFloatingTool('${tool.id}')" class="tool-launcher-card w-full ${options.star ? 'pr-10' : ''}"><span class="tool-launcher-card-icon ${tool.tone}"><i class="fa-solid ${tool.icon}"></i></span><span class="tool-launcher-card-copy"><strong>${esc(tool.label)}</strong><small>${esc(tool.desc)}</small></span></button>${star}</div>`;
+    }
+
+    function renderCommon() {
+        const state = readState();
+        const tools = state.shortcuts.map(id => TOOL_MAP.get(id)).filter(Boolean);
+        const content = tools.length
+            ? `<div class="tool-launcher-grid">${tools.map(tool => toolCard(tool)).join('')}</div>`
+            : `<div class="rounded-2xl border border-dashed border-indigo-200 bg-indigo-50/60 px-4 py-8 text-center"><div class="text-sm font-black text-indigo-800">第一层目前是空的</div><div class="mt-1 text-[10px] font-bold text-indigo-500">进入全部功能，点击星标添加你常用的入口。</div></div>`;
+        return `${content}<div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="setToolLauncherView('edit')" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-black text-slate-600"><i class="fa-solid fa-pen-to-square mr-1"></i>编辑常用</button><button type="button" onclick="setToolLauncherView('all')" class="rounded-xl bg-slate-900 px-3 py-2.5 text-xs font-black text-white">全部功能 <i class="fa-solid fa-arrow-right ml-1"></i></button></div>`;
+    }
+
+    function renderAll() {
+        const state = readState();
+        const added = new Set(state.shortcuts);
+        return `<label class="relative mb-2 block"><i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"></i><input id="tool-launcher-search" type="search" oninput="filterFloatingTools(this.value)" placeholder="搜索全部功能……" class="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs font-bold outline-none focus:border-indigo-300 focus:bg-white"></label>${GROUPS.map(group => {
+            const tools = TOOLS.filter(tool => tool.group === group.id);
+            return `<section><div class="tool-launcher-section-title"><i class="fa-solid ${group.icon}"></i>${esc(group.label)}</div><div class="tool-launcher-grid">${tools.map(tool => toolCard(tool, { star:true, added:added.has(tool.id) })).join('')}</div></section>`;
+        }).join('')}<div id="tool-launcher-no-results" class="hidden rounded-2xl border border-dashed border-slate-200 py-8 text-center text-xs font-black text-slate-400">没有找到对应功能</div>`;
+    }
+
+    function renderEdit() {
+        const state = readState();
+        const tools = state.shortcuts.map(id => TOOL_MAP.get(id)).filter(Boolean);
+        return `<div class="mb-3 flex flex-wrap gap-2"><button type="button" onclick="addAllToolLauncherShortcuts()" class="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-black text-indigo-700">全部加入</button><button type="button" onclick="clearToolLauncherShortcuts()" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-black text-slate-600">全部移出</button><button type="button" onclick="resetToolLauncherShortcuts()" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-700">恢复默认</button></div>${tools.length ? `<div class="space-y-2">${tools.map((tool,index) => `<div class="tool-launcher-edit-row"><span class="tool-launcher-card-icon ${tool.tone}"><i class="fa-solid ${tool.icon}"></i></span><span class="min-w-0 flex-1"><strong class="block truncate text-xs font-black text-slate-700">${esc(tool.label)}</strong><small class="text-[9px] font-bold text-slate-400">第 ${index + 1} 位</small></span><button type="button" onclick="moveToolLauncherShortcut('${tool.id}',-1)" class="tool-launcher-mini-btn" ${index === 0 ? 'disabled style="opacity:.35"' : ''} title="向前移动"><i class="fa-solid fa-arrow-up"></i></button><button type="button" onclick="moveToolLauncherShortcut('${tool.id}',1)" class="tool-launcher-mini-btn" ${index === tools.length - 1 ? 'disabled style="opacity:.35"' : ''} title="向后移动"><i class="fa-solid fa-arrow-down"></i></button><button type="button" onclick="toggleToolLauncherShortcut('${tool.id}')" class="tool-launcher-mini-btn border-rose-100 bg-rose-50 text-rose-500" title="移出常用"><i class="fa-solid fa-minus"></i></button></div>`).join('')}</div>` : '<div class="rounded-2xl border border-dashed border-slate-200 py-8 text-center text-xs font-black text-slate-400">尚未添加常用功能</div>'}<button type="button" onclick="setToolLauncherView('all')" class="mt-3 w-full rounded-xl border border-indigo-200 bg-indigo-50 py-2.5 text-xs font-black text-indigo-700"><i class="fa-solid fa-plus mr-1"></i>从全部功能继续添加</button>`;
+    }
+
+    function renderPanel() {
+        const body = document.getElementById('tool-launcher-body');
+        const title = document.getElementById('tool-launcher-title');
+        const back = document.getElementById('tool-launcher-back');
+        if (!body || !title || !back) return;
+        title.textContent = view === 'common' ? '常用功能' : (view === 'all' ? '全部功能' : '编辑常用功能');
+        back.classList.toggle('invisible', view === 'common');
+        back.setAttribute('onclick', view === 'all' || view === 'edit' ? "setToolLauncherView('common')" : '');
+        body.innerHTML = view === 'common' ? renderCommon() : (view === 'all' ? renderAll() : renderEdit());
+    }
+
+    function openPanel(nextView = 'common') {
+        document.getElementById('tool-launcher-overlay')?.remove();
+        view = nextView;
+        const overlay = document.createElement('div');
+        overlay.id = 'tool-launcher-overlay';
+        overlay.onclick = event => { if (event.target === overlay) closePanel(); };
+        overlay.innerHTML = `<div class="tool-launcher-sheet" role="dialog" aria-modal="true" aria-label="全站功能台" onclick="event.stopPropagation()"><header class="flex items-center gap-2 border-b border-slate-100 px-4 py-3"><button id="tool-launcher-back" type="button" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600"><i class="fa-solid fa-arrow-left"></i></button><div class="min-w-0 flex-1"><h2 id="tool-launcher-title" class="text-base font-black text-slate-900">常用功能</h2><p class="text-[9px] font-bold text-slate-400">快捷入口不会替换网页原有按钮</p></div><span class="hidden sm:inline text-[9px] font-black ${currentCloudUser ? 'text-emerald-600' : 'text-slate-400'}"><i class="fa-solid ${currentCloudUser ? 'fa-cloud' : 'fa-mobile-screen'}"></i> ${currentCloudUser ? '布局随账号同步' : '游客布局保存在本机'}</span><button type="button" onclick="closeFloatingToolLauncher()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-lg font-black text-slate-600">×</button></header><div id="tool-launcher-body" class="tool-launcher-scroll"></div></div>`;
+        document.body.appendChild(overlay);
+        renderPanel();
+    }
+
+    function closePanel() { document.getElementById('tool-launcher-overlay')?.remove(); }
+
+    function runTool(tool) {
+        closePanel();
+        window.setTimeout(() => {
+            if (tool.custom === 'home') {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
+            if (tool.custom === 'calibration') {
+                const panel = document.getElementById('total-catch-calibration-panel');
+                panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                const content = document.getElementById('calibration-content');
+                if (content?.classList.contains('hidden') && typeof toggleTotalCatchCalibrationPanel === 'function') toggleTotalCatchCalibrationPanel();
+                return;
+            }
+            const fn = window[tool.action];
+            if (typeof fn === 'function') fn();
+            else if (typeof showToast === 'function') showToast('这个功能入口暂时不可用，请使用原页面按钮');
+        }, 60);
+    }
+
+    function createBall() {
+        if (document.getElementById('tool-launcher-ball')) return;
+        const ball = document.createElement('button');
+        ball.id = 'tool-launcher-ball';
+        ball.type = 'button';
+        ball.setAttribute('aria-label', '打开全站功能台');
+        ball.title = '功能台（可拖动）';
+        ball.innerHTML = '<span class="tool-launcher-dots" aria-hidden="true"><span></span><span></span><span></span><span></span></span>';
+        document.body.appendChild(ball);
+
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem(POSITION_KEY) || 'null'); } catch (_) {}
+        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+        const place = (left, top) => {
+            const size = ball.offsetWidth || 54;
+            ball.style.left = `${clamp(Number(left) || 0, 8, Math.max(8, window.innerWidth - size - 8))}px`;
+            ball.style.top = `${clamp(Number(top) || 0, 8, Math.max(8, window.innerHeight - size - 8))}px`;
+        };
+        place(saved?.left ?? window.innerWidth - 72, saved?.top ?? window.innerHeight - 126);
+
+        let drag = null;
+        ball.addEventListener('pointerdown', event => {
+            event.stopPropagation();
+            ball.classList.remove('tool-launcher-idle');
+            const rect = ball.getBoundingClientRect();
+            drag = { pointerId:event.pointerId, startX:event.clientX, startY:event.clientY, left:rect.left, top:rect.top, moved:false };
+            ball.setPointerCapture?.(event.pointerId);
+        });
+        ball.addEventListener('pointermove', event => {
+            if (!drag || drag.pointerId !== event.pointerId) return;
+            const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
+            if (Math.hypot(dx, dy) > 5) drag.moved = true;
+            if (drag.moved) place(drag.left + dx, drag.top + dy);
+        });
+        ball.addEventListener('pointerup', event => {
+            if (!drag || drag.pointerId !== event.pointerId) return;
+            if (drag.moved) {
+                lastDragEndedAt = Date.now();
+                const rect = ball.getBoundingClientRect();
+                const snapLeft = rect.left + rect.width / 2 < window.innerWidth / 2 ? 10 : window.innerWidth - rect.width - 10;
+                place(snapLeft, rect.top);
+                const finalRect = ball.getBoundingClientRect();
+                try { localStorage.setItem(POSITION_KEY, JSON.stringify({ left:finalRect.left, top:finalRect.top })); } catch (_) {}
+            }
+            drag = null;
+            resetIdle();
+        });
+        ball.addEventListener('click', event => {
+            event.stopPropagation();
+            if (Date.now() - lastDragEndedAt < 350) return;
+            openPanel('common');
+        });
+        window.addEventListener('resize', () => {
+            const rect = ball.getBoundingClientRect();
+            place(rect.left, rect.top);
+        });
+        resetIdle();
+    }
+
+    function resetIdle() {
+        clearTimeout(idleTimer);
+        document.getElementById('tool-launcher-ball')?.classList.remove('tool-launcher-idle');
+        idleTimer = setTimeout(() => document.getElementById('tool-launcher-ball')?.classList.add('tool-launcher-idle'), 2600);
+    }
+
+    window.openFloatingToolLauncher = () => openPanel('common');
+    window.closeFloatingToolLauncher = closePanel;
+    window.setToolLauncherView = next => { view = ['common','all','edit'].includes(next) ? next : 'common'; renderPanel(); };
+    window.launchFloatingTool = id => { const tool = TOOL_MAP.get(String(id)); if (tool) runTool(tool); };
+    window.filterFloatingTools = query => {
+        const normalized = String(query || '').trim().toLowerCase();
+        let visible = 0;
+        document.querySelectorAll('#tool-launcher-body [data-tool-search]').forEach(item => {
+            const match = !normalized || String(item.dataset.toolSearch || '').includes(normalized);
+            item.classList.toggle('hidden', !match);
+            if (match) visible++;
+        });
+        document.getElementById('tool-launcher-no-results')?.classList.toggle('hidden', visible > 0);
+    };
+    window.toggleToolLauncherShortcut = id => {
+        const state = readState(), key = String(id), index = state.shortcuts.indexOf(key);
+        if (index >= 0) state.shortcuts.splice(index, 1); else if (TOOL_MAP.has(key)) state.shortcuts.push(key);
+        saveState(state); renderPanel();
+    };
+    window.moveToolLauncherShortcut = (id, delta) => {
+        const state = readState(), index = state.shortcuts.indexOf(String(id)), next = index + Number(delta || 0);
+        if (index < 0 || next < 0 || next >= state.shortcuts.length) return;
+        [state.shortcuts[index], state.shortcuts[next]] = [state.shortcuts[next], state.shortcuts[index]];
+        saveState(state); renderPanel();
+    };
+    window.addAllToolLauncherShortcuts = () => { const state = readState(); state.shortcuts = TOOLS.map(tool => tool.id); saveState(state); renderPanel(); };
+    window.clearToolLauncherShortcuts = () => { const state = readState(); state.shortcuts = []; saveState(state); renderPanel(); };
+    window.resetToolLauncherShortcuts = () => { const state = readState(); state.shortcuts = DEFAULT_SHORTCUTS.slice(); saveState(state); renderPanel(); };
+
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !document.getElementById('tool-launcher-overlay')) return;
+        if (view !== 'common') { view = 'common'; renderPanel(); }
+        else closePanel();
+    });
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', createBall, { once:true });
+    else createBall();
 })();
 </script>
 </body>
