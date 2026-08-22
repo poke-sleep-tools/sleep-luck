@@ -3160,11 +3160,21 @@ function getDailyRewardQuickSelectedEntry() {
 
 function renderDailyRewardQuickEditorHtml() {
     const entry = getDailyRewardQuickSelectedEntry();
-    const kind = dailyRewardQuickUi.draftKind || (entry ? inferDailyRewardKind(entry) : 'ball');
-    const item = entry ? getDailyRewardItemPayload(entry) : { name: '', amount: 0 };
-    const balls = normalizeBallCounts(entry?.balls || { poke: 1 });
-    const diamonds = kind === 'diamond' ? Math.max(0, Number(entry?.diamonds) || 0) : 15;
+    const draftTemplate = dailyRewardQuickUi.draftTemplate || null;
+    const source = draftTemplate || entry || {};
+    const kind = dailyRewardQuickUi.draftKind || (draftTemplate ? inferDailyRewardKind(draftTemplate) : (entry ? inferDailyRewardKind(entry) : 'ball'));
+    const item = getDailyRewardItemPayload(source);
+    const balls = normalizeBallCounts(source.balls || { poke: 1 });
+    const diamonds = kind === 'diamond' ? Math.max(0, Number(source.diamonds) || 0) : 15;
     const isUnknown = kind === 'unknown';
+    const templateId = String(dailyRewardQuickUi.draftTemplateId || entry?.templateId || '');
+    const templates = getAllDailyRewardTemplates()
+        .map(template => normalizeBallTemplate(template))
+        .filter(template => template && inferDailyRewardKind(template) === kind);
+    const templateButtons = templates.map(template => {
+        const active = String(template.id) === templateId;
+        return `<button type="button" onclick="applyDailyRewardQuickTemplate('${escapeHtmlAttr(template.id)}')" class="rounded-xl border px-2.5 py-2 text-left text-[10px] font-black transition active:scale-95 ${active ? 'border-amber-400 bg-amber-100 text-amber-950 ring-1 ring-amber-300' : 'border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50'}">${escapeHtml(template.templateName || '每日奖励模板')}</button>`;
+    }).join('');
     return `<div class="rounded-3xl border border-slate-200 bg-white p-3 sm:p-4">
         <div class="flex items-start justify-between gap-2">
             <div><div class="text-xs font-black text-slate-900">${escapeHtml(dailyRewardQuickUi.selectedDate)} · ${entry ? (isUnknown ? '已标记记不清' : '修改当日奖励') : '补录每日奖励'}</div><div class="mt-0.5 text-[9px] font-bold text-slate-400">同一天再次保存会修改原记录，不会重复增加库存。</div></div>
@@ -3172,6 +3182,13 @@ function renderDailyRewardQuickEditorHtml() {
         </div>
         <div class="mt-3 grid grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
             ${[['ball','精灵球'],['diamond','钻石'],['item','其他道具']].map(([value,label]) => `<button type="button" onclick="setDailyRewardQuickKind('${value}')" class="rounded-xl px-2 py-2 text-[10px] font-black ${kind === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}">${label}</button>`).join('')}
+        </div>
+        <div class="mt-3 rounded-2xl border border-amber-100 bg-amber-50/60 p-2.5">
+            <div class="mb-2 flex items-center justify-between gap-2">
+                <div><div class="text-[10px] font-black text-amber-950">快捷选择</div><div class="text-[8px] font-bold text-amber-700/70">只显示当前类型的系统模板和玩家模板</div></div>
+                <button type="button" onclick="document.getElementById('daily-reward-quick-modal')?.remove();openBallPlannerModal()" class="shrink-0 rounded-lg border border-amber-200 bg-white px-2 py-1 text-[8px] font-black text-amber-800">管理模板</button>
+            </div>
+            ${templateButtons ? `<div class="grid grid-cols-2 gap-1.5 sm:grid-cols-3">${templateButtons}</div>` : `<div class="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2 text-[9px] font-bold text-slate-500">这个类型还没有模板，可先手动填写；需要时可在“管理模板”中补充。</div>`}
         </div>
         <div id="daily-reward-quick-kind-fields" class="mt-3">
             ${kind === 'ball' ? `<div class="grid grid-cols-3 gap-2">${BALL_KEYS.map((key, index) => `<label class="text-[9px] font-black text-slate-500">${BALL_LABELS[key]}<input type="number" min="0" id="daily-reward-quick-${key}" value="${balls[key] || (index === 0 && !entry ? 1 : 0)}" oninput="dailyRewardQuickUi.dirty=true" class="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-black"></label>`).join('')}</div>` : ''}
@@ -3257,6 +3274,9 @@ async function openDailyRewardQuickModal() {
     dailyRewardQuickUi.selectedDate = getTodayLocalDateString();
     dailyRewardQuickUi.month = dailyRewardQuickUi.selectedDate.slice(0, 7);
     dailyRewardQuickUi.dirty = false;
+    dailyRewardQuickUi.draftKind = '';
+    dailyRewardQuickUi.draftTemplate = null;
+    dailyRewardQuickUi.draftTemplateId = '';
     const modal = document.createElement('div');
     modal.id = 'daily-reward-quick-modal';
     modal.className = 'fixed inset-0 z-[96] flex items-center justify-center bg-slate-950/60 p-2 sm:p-4 backdrop-blur-sm animate-fadeIn';
@@ -3280,6 +3300,8 @@ async function openDailyRewardQuickModal() {
 function selectDailyRewardQuickDate(date) {
     dailyRewardQuickUi.selectedDate = normalizeSleepResearchDateValue(date);
     dailyRewardQuickUi.draftKind = '';
+    dailyRewardQuickUi.draftTemplate = null;
+    dailyRewardQuickUi.draftTemplateId = '';
     dailyRewardQuickUi.dirty = false;
     renderDailyRewardQuickModal();
 }
@@ -3309,6 +3331,17 @@ async function setDailyRewardTrackingStartDate(date) {
 
 function setDailyRewardQuickKind(kind) {
     dailyRewardQuickUi.draftKind = kind;
+    dailyRewardQuickUi.draftTemplate = null;
+    dailyRewardQuickUi.draftTemplateId = '';
+    dailyRewardQuickUi.dirty = true;
+    renderDailyRewardQuickModal();
+}
+
+function applyDailyRewardQuickTemplate(templateId) {
+    const template = getAllDailyRewardTemplates().find(item => String(item.id) === String(templateId));
+    dailyRewardQuickUi.draftTemplate = template ? normalizeBallTemplate(template) : null;
+    dailyRewardQuickUi.draftTemplateId = template ? String(template.id) : '';
+    dailyRewardQuickUi.draftKind = template ? inferDailyRewardKind(template) : '';
     dailyRewardQuickUi.dirty = true;
     renderDailyRewardQuickModal();
 }
@@ -3358,6 +3391,7 @@ async function saveDailyRewardQuickSelected() {
         ...(existing || {}),
         id: existing?.id || `daily_reward_${date}`,
         sourceType: 'dailyReward', status: 'received', date, rewardKind: kind, balls, diamonds, itemName, itemAmount,
+        templateId: dailyRewardQuickUi.draftTemplateId || existing?.templateId || '',
         displayName, templateName: displayName, note: '每日奖励快捷打卡记录', createdAt: existing?.createdAt || now, updatedAt: now
     });
     applyBallPlannerEntryFullDelta(existing, next);
@@ -3365,6 +3399,8 @@ async function saveDailyRewardQuickSelected() {
     else ballPlannerState.entries.unshift(next);
     if (ballPlannerState.entryTombstones) delete ballPlannerState.entryTombstones[String(next.id)];
     dailyRewardQuickUi.draftKind = '';
+    dailyRewardQuickUi.draftTemplate = null;
+    dailyRewardQuickUi.draftTemplateId = '';
     await persistDailyRewardQuickChange(existing ? '每日奖励已修改' : '每日奖励已记录');
 }
 
@@ -3381,6 +3417,8 @@ async function markDailyRewardQuickUnknown() {
     if (existing) ballPlannerState.entries = (ballPlannerState.entries || []).map(entry => String(entry.id) === String(existing.id) ? next : entry);
     else ballPlannerState.entries.unshift(next);
     dailyRewardQuickUi.draftKind = '';
+    dailyRewardQuickUi.draftTemplate = null;
+    dailyRewardQuickUi.draftTemplateId = '';
     await persistDailyRewardQuickChange('该日期已标记为记不清');
 }
 
@@ -3392,6 +3430,8 @@ async function deleteDailyRewardQuickSelected() {
     ballPlannerState.entryTombstones[String(existing.id)] = new Date().toISOString();
     ballPlannerState.entries = (ballPlannerState.entries || []).filter(entry => String(entry.id) !== String(existing.id));
     dailyRewardQuickUi.draftKind = '';
+    dailyRewardQuickUi.draftTemplate = null;
+    dailyRewardQuickUi.draftTemplateId = '';
     await persistDailyRewardQuickChange('每日奖励状态已删除');
 }
 
