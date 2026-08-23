@@ -1803,6 +1803,115 @@ function adjustCompactNumberInput(inputId, delta) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+const BALL_TRAY_META = {
+    bonus: { label: '奖励球', short: '奖励', icon: '🎁', tone: 'amber' },
+    poke: { label: '红白球', short: '红白', icon: '⚪', tone: 'rose' },
+    great: { label: '蓝球', short: '蓝', icon: '🔵', tone: 'sky' },
+    ultra: { label: '黑/黄球', short: '黑黄', icon: '🟡', tone: 'slate' }
+};
+
+function getBallTrayInputValue(context, key) {
+    return Math.max(0, Math.min(99, Math.floor(Number(document.getElementById(`${context}-ball-${key}`)?.value) || 0)));
+}
+
+function getBallTraySummaryFromUsage(usage) {
+    const u = normalizeResearchBallUsage(usage || {});
+    const inventoryParts = BALL_KEYS.filter(key => Number(u[key]) > 0).map(key => `${BALL_TRAY_META[key].short}×${u[key]}`);
+    const parts = Number(u.bonus) > 0 ? [`奖励×${u.bonus}`] : [];
+    parts.push(...inventoryParts);
+    if (!parts.length) return '已记录：未用球';
+    if (!inventoryParts.length) parts.push('未使用库存球');
+    return parts.join(' · ');
+}
+
+function updateBallUsageTrayUI(context) {
+    const tray = document.getElementById(`${context}-ball-tray`);
+    if (!tray) return;
+    const selectedKey = BALL_TRAY_META[tray.dataset.selected] ? tray.dataset.selected : 'bonus';
+    const usage = {
+        bonus: getBallTrayInputValue(context, 'bonus'),
+        poke: getBallTrayInputValue(context, 'poke'),
+        great: getBallTrayInputValue(context, 'great'),
+        ultra: getBallTrayInputValue(context, 'ultra')
+    };
+    const summary = document.getElementById(`${context}-ball-tray-summary`);
+    if (summary) summary.textContent = getBallTraySummaryFromUsage(usage);
+    Object.keys(BALL_TRAY_META).forEach(key => {
+        const count = document.getElementById(`${context}-ball-tray-count-${key}`);
+        if (count) count.textContent = String(usage[key] || 0);
+        const button = tray.querySelector(`[data-ball-tray-key="${key}"]`);
+        if (button) {
+            const active = key === selectedKey;
+            button.classList.toggle('border-indigo-400', active);
+            button.classList.toggle('bg-indigo-50', active);
+            button.classList.toggle('shadow-sm', active);
+            button.classList.toggle('scale-[1.02]', active);
+            button.classList.toggle('border-slate-200', !active);
+            button.classList.toggle('bg-white', !active);
+        }
+    });
+    const selectedMeta = BALL_TRAY_META[selectedKey];
+    const selectedLabel = document.getElementById(`${context}-ball-tray-selected-label`);
+    if (selectedLabel) selectedLabel.textContent = `${selectedMeta.icon} ${selectedMeta.label}`;
+    const sharedInput = document.getElementById(`${context}-ball-tray-shared`);
+    const sourceInput = document.getElementById(`${context}-ball-${selectedKey}`);
+    if (sharedInput) {
+        sharedInput.value = String(usage[selectedKey] || 0);
+        setCompactNumberStepperDisabled(`${context}-ball-tray-shared`, !!sourceInput?.disabled);
+    }
+}
+
+function toggleBallUsageTray(context) {
+    const tray = document.getElementById(`${context}-ball-tray`);
+    const body = document.getElementById(`${context}-ball-tray-body`);
+    const chevron = document.getElementById(`${context}-ball-tray-chevron`);
+    const toggle = document.getElementById(`${context}-ball-tray-toggle`);
+    if (!tray || !body) return;
+    const open = tray.dataset.open !== 'true';
+    tray.dataset.open = open ? 'true' : 'false';
+    body.classList.toggle('hidden', !open);
+    if (chevron) chevron.className = `fa-solid fa-chevron-${open ? 'up' : 'down'} text-[10px] transition-transform`;
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) updateBallUsageTrayUI(context);
+}
+
+function selectBallUsageTrayBall(context, key) {
+    const tray = document.getElementById(`${context}-ball-tray`);
+    if (!tray || !BALL_TRAY_META[key]) return;
+    tray.dataset.selected = key;
+    updateBallUsageTrayUI(context);
+}
+
+function syncBallUsageTraySelectedValue(context) {
+    const tray = document.getElementById(`${context}-ball-tray`);
+    const sharedInput = document.getElementById(`${context}-ball-tray-shared`);
+    if (!tray || !sharedInput) return;
+    const selectedKey = BALL_TRAY_META[tray.dataset.selected] ? tray.dataset.selected : 'bonus';
+    const sourceInput = document.getElementById(`${context}-ball-${selectedKey}`);
+    if (!sourceInput || sourceInput.disabled) return;
+    const value = Math.max(0, Math.min(99, Math.floor(Number(sharedInput.value) || 0)));
+    sourceInput.value = String(value);
+    updateBallUsageTrayUI(context);
+}
+
+function toggleBallUsageNote(context) {
+    const note = document.getElementById(`${context}-ball-note`);
+    const button = document.getElementById(`${context}-ball-note-toggle`);
+    if (!note) return;
+    const show = note.classList.contains('hidden');
+    note.classList.toggle('hidden', !show);
+    if (button) button.textContent = show ? '收起用球备注' : '＋ 添加用球备注';
+    if (show) setTimeout(() => note.focus(), 0);
+}
+
+function clearBallUsageInventory(context) {
+    BALL_KEYS.forEach(key => {
+        const input = document.getElementById(`${context}-ball-${key}`);
+        if (input) input.value = '0';
+    });
+    updateBallUsageTrayUI(context);
+}
+
 function setCompactNumberStepperDisabled(inputId, disabled) {
     const input = document.getElementById(inputId);
     if (input) input.disabled = !!disabled;
@@ -1823,9 +1932,9 @@ function renderCompactNumberStepper(inputId, value, options = {}) {
     const disabledAttr = disabled ? ' disabled' : '';
     const disabledClass = disabled ? ' opacity-35 cursor-not-allowed' : '';
     return `<div class="grid min-w-0 grid-cols-[2rem_minmax(2.5rem,1fr)_2rem] overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
-        <button type="button" data-stepper-for="${escapeHtmlAttr(inputId)}" aria-label="${ariaLabel}减一" onclick="adjustCompactNumberInput('${escapeHtmlAttr(inputId)}',-1)"${disabledAttr} class="flex min-h-[2.35rem] items-center justify-center border-r border-slate-200 bg-slate-50 text-base font-black text-slate-600 active:bg-slate-200${disabledClass}">−</button>
+        <button type="button" data-stepper-for="${escapeHtmlAttr(inputId)}" aria-label="${ariaLabel}减一" onclick="adjustCompactNumberInput('${escapeHtmlAttr(inputId)}',-1)"${disabledAttr} style="touch-action:manipulation;-webkit-user-select:none;user-select:none" class="flex min-h-[2.35rem] items-center justify-center border-r border-slate-200 bg-slate-50 text-base font-black text-slate-600 active:bg-slate-200${disabledClass}">−</button>
         <input type="number" inputmode="numeric" min="${min}" max="${max}" id="${escapeHtmlAttr(inputId)}" value="${escapeHtmlAttr(value)}" aria-label="${ariaLabel}" onclick="selectCompactNumberInputValue(this)" onfocus="selectCompactNumberInputValue(this)"${inputHandler}${disabledAttr} class="min-w-0 border-0 bg-white px-1 py-1.5 text-center text-base font-mono font-black text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400">
-        <button type="button" data-stepper-for="${escapeHtmlAttr(inputId)}" aria-label="${ariaLabel}加一" onclick="adjustCompactNumberInput('${escapeHtmlAttr(inputId)}',1)"${disabledAttr} class="flex min-h-[2.35rem] items-center justify-center border-l border-slate-200 bg-slate-50 text-base font-black text-slate-600 active:bg-slate-200${disabledClass}">＋</button>
+        <button type="button" data-stepper-for="${escapeHtmlAttr(inputId)}" aria-label="${ariaLabel}加一" onclick="adjustCompactNumberInput('${escapeHtmlAttr(inputId)}',1)"${disabledAttr} style="touch-action:manipulation;-webkit-user-select:none;user-select:none" class="flex min-h-[2.35rem] items-center justify-center border-l border-slate-200 bg-slate-50 text-base font-black text-slate-600 active:bg-slate-200${disabledClass}">＋</button>
     </div>`;
 }
 
@@ -1833,20 +1942,40 @@ function renderBallUsageEditorHtml(context, session, usage = null) {
     if (!isBallPlannerEnabled()) return '';
     const u = normalizeResearchBallUsage(usage || {}, session, { defaultBonus: !usage });
     const bonusDisabled = normalizeSleepResearchSessionValue(session || '一觉') === '二觉' ? 'disabled' : '';
-    return `<div class="col-span-1 sm:col-span-2 bg-sky-50/70 border border-sky-100 rounded-2xl p-3 flex flex-col gap-2">
-        <div class="flex items-start justify-between gap-2">
-            <div>
-                <div class="text-[10px] font-black text-sky-800 uppercase tracking-widest flex items-center gap-1"><i class="fa-solid fa-baseball text-sky-500"></i> 本次用球情况</div>
-                <div class="text-[10px] text-sky-700 font-bold mt-0.5">库存只会扣红白/蓝/黑黄球；奖励球默认一觉 1 个，不进库存。</div>
+    const initialNote = String(u.note || '');
+    return `<div id="${context}-ball-tray" data-open="false" data-selected="bonus" class="col-span-2 bg-sky-50/70 border border-sky-100 rounded-2xl overflow-hidden">
+        <input type="number" min="0" max="99" id="${context}-ball-bonus" value="${u.bonus}" ${bonusDisabled} class="hidden">
+        <input type="number" min="0" max="99" id="${context}-ball-poke" value="${u.poke}" class="hidden">
+        <input type="number" min="0" max="99" id="${context}-ball-great" value="${u.great}" class="hidden">
+        <input type="number" min="0" max="99" id="${context}-ball-ultra" value="${u.ultra}" class="hidden">
+        <button type="button" id="${context}-ball-tray-toggle" aria-expanded="false" onclick="toggleBallUsageTray('${context}')" style="touch-action:manipulation" class="w-full min-h-[3.25rem] px-3 py-2 flex items-center gap-2 text-left active:bg-sky-100/70">
+            <span class="w-8 h-8 shrink-0 rounded-xl bg-white border border-sky-100 shadow-sm flex items-center justify-center text-base">🎒</span>
+            <span class="min-w-0 flex-1">
+                <span class="block text-[10px] font-black text-sky-800 tracking-widest">本次用球</span>
+                <span id="${context}-ball-tray-summary" class="block truncate text-[10px] text-sky-700 font-bold">${escapeHtml(getBallTraySummaryFromUsage(u))}</span>
+            </span>
+            <span class="shrink-0 text-[10px] font-black text-sky-700">调整</span>
+            <i id="${context}-ball-tray-chevron" class="fa-solid fa-chevron-down text-[10px] text-sky-600"></i>
+        </button>
+        <div id="${context}-ball-tray-body" class="hidden border-t border-sky-100 p-3 pt-2.5">
+            <div class="grid grid-cols-4 gap-1.5">
+                ${Object.entries(BALL_TRAY_META).map(([key, meta]) => `<button type="button" data-ball-tray-key="${key}" onclick="selectBallUsageTrayBall('${context}','${key}')" style="touch-action:manipulation;-webkit-user-select:none;user-select:none" class="relative min-w-0 min-h-[3.6rem] rounded-xl border bg-white px-1 py-1.5 flex flex-col items-center justify-center transition active:scale-95 ${key === 'bonus' ? 'border-indigo-400 bg-indigo-50 shadow-sm scale-[1.02]' : 'border-slate-200'}">
+                    <span class="text-lg leading-none">${meta.icon}</span>
+                    <span class="mt-1 max-w-full truncate text-[9px] font-black text-slate-600">${meta.short}</span>
+                    <span id="${context}-ball-tray-count-${key}" class="absolute -right-1 -top-1 min-w-[1.25rem] h-5 px-1 rounded-full bg-slate-800 text-white text-[9px] font-black flex items-center justify-center shadow-sm">${u[key] || 0}</span>
+                </button>`).join('')}
             </div>
+            <div class="mt-2 rounded-xl border border-indigo-100 bg-white p-2">
+                <div class="mb-1.5 flex items-center justify-between gap-2">
+                    <span class="text-[10px] font-black text-slate-600">当前调整：<span id="${context}-ball-tray-selected-label">🎁 奖励球</span></span>
+                    <button type="button" onclick="clearBallUsageInventory('${context}')" style="touch-action:manipulation" class="text-[9px] font-black text-slate-400 hover:text-rose-500">清空库存球</button>
+                </div>
+                ${renderCompactNumberStepper(`${context}-ball-tray-shared`, u.bonus, { min: 0, max: 99, disabled: !!bonusDisabled, ariaLabel: '当前所选精灵球数量', onInput: `syncBallUsageTraySelectedValue('${context}')` })}
+            </div>
+            <button type="button" id="${context}-ball-note-toggle" onclick="toggleBallUsageNote('${context}')" style="touch-action:manipulation" class="mt-2 text-[10px] font-black text-sky-700">${initialNote ? '收起用球备注' : '＋ 添加用球备注'}</button>
+            <textarea id="${context}-ball-note" rows="2" placeholder="用球备注（选填，例如：蓝球砸御三家 / 给闪光用了黑球）" class="${initialNote ? '' : 'hidden '}mt-1.5 w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-[11px] font-bold focus:outline-none focus:border-sky-400 resize-y">${escapeHtml(initialNote)}</textarea>
+            <div class="mt-2 text-[9px] leading-relaxed text-sky-700 font-bold">库存只扣红白/蓝/黑黄球；奖励球默认一觉1个、二觉0个，不进库存。</div>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <label class="min-w-0 text-[10px] font-black text-slate-500">奖励球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-bonus`, u.bonus, { min: 0, max: 99, disabled: !!bonusDisabled, ariaLabel: '奖励球数量' })}</div></label>
-            <label class="min-w-0 text-[10px] font-black text-slate-500">红白球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-poke`, u.poke, { min: 0, max: 99, ariaLabel: '红白球数量' })}</div></label>
-            <label class="min-w-0 text-[10px] font-black text-slate-500">蓝球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-great`, u.great, { min: 0, max: 99, ariaLabel: '蓝球数量' })}</div></label>
-            <label class="min-w-0 text-[10px] font-black text-slate-500">黑/黄球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-ultra`, u.ultra, { min: 0, max: 99, ariaLabel: '黑/黄球数量' })}</div></label>
-        </div>
-        <textarea id="${context}-ball-note" rows="2" placeholder="用球备注（选填，例如：蓝球砸御三家 / 给闪光用了黑球）" class="w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-[11px] font-bold focus:outline-none focus:border-sky-400 resize-y">${escapeHtml(u.note || '')}</textarea>
     </div>`;
 }
 
@@ -1871,6 +2000,7 @@ function syncResearchSessionDefaults(context, dateId, sessionId) {
     const isSecondSleep = session === '二觉';
     bonusInput.value = isSecondSleep ? '0' : '1';
     setCompactNumberStepperDisabled(`${context}-ball-bonus`, isSecondSleep);
+    updateBallUsageTrayUI(context);
 }
 
 function applyResearchBallUsageInventoryDelta(oldUsage, newUsage, options = {}) {
