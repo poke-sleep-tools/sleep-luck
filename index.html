@@ -162,6 +162,18 @@
             .tool-launcher-grid { grid-template-columns:1fr; }
             .tool-launcher-sheet { max-height:86vh; }
         }
+        /* iPhone Safari 会在聚焦小于 16px 的表单控件时自动放大页面。
+           睡眠研究的新建/编辑弹窗在手机端统一使用 16px，桌面布局不受影响。 */
+        @media (max-width:639px) {
+            #sleep-research-modal input:not([type="file"]),
+            #sleep-research-modal select,
+            #sleep-research-modal textarea,
+            #sleep-research-edit-modal input:not([type="file"]),
+            #sleep-research-edit-modal select,
+            #sleep-research-edit-modal textarea {
+                font-size:16px !important;
+            }
+        }
     </style>
 </head>
 <body class="p-4 md:p-8 min-h-screen flex flex-col items-center justify-start text-slate-800" onclick="closeSuggestionsOutside(event)">
@@ -1775,6 +1787,48 @@ function getBallUsageInlineText(usage) {
     return parts.length ? parts.join(' / ') : '已记录：未用球';
 }
 
+function selectCompactNumberInputValue(input) {
+    if (!input || input.disabled) return;
+    try { input.select(); } catch (e) {}
+}
+
+function adjustCompactNumberInput(inputId, delta) {
+    const input = document.getElementById(inputId);
+    if (!input || input.disabled) return;
+    const min = input.min === '' ? Number.NEGATIVE_INFINITY : Number(input.min);
+    const max = input.max === '' ? Number.POSITIVE_INFINITY : Number(input.max);
+    const current = Number(input.value);
+    const safeCurrent = Number.isFinite(current) ? current : (Number.isFinite(min) ? min : 0);
+    input.value = String(Math.min(max, Math.max(min, safeCurrent + Number(delta || 0))));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function setCompactNumberStepperDisabled(inputId, disabled) {
+    const input = document.getElementById(inputId);
+    if (input) input.disabled = !!disabled;
+    document.querySelectorAll(`[data-stepper-for="${inputId}"]`).forEach(button => {
+        button.disabled = !!disabled;
+        button.classList.toggle('opacity-35', !!disabled);
+        button.classList.toggle('cursor-not-allowed', !!disabled);
+    });
+}
+
+function renderCompactNumberStepper(inputId, value, options = {}) {
+    const min = Number.isFinite(Number(options.min)) ? Number(options.min) : 0;
+    const max = Number.isFinite(Number(options.max)) ? Number(options.max) : 999;
+    const disabled = !!options.disabled;
+    const ariaLabel = escapeHtmlAttr(options.ariaLabel || '数量');
+    const onInput = String(options.onInput || '').trim();
+    const inputHandler = onInput ? ` oninput="${escapeHtmlAttr(onInput)}"` : '';
+    const disabledAttr = disabled ? ' disabled' : '';
+    const disabledClass = disabled ? ' opacity-35 cursor-not-allowed' : '';
+    return `<div class="grid min-w-0 grid-cols-[2rem_minmax(2.5rem,1fr)_2rem] overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
+        <button type="button" data-stepper-for="${escapeHtmlAttr(inputId)}" aria-label="${ariaLabel}减一" onclick="adjustCompactNumberInput('${escapeHtmlAttr(inputId)}',-1)"${disabledAttr} class="flex min-h-[2.35rem] items-center justify-center border-r border-slate-200 bg-slate-50 text-base font-black text-slate-600 active:bg-slate-200${disabledClass}">−</button>
+        <input type="number" inputmode="numeric" min="${min}" max="${max}" id="${escapeHtmlAttr(inputId)}" value="${escapeHtmlAttr(value)}" aria-label="${ariaLabel}" onclick="selectCompactNumberInputValue(this)" onfocus="selectCompactNumberInputValue(this)"${inputHandler}${disabledAttr} class="min-w-0 border-0 bg-white px-1 py-1.5 text-center text-base font-mono font-black text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400">
+        <button type="button" data-stepper-for="${escapeHtmlAttr(inputId)}" aria-label="${ariaLabel}加一" onclick="adjustCompactNumberInput('${escapeHtmlAttr(inputId)}',1)"${disabledAttr} class="flex min-h-[2.35rem] items-center justify-center border-l border-slate-200 bg-slate-50 text-base font-black text-slate-600 active:bg-slate-200${disabledClass}">＋</button>
+    </div>`;
+}
+
 function renderBallUsageEditorHtml(context, session, usage = null) {
     if (!isBallPlannerEnabled()) return '';
     const u = normalizeResearchBallUsage(usage || {}, session, { defaultBonus: !usage });
@@ -1787,10 +1841,10 @@ function renderBallUsageEditorHtml(context, session, usage = null) {
             </div>
         </div>
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <label class="text-[10px] font-black text-slate-500">奖励球<input type="number" min="0" id="${context}-ball-bonus" value="${u.bonus}" ${bonusDisabled} class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400 disabled:bg-slate-100 disabled:text-slate-400"></label>
-            <label class="text-[10px] font-black text-slate-500">红白球<input type="number" min="0" id="${context}-ball-poke" value="${u.poke}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>
-            <label class="text-[10px] font-black text-slate-500">蓝球<input type="number" min="0" id="${context}-ball-great" value="${u.great}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>
-            <label class="text-[10px] font-black text-slate-500">黑/黄球<input type="number" min="0" id="${context}-ball-ultra" value="${u.ultra}" class="mt-1 w-full bg-white border border-sky-100 rounded-xl px-2 py-1.5 text-xs font-mono font-black focus:outline-none focus:border-sky-400"></label>
+            <label class="min-w-0 text-[10px] font-black text-slate-500">奖励球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-bonus`, u.bonus, { min: 0, max: 99, disabled: !!bonusDisabled, ariaLabel: '奖励球数量' })}</div></label>
+            <label class="min-w-0 text-[10px] font-black text-slate-500">红白球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-poke`, u.poke, { min: 0, max: 99, ariaLabel: '红白球数量' })}</div></label>
+            <label class="min-w-0 text-[10px] font-black text-slate-500">蓝球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-great`, u.great, { min: 0, max: 99, ariaLabel: '蓝球数量' })}</div></label>
+            <label class="min-w-0 text-[10px] font-black text-slate-500">黑/黄球<div class="mt-1">${renderCompactNumberStepper(`${context}-ball-ultra`, u.ultra, { min: 0, max: 99, ariaLabel: '黑/黄球数量' })}</div></label>
         </div>
         <textarea id="${context}-ball-note" rows="2" placeholder="用球备注（选填，例如：蓝球砸御三家 / 给闪光用了黑球）" class="w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-[11px] font-bold focus:outline-none focus:border-sky-400 resize-y">${escapeHtml(u.note || '')}</textarea>
     </div>`;
@@ -1816,7 +1870,7 @@ function syncResearchSessionDefaults(context, dateId, sessionId) {
     if (!bonusInput) return;
     const isSecondSleep = session === '二觉';
     bonusInput.value = isSecondSleep ? '0' : '1';
-    bonusInput.disabled = isSecondSleep;
+    setCompactNumberStepperDisabled(`${context}-ball-bonus`, isSecondSleep);
 }
 
 function applyResearchBallUsageInventoryDelta(oldUsage, newUsage, options = {}) {
@@ -13803,12 +13857,71 @@ function getNextSleepResearchSlot() {
     return { date: addDaysToLocalDateString(normalizeSleepResearchDateValue(latest.date), 1), session: '一觉' };
 }
 
+function getSleepResearchWeekStartDate(date) {
+    const normalized = normalizeSleepResearchDateValue(date || getTodayLocalDateString());
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return normalized;
+    const value = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0);
+    const daysSinceMonday = (value.getDay() + 6) % 7;
+    return addDaysToLocalDateString(normalized, -daysSinceMonday);
+}
+
+function getSleepResearchEncounterDefault(date, session) {
+    const targetDate = normalizeSleepResearchDateValue(date || getTodayLocalDateString());
+    const targetSession = normalizeSleepResearchSessionValue(session || '一觉');
+    const weekStart = getSleepResearchWeekStartDate(targetDate);
+    const previous = getVisibleSleepResearchLogs(historyLogs)
+        .filter(research => {
+            if (!research || research.encounterCount === null || research.encounterCount === undefined || research.encounterCount === '') return false;
+            const researchDate = normalizeSleepResearchDateValue(research.date || '');
+            return researchDate >= weekStart &&
+                researchDate < targetDate &&
+                normalizeSleepResearchSessionValue(research.session || '一觉') === targetSession;
+        })
+        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0] || null;
+    return {
+        value: previous ? Math.max(0, Math.min(20, Math.floor(Number(previous.encounterCount) || 0))) : 0,
+        sourceDate: previous ? normalizeSleepResearchDateValue(previous.date) : '',
+        session: targetSession,
+        weekStart
+    };
+}
+
+function markSleepResearchEncounterManual() {
+    const modal = document.getElementById('sleep-research-modal');
+    if (modal) modal.dataset.encounterManuallyEdited = 'true';
+}
+
+function applySleepResearchEncounterDefault(options = {}) {
+    const modal = document.getElementById('sleep-research-modal');
+    const input = document.getElementById('research-encounter-count');
+    const hint = document.getElementById('research-encounter-default-hint');
+    if (!modal || !input) return;
+    if (!options.force && modal.dataset.encounterManuallyEdited === 'true') return;
+    const date = normalizeSleepResearchDateValue(document.getElementById('research-date')?.value || getTodayLocalDateString());
+    const session = normalizeSleepResearchSessionValue(document.getElementById('research-session')?.value || '一觉');
+    const inherited = getSleepResearchEncounterDefault(date, session);
+    input.value = String(inherited.value);
+    modal.dataset.encounterManuallyEdited = 'false';
+    if (hint) {
+        hint.textContent = inherited.sourceDate
+            ? `已沿用本周最近一次同觉记录：${inherited.sourceDate} · ${inherited.session}，${inherited.value}只`
+            : `本周此前没有${inherited.session}的遇见数量，默认0只`;
+    }
+}
+
+function syncSleepResearchNewEntryDefaults() {
+    syncResearchSessionDefaults('research', 'research-date', 'research-session');
+    applySleepResearchEncounterDefault({ force: true });
+}
+
 function openSleepResearchModal() {
     const old = document.getElementById('sleep-research-modal');
     if (old) old.remove();
     const nextSlot = getNextSleepResearchSlot();
     const today = nextSlot.date;
     const initialSession = nextSlot.session;
+    const initialEncounter = getSleepResearchEncounterDefault(today, initialSession);
     const sleepTypeRecord = findSleepTypeRecord(today, initialSession);
     const modal = document.createElement('div');
     modal.id = 'sleep-research-modal';
@@ -13823,11 +13936,11 @@ function openSleepResearchModal() {
         <div class="grid grid-cols-2 gap-2">
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">研究日期</label>
-                <input type="date" id="research-date" value="${today}" onchange="syncResearchSleepTypeFields('research','research-date','research-session')" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+                <input type="date" id="research-date" value="${today}" onchange="syncSleepResearchNewEntryDefaults()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
             </div>
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">睡眠批次</label>
-                <select id="research-session" onchange="syncResearchSessionDefaults('research','research-date','research-session')" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400">
+                <select id="research-session" onchange="syncSleepResearchNewEntryDefaults()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-400">
                     <option value="一觉" ${initialSession === '一觉' ? 'selected' : ''}>一觉</option>
                     <option value="二觉" ${initialSession === '二觉' ? 'selected' : ''}>二觉</option>
                 </select>
@@ -13848,11 +13961,12 @@ function openSleepResearchModal() {
             ${renderBallUsageEditorHtml('research', initialSession, null)}
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">本次抓了几只</label>
-                <input type="number" min="0" max="20" value="1" id="research-catch-count" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+                ${renderCompactNumberStepper('research-catch-count', 1, { min: 0, max: 20, ariaLabel: '本次捕捉数量' })}
             </div>
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">本次遇到多少只（选填）</label>
-                <input type="number" min="0" max="20" id="research-encounter-count" placeholder="用于累计总遇到数与闪率" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+                ${renderCompactNumberStepper('research-encounter-count', initialEncounter.value, { min: 0, max: 20, ariaLabel: '本次遇到数量', onInput: 'markSleepResearchEncounterManual()' })}
+                <p id="research-encounter-default-hint" class="mt-1 text-[9px] font-bold leading-relaxed text-indigo-500">${initialEncounter.sourceDate ? `已沿用本周最近一次同觉记录：${initialEncounter.sourceDate} · ${initialEncounter.session}，${initialEncounter.value}只` : `本周此前没有${initialEncounter.session}的遇见数量，默认0只`}</p>
             </div>
             <div>
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">大合照截图（选填，可多选，自动压缩）</label>
@@ -13868,6 +13982,7 @@ function openSleepResearchModal() {
         </button>
     </div>`;
     document.body.appendChild(modal);
+    modal.dataset.encounterManuallyEdited = 'false';
 }
 
 let sleepResearchSubmitting = false;
@@ -14288,7 +14403,8 @@ function openEditSleepResearchModal(date, session) {
             </div>
             <div>
                 <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">本次遇到多少只（选填）</label>
-                <input type="number" min="0" max="20" id="edit-research-encounter-count" value="${research.encounterCount === null || research.encounterCount === undefined ? '' : research.encounterCount}" placeholder="用于累计总遇到数与闪率" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-indigo-400">
+                ${renderCompactNumberStepper('edit-research-encounter-count', research.encounterCount === null || research.encounterCount === undefined ? '' : research.encounterCount, { min: 0, max: 20, ariaLabel: '本次遇到数量' })}
+                <p class="mt-1 text-[9px] font-bold text-slate-400">正在修改已有研究，保留该研究原本保存的数值。</p>
             </div>
             ${renderSleepTypeResearchFieldsHtml('edit-research', sleepTypeRecord)}
             <div>
