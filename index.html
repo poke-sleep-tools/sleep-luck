@@ -28298,7 +28298,9 @@ function sleepSplitResolveLocatorTarget(targets) {
     if (sleepSplitLocatorMode === 'total') {
         const total=Number(document.getElementById('sleep-split-locate-total')?.value)||16;
         const rows=targets.filter(item=>item.total===total).sort((a,b)=>a.energy-b.energy||Math.abs(a.first-a.second)-Math.abs(b.first-b.second));
-        return { mode:'total', row:rows[0]||null, label:`合计${total}只`, candidates:rows.length };
+        const minimum=rows[0]?.energy, equivalentRows=rows.filter(item=>item.energy===minimum);
+        const selected=equivalentRows.find(item=>item.key===sleepSplitSelectedTarget)||equivalentRows[0]||null;
+        return { mode:'total', row:selected, rows:equivalentRows, label:`合计${total}只`, candidates:rows.length };
     }
     return { mode:'manual', row:targets.find(item=>item.key===sleepSplitSelectedTarget)||null, label:sleepSplitSelectedTarget };
 }
@@ -28309,8 +28311,8 @@ function sleepSplitRenderLocatorStatus(locator) {
         box.className='mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[9px] font-black text-amber-700';
         return;
     }
-    const row=locator.row, prefix=locator.mode==='total'?`${locator.label}的最低门槛拆法`:'已定位目标';
-    box.innerHTML=`<i class="fa-solid fa-location-crosshairs"></i> ${prefix}：<b>${row.key}</b>，最低需要 <b>${sleepSplitFmtNumber(row.energy)}</b> 能量；一觉${row.firstScore}分、二觉${row.secondScore}分。`;
+    const row=locator.row, equivalents=locator.mode==='total'&&locator.rows?.length>1?locator.rows:[],keys=equivalents.length?equivalents.map(item=>item.key).join(' / '):row.key,prefix=locator.mode==='total'?`${locator.label}的最低门槛拆法`:'已定位目标';
+    box.innerHTML=`<i class="fa-solid fa-location-crosshairs"></i> ${prefix}：<b>${keys}</b>${equivalents.length?'（并列）':''}，最低都需要 <b>${sleepSplitFmtNumber(row.energy)}</b> 能量。${equivalents.length?'可在下方同时查看两种分配。':`一觉${row.firstScore}分、二觉${row.secondScore}分。`}`;
     box.className='mt-3 rounded-xl bg-indigo-50 px-3 py-2 text-[9px] font-black text-indigo-700';
 }
 function sleepSplitScrollToSelected() {
@@ -28361,31 +28363,42 @@ function sleepSplitRenderAxis(state, targets) {
     const box = document.getElementById('sleep-split-axis');
     if (!box) return;
     if (!targets.some(row=>row.key===sleepSplitSelectedTarget)) sleepSplitSelectedTarget = targets[targets.length-1]?.key || '8+8';
-    const width = Math.max(1180,targets.length*48);
+    const energyGroups=[];
+    targets.forEach(row=>{
+        const group=energyGroups[energyGroups.length-1];
+        if(group&&group.energy===row.energy)group.rows.push(row);else energyGroups.push({energy:row.energy,rows:[row]});
+    });
+    const width = Math.max(980,energyGroups.length*64);
     const maxEnergy = Math.max(1,...targets.map(row=>row.energy),state.energy||0);
-    const nodes = targets.map((row,index) => {
-        const left = 34 + index * ((width-68)/Math.max(1,targets.length-1));
-        const reached = state.energy && row.energy<=state.energy;
-        const selected = row.key===sleepSplitSelectedTarget;
-        const above = index%2===0;
-        return `<button type="button" data-sleep-split-target="${row.key}" onclick="sleepSplitSelectTarget('${row.key}')" style="left:${left}px;${above?'top:18px':'bottom:18px'}" class="absolute -translate-x-1/2 group text-center"><span class="block rounded-lg border ${selected?'border-indigo-600 bg-indigo-600 text-white shadow-md':reached?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-slate-200 bg-white text-slate-600'} px-1.5 py-1 text-[9px] font-black whitespace-nowrap">${row.key}</span><span class="mt-0.5 block text-[7px] font-bold ${reached?'text-emerald-600':'text-slate-400'} whitespace-nowrap">${sleepSplitFmtNumber(row.energy)}</span><span class="absolute left-1/2 ${above?'top-full':'bottom-full'} h-5 w-px -translate-x-1/2 ${selected?'bg-indigo-500':reached?'bg-emerald-300':'bg-slate-200'}"></span></button>`;
+    const nodes = energyGroups.map((group,groupIndex) => {
+        const left = 34 + groupIndex * ((width-68)/Math.max(1,energyGroups.length-1));
+        return group.rows.map((row,memberIndex)=>{
+            const reached = state.energy && row.energy<=state.energy,selected = row.key===sleepSplitSelectedTarget;
+            const above=group.rows.length>1?memberIndex%2===0:groupIndex%2===0;
+            const vertical=group.rows.length>2?8+Math.floor(memberIndex/2)*32:18;
+            const equalTitle=group.rows.length>1?`与${group.rows.filter(item=>item!==row).map(item=>item.key).join('、')}能量相同`:'';
+            return `<button type="button" data-sleep-split-target="${row.key}" onclick="sleepSplitSelectTarget('${row.key}')" title="${equalTitle}" style="left:${left}px;${above?`top:${vertical}px`:`bottom:${vertical}px`}" class="absolute -translate-x-1/2 group text-center"><span class="block rounded-lg border ${selected?'border-indigo-600 bg-indigo-600 text-white shadow-md':reached?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-slate-200 bg-white text-slate-600'} px-1.5 py-1 text-[9px] font-black whitespace-nowrap">${row.key}${group.rows.length>1?' ＝':''}</span><span class="mt-0.5 block text-[7px] font-bold ${reached?'text-emerald-600':'text-slate-400'} whitespace-nowrap">${sleepSplitFmtNumber(row.energy)}</span><span class="absolute left-1/2 ${above?'top-full':'bottom-full'} h-5 w-px -translate-x-1/2 ${selected?'bg-indigo-500':reached?'bg-emerald-300':'bg-slate-200'}"></span></button>`;
+        }).join('');
     }).join('');
-    const currentRank = state.energy ? targets.filter(row=>row.energy<=state.energy).length : 0;
-    const currentLeft = 34 + Math.min(targets.length-1,Math.max(0,currentRank-.5))*((width-68)/Math.max(1,targets.length-1));
+    const currentRank = state.energy ? energyGroups.filter(group=>group.energy<=state.energy).length : 0;
+    const currentLeft = 34 + Math.min(energyGroups.length-1,Math.max(0,currentRank-.5))*((width-68)/Math.max(1,energyGroups.length-1));
     const marker = state.energy ? `<div style="left:${currentLeft}px" class="absolute bottom-1 top-1 z-10 -translate-x-1/2 border-l-2 border-dashed border-rose-400"><span class="absolute left-1/2 top-1 -translate-x-1/2 rounded-full bg-rose-500 px-2 py-0.5 text-[8px] font-black text-white whitespace-nowrap">你在这里 ${sleepSplitFmtNumber(state.energy)}</span></div>` : '';
-    box.innerHTML = `<div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div><div class="text-sm font-black text-slate-900">x+y 最低能量数轴</div><div class="text-[9px] font-bold text-slate-400">按最低能量从左到右排列；点击任意节点查看分数与时长。</div></div><div class="flex items-center gap-2 text-[8px] font-black"><span class="text-emerald-600">● 已达到</span><span class="text-slate-400">● 未达到</span></div></div><div class="sleep-split-axis-scroll overflow-x-auto rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white pb-1"><div style="width:${width}px" class="relative h-40"><div class="absolute left-8 right-8 top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-300 via-blue-300 to-indigo-400"></div>${marker}${nodes}<span class="absolute bottom-1 left-3 text-[7px] font-bold text-slate-300">低能量</span><span class="absolute bottom-1 right-3 text-[7px] font-bold text-slate-300">高能量 · ${sleepSplitFmtNumber(maxEnergy)}</span></div></div>`;
+    box.innerHTML = `<div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div><div class="text-sm font-black text-slate-900">x+y 最低能量数轴</div><div class="text-[9px] font-bold text-slate-400">横坐标按能量节点排列；相同能量的拆法上下对齐，不再人为分先后。</div></div><div class="flex items-center gap-2 text-[8px] font-black"><span class="text-emerald-600">● 已达到</span><span class="text-slate-400">● 未达到</span></div></div><div class="sleep-split-axis-scroll overflow-x-auto rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white pb-1"><div style="width:${width}px" class="relative h-40"><div class="absolute left-8 right-8 top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-300 via-blue-300 to-indigo-400"></div>${marker}${nodes}<span class="absolute bottom-1 left-3 text-[7px] font-bold text-slate-300">低能量</span><span class="absolute bottom-1 right-3 text-[7px] font-bold text-slate-300">高能量 · ${sleepSplitFmtNumber(maxEnergy)}</span></div></div>`;
 }
 function sleepSplitRenderDetail(state, targets) {
     const box=document.getElementById('sleep-split-target-detail'); if(!box) return;
     const row=targets.find(item=>item.key===sleepSplitSelectedTarget) || targets[targets.length-1]; if(!row) return;
-    const gap=state.energy?row.energy-state.energy:null;
-    box.innerHTML=`<div class="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-indigo-500">目标拆觉</div><div class="mt-0.5 text-2xl font-black text-indigo-950">${row.key}</div></div><div class="text-right"><div class="text-[9px] font-bold text-indigo-500">最低卡比兽能量</div><div class="font-mono text-xl font-black text-indigo-900">${sleepSplitFmtNumber(row.energy)}</div>${gap===null?'':`<div class="text-[9px] font-black ${gap<=0?'text-emerald-600':'text-rose-500'}">${gap<=0?'当前已经达到':`还差 ${sleepSplitFmtNumber(gap)}`}</div>`}</div></div><div class="mt-3 grid grid-cols-2 gap-2"><div class="rounded-xl bg-white p-3"><div class="text-[9px] font-black text-slate-400">一觉 · ${row.first}只</div><div class="mt-1 text-lg font-black text-slate-800">${row.firstScore}分</div><div class="text-[9px] font-bold text-slate-400">约 ${sleepSplitDuration(row.firstScore)}</div></div><div class="rounded-xl bg-white p-3"><div class="text-[9px] font-black text-slate-400">二觉 · ${row.second}只</div><div class="mt-1 text-lg font-black text-slate-800">${row.secondScore}分</div><div class="text-[9px] font-bold text-slate-400">约 ${sleepSplitDuration(row.secondScore)}</div></div></div></div>`;
+    const locator=sleepSplitResolveLocatorTarget(targets),equivalents=sleepSplitLocatorMode==='total'&&locator.rows?.length>1?locator.rows:[row],gap=state.energy?row.energy-state.energy:null;
+    const variants=equivalents.map(item=>`<div class="rounded-xl bg-white p-3"><div class="flex items-center justify-between gap-2"><div class="text-sm font-black text-indigo-900">${item.key}</div>${equivalents.length>1?'<span class="rounded-full bg-indigo-50 px-2 py-0.5 text-[8px] font-black text-indigo-500">并列最低</span>':''}</div><div class="mt-2 grid grid-cols-2 gap-2"><div><div class="text-[8px] font-black text-slate-400">一觉 · ${item.first}只</div><div class="text-base font-black text-slate-800">${item.firstScore}分</div><div class="text-[8px] font-bold text-slate-400">约${sleepSplitDuration(item.firstScore)}</div></div><div><div class="text-[8px] font-black text-slate-400">二觉 · ${item.second}只</div><div class="text-base font-black text-slate-800">${item.secondScore}分</div><div class="text-[8px] font-bold text-slate-400">约${sleepSplitDuration(item.secondScore)}</div></div></div></div>`).join('');
+    const title=equivalents.length>1?equivalents.map(item=>item.key).join(' / '):row.key;
+    box.innerHTML=`<div class="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-indigo-500">目标拆觉</div><div class="mt-0.5 text-2xl font-black text-indigo-950">${title}</div>${equivalents.length>1?'<div class="mt-1 text-[9px] font-black text-indigo-500">两种方向能量完全相同，不区分先后</div>':''}</div><div class="text-right"><div class="text-[9px] font-bold text-indigo-500">最低卡比兽能量</div><div class="font-mono text-xl font-black text-indigo-900">${sleepSplitFmtNumber(row.energy)}</div>${gap===null?'':`<div class="text-[9px] font-black ${gap<=0?'text-emerald-600':'text-rose-500'}">${gap<=0?'当前已经达到':`还差 ${sleepSplitFmtNumber(gap)}`}</div>`}</div></div><div class="mt-3 grid gap-2 ${equivalents.length>1?'sm:grid-cols-2':''}">${variants}</div></div>`;
 }
 function renderSleepSplitPlanner() {
     const state=sleepSplitReadInputs(); sleepSplitSaveInputs(state);
     const targets=sleepSplitAllTargets(state.bonus,state.map.starts);
     const locator=sleepSplitResolveLocatorTarget(targets);
-    if ((sleepSplitLocatorMode==='pair'||sleepSplitLocatorMode==='total')&&locator.row) sleepSplitSelectedTarget=locator.row.key;
+    if (sleepSplitLocatorMode==='pair'&&locator.row) sleepSplitSelectedTarget=locator.row.key;
+    if (sleepSplitLocatorMode==='total'&&locator.row&&!(locator.rows||[]).some(item=>item.key===sleepSplitSelectedTarget)) sleepSplitSelectedTarget=locator.row.key;
     sleepSplitRenderCurrent(state,targets); sleepSplitRenderAxis(state,targets); sleepSplitRenderDetail(state,targets);
     sleepSplitRenderLocatorStatus(locator);
 }
