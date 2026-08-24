@@ -28043,7 +28043,7 @@ async function calculateAndRenderWeeklyCooking() {
             const today=liveCookingDateKey(new Date())===liveCookingDateKey(date);return `<div class="contents"><div class="live-cooking-day-cell ${today?'is-today':''}"><span>${day}</span><small>${date.getMonth()+1}/${date.getDate()}</small></div>${cells}</div>`;
         }).join('');
         const status=stale&&liveCookingState.forecastVisible!==false?`<div class="live-cooking-stale-notice"><i class="fa-solid fa-triangle-exclamation"></i> 输入已改变，表中保留的是上一次计算的旧推荐。</div>`:'';
-        return `${renderLiveCookingWeekTypePicker()}<div class="live-cooking-calendar-shell">${status}<div class="live-cooking-grid"><div class="live-cooking-corner"></div>${LIVE_COOKING_SLOTS.map(slot=>`<div class="live-cooking-calendar-head">${slot.label}</div>`).join('')}${rows}</div></div>`;
+        return `<div id="live-cooking-calendar-region">${renderLiveCookingWeekTypePicker()}<div class="live-cooking-calendar-shell">${status}<div class="live-cooking-grid"><div class="live-cooking-corner"></div>${LIVE_COOKING_SLOTS.map(slot=>`<div class="live-cooking-calendar-head">${slot.label}</div>`).join('')}${rows}</div></div></div>`;
     }
     function buildLiveCookingNearTermAdvice(plan){
         const global=plan?.global,audit=global?.audit||{},periodHours=Math.max(1,Number(audit.settings?.periodHours)||(global?.plans?.length||1)*8),windowHours=Math.min(4,periodHours);
@@ -28164,34 +28164,66 @@ async function calculateAndRenderWeeklyCooking() {
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
     }
-    function rerenderLiveCookingAfterTap(){
-        const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;
-        // Mobile Safari/WebView may keep the old composited layer when the whole modal is
-        // replaced synchronously inside a touch-generated click. Let the tap finish first.
-        setTimeout(()=>{
-            renderLiveCookingModal();
-            requestAnimationFrame(()=>{
-                const after=document.getElementById('live-cooking-scroll-body');
-                if(after){
-                    after.scrollTop=top;
-                    after.querySelectorAll('.live-cooking-toolbutton').forEach(button=>{
-                        button.type='button';
-                        button.style.touchAction='manipulation';
-                        button.style.webkitTapHighlightColor='transparent';
-                    });
-                    void after.offsetHeight;
-                }
-            });
-        },0);
+    function refreshLiveCookingForecastUi(){
+        const modal=document.getElementById('live-cooking-planner-modal'),region=document.getElementById('live-cooking-calendar-region');
+        if(!modal||!region){renderLiveCookingModal();return;}
+        // Only replace the calendar. Rebuilding the whole touched modal can leave a stale
+        // composited layer in Mobile Safari/WebView until the user's next interaction.
+        region.outerHTML=renderLiveCookingCalendar();
+        const button=[...modal.querySelectorAll('.live-cooking-toolbutton')].find(item=>item.textContent.includes('预测'));
+        if(button){
+            const visible=liveCookingState.forecastVisible!==false;
+            button.type='button';
+            button.style.touchAction='manipulation';
+            button.style.webkitTapHighlightColor='transparent';
+            button.innerHTML=`<i class="fa-solid ${visible?'fa-eye-slash':'fa-eye'}"></i> ${visible?'隐藏预测':'显示预测'}`;
+            button.setAttribute('aria-pressed',visible?'true':'false');
+        }
     }
     function invalidateLiveCookingPlan(){liveCookingPlanDirty=true;}
+    function installLiveCookingMobileTapHandler(modal){
+        if(!modal||modal.dataset.mobileTapHandler==='1')return;
+        modal.dataset.mobileTapHandler='1';
+        modal.addEventListener('pointerup',event=>{
+            if(event.pointerType!=='touch')return;
+            const button=event.target.closest?.('.live-cooking-toolbutton');
+            if(!button||!button.textContent.includes('预测'))return;
+            event.preventDefault();event.stopPropagation();
+            button.dataset.touchHandledAt=String(Date.now());
+            window.toggleLiveCookingForecast();
+        },true);
+        modal.addEventListener('click',event=>{
+            const button=event.target.closest?.('.live-cooking-toolbutton');
+            if(!button||!button.textContent.includes('预测'))return;
+            const handledAt=Number(button.dataset.touchHandledAt)||0;
+            if(Date.now()-handledAt<1200){
+                event.preventDefault();event.stopImmediatePropagation();
+                delete button.dataset.touchHandledAt;
+            }
+        },true);
+    }
+    let liveCookingCalculationRunning=false;
     window.recalculateLiveCookingNow=async function(){
         const modal=document.getElementById('live-cooking-planner-modal');if(!modal)return;
+        if(liveCookingCalculationRunning){if(typeof showToast==='function')showToast('料理规划仍在计算，请稍候');return;}
+        liveCookingCalculationRunning=true;
+        document.getElementById('live-cooking-recalculate-overlay')?.remove();
         const scroll=document.getElementById('live-cooking-scroll-body'),top=scroll?.scrollTop||0,overlay=document.createElement('div');overlay.id='live-cooking-recalculate-overlay';overlay.className='fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm';overlay.innerHTML=`<div class="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl"><div class="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-amber-100 border-t-fuchsia-500"></div><div class="mt-4 text-base font-black text-slate-900">正在计算理论最优续程</div><div class="mt-1 text-[9px] font-bold leading-relaxed text-slate-500">从当前库存、暴击、扩锅与已完成餐位出发，逐餐重新计算功能上限、食材和队伍工时。</div></div>`;document.body.appendChild(overlay);
-        await new Promise(resolve=>setTimeout(resolve,30));
-        try{liveCookingPlan=await buildLiveCookingPlanAsync();liveCookingPlan.generatedAt=new Date().toISOString();liveCookingPlanDirty=false;saveLiveCookingPlanSnapshot(liveCookingPlan);saveLiveCookingState();renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});if(typeof showToast==='function')showToast('实时料理规划已重新计算并保存');}
+        await new Promise(resolve=>setTimeout(resolve,60));
+        try{
+            try{liveCookingPlan=await buildLiveCookingPlanAsync();}
+            catch(backgroundError){
+                console.warn('手机后台优化线程不可用，改用完整兼容计算',backgroundError);
+                const title=overlay.querySelector('.text-base'),note=overlay.querySelector('.text-slate-500');
+                if(title)title.textContent='正在使用手机兼容模式计算';
+                if(note)note.textContent='后台计算线程未能启动，现改用相同的完整算法继续计算。结果不会简化，期间页面可能暂时无法操作，请耐心等待。';
+                await new Promise(resolve=>setTimeout(resolve,100));
+                liveCookingPlan=buildLiveCookingPlan();
+            }
+            liveCookingPlan.generatedAt=new Date().toISOString();liveCookingPlanDirty=false;saveLiveCookingPlanSnapshot(liveCookingPlan);saveLiveCookingState();renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});if(typeof showToast==='function')showToast('实时料理规划已重新计算并保存');
+        }
         catch(error){console.error(error);if(typeof showToast==='function')showToast(`计算失败：${error?.message||error}`);else alert(`计算失败：${error?.message||error}`);}
-        finally{document.getElementById('live-cooking-recalculate-overlay')?.remove();}
+        finally{liveCookingCalculationRunning=false;document.getElementById('live-cooking-recalculate-overlay')?.remove();}
     };
 
     window.openLiveCookingPlannerModal=async function(){
@@ -28199,7 +28231,7 @@ async function calculateAndRenderWeeklyCooking() {
         loadLiveCookingData();
         let modal=document.getElementById('live-cooking-planner-modal');if(!modal){modal=document.createElement('div');modal.id='live-cooking-planner-modal';document.body.appendChild(modal);}
         document.body.classList.add('overflow-hidden');
-        try{renderLiveCookingModal();}catch(error){console.error(error);modal.innerHTML=`<div class="fixed inset-0 z-[105] flex items-center justify-center bg-slate-950/70 p-4"><div class="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl"><div class="text-base font-black text-rose-700">界面载入失败</div><div class="mt-2 text-[10px] font-bold leading-relaxed text-slate-600">${liveCookingEscape(error?.message||error)}</div><div class="mt-4 flex justify-end gap-2"><button onclick="closeLiveCookingPlannerModal()" class="rounded-xl border border-slate-200 px-4 py-2 text-xs font-black">关闭</button><button onclick="closeLiveCookingPlannerModal();openLiveCookingPlannerModal()" class="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white">重试</button></div></div></div>`;return;}
+        try{renderLiveCookingModal();installLiveCookingMobileTapHandler(modal);}catch(error){console.error(error);modal.innerHTML=`<div class="fixed inset-0 z-[105] flex items-center justify-center bg-slate-950/70 p-4"><div class="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl"><div class="text-base font-black text-rose-700">界面载入失败</div><div class="mt-2 text-[10px] font-bold leading-relaxed text-slate-600">${liveCookingEscape(error?.message||error)}</div><div class="mt-4 flex justify-end gap-2"><button onclick="closeLiveCookingPlannerModal()" class="rounded-xl border border-slate-200 px-4 py-2 text-xs font-black">关闭</button><button onclick="closeLiveCookingPlannerModal();openLiveCookingPlannerModal()" class="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white">重试</button></div></div></div>`;return;}
         // 菜谱资料允许在界面打开后后台补齐，但绝不在这里启动复杂规划。
         if(typeof loadCookingMaster==='function')Promise.resolve(loadCookingMaster()).then(()=>{if(document.getElementById('live-cooking-planner-modal'))rerenderLiveCookingPreserveScroll();}).catch(()=>{});
     };
@@ -28222,7 +28254,7 @@ async function calculateAndRenderWeeklyCooking() {
     window.updateLiveCookingTimezone=function(value){if(!value)return;try{new Intl.DateTimeFormat('zh-CN',{timeZone:value}).format(new Date());}catch(_){if(typeof showToast==='function')showToast('这个城市时区暂不可用');return;}liveCookingState.timezoneId=String(value);saveLiveCookingState();rerenderLiveCookingPreserveScroll();if(typeof showToast==='function')showToast(`所在城市已保存并同步：${liveCookingTimezoneLabel(value)}`);};
     window.toggleLiveCookingSettings=function(){liveCookingSettingsOpen=!liveCookingSettingsOpen;rerenderLiveCookingPreserveScroll();};
     window.toggleLiveCookingDetails=function(){liveCookingDetailsOpen=!liveCookingDetailsOpen;rerenderLiveCookingPreserveScroll();};
-    window.toggleLiveCookingForecast=function(){liveCookingState.forecastVisible=liveCookingState.forecastVisible===false;saveLiveCookingState();rerenderLiveCookingAfterTap();};
+    window.toggleLiveCookingForecast=function(){liveCookingState.forecastVisible=liveCookingState.forecastVisible===false;saveLiveCookingState();refreshLiveCookingForecastUi();};
     window.clearLiveCookingForecast=function(){if(!liveCookingPlan)return;if(!confirm('清除本周预测？已记录的实际料理不会被删除。'))return;const week=liveCookingState.viewWeek,snapshots={...(liveCookingState.planSnapshots||{})};delete snapshots[week];liveCookingState.planSnapshots=snapshots;liveCookingPlan=null;liveCookingPlanDirty=true;saveLiveCookingState();rerenderLiveCookingPreserveScroll();if(typeof showToast==='function')showToast('本周预测已清除，实录仍保留');};
     window.updateLiveCookingSetting=function(field,value){if(['goodCamp','cookingBoost'].includes(field))liveCookingState[field]=!!value;else liveCookingState[field]=Number(value)||0;invalidateLiveCookingPlan();saveLiveCookingState();rerenderLiveCookingPreserveScroll();};
     window.updateLiveCookingInventory=function(name,value){liveCookingState.inventory[liveCookingCanonical(name)]=Math.max(0,Math.floor(Number(value)||0));invalidateLiveCookingPlan();saveLiveCookingState();if(document.getElementById('live-cooking-planner-modal'))rerenderLiveCookingPreserveScroll();};
