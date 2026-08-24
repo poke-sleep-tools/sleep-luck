@@ -28164,6 +28164,26 @@ async function calculateAndRenderWeeklyCooking() {
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
     }
+    function rerenderLiveCookingAfterTap(){
+        const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;
+        // Mobile Safari/WebView may keep the old composited layer when the whole modal is
+        // replaced synchronously inside a touch-generated click. Let the tap finish first.
+        setTimeout(()=>{
+            renderLiveCookingModal();
+            requestAnimationFrame(()=>{
+                const after=document.getElementById('live-cooking-scroll-body');
+                if(after){
+                    after.scrollTop=top;
+                    after.querySelectorAll('.live-cooking-toolbutton').forEach(button=>{
+                        button.type='button';
+                        button.style.touchAction='manipulation';
+                        button.style.webkitTapHighlightColor='transparent';
+                    });
+                    void after.offsetHeight;
+                }
+            });
+        },0);
+    }
     function invalidateLiveCookingPlan(){liveCookingPlanDirty=true;}
     window.recalculateLiveCookingNow=async function(){
         const modal=document.getElementById('live-cooking-planner-modal');if(!modal)return;
@@ -28202,7 +28222,7 @@ async function calculateAndRenderWeeklyCooking() {
     window.updateLiveCookingTimezone=function(value){if(!value)return;try{new Intl.DateTimeFormat('zh-CN',{timeZone:value}).format(new Date());}catch(_){if(typeof showToast==='function')showToast('这个城市时区暂不可用');return;}liveCookingState.timezoneId=String(value);saveLiveCookingState();rerenderLiveCookingPreserveScroll();if(typeof showToast==='function')showToast(`所在城市已保存并同步：${liveCookingTimezoneLabel(value)}`);};
     window.toggleLiveCookingSettings=function(){liveCookingSettingsOpen=!liveCookingSettingsOpen;rerenderLiveCookingPreserveScroll();};
     window.toggleLiveCookingDetails=function(){liveCookingDetailsOpen=!liveCookingDetailsOpen;rerenderLiveCookingPreserveScroll();};
-    window.toggleLiveCookingForecast=function(){liveCookingState.forecastVisible=liveCookingState.forecastVisible===false;saveLiveCookingState();rerenderLiveCookingPreserveScroll();};
+    window.toggleLiveCookingForecast=function(){liveCookingState.forecastVisible=liveCookingState.forecastVisible===false;saveLiveCookingState();rerenderLiveCookingAfterTap();};
     window.clearLiveCookingForecast=function(){if(!liveCookingPlan)return;if(!confirm('清除本周预测？已记录的实际料理不会被删除。'))return;const week=liveCookingState.viewWeek,snapshots={...(liveCookingState.planSnapshots||{})};delete snapshots[week];liveCookingState.planSnapshots=snapshots;liveCookingPlan=null;liveCookingPlanDirty=true;saveLiveCookingState();rerenderLiveCookingPreserveScroll();if(typeof showToast==='function')showToast('本周预测已清除，实录仍保留');};
     window.updateLiveCookingSetting=function(field,value){if(['goodCamp','cookingBoost'].includes(field))liveCookingState[field]=!!value;else liveCookingState[field]=Number(value)||0;invalidateLiveCookingPlan();saveLiveCookingState();rerenderLiveCookingPreserveScroll();};
     window.updateLiveCookingInventory=function(name,value){liveCookingState.inventory[liveCookingCanonical(name)]=Math.max(0,Math.floor(Number(value)||0));invalidateLiveCookingPlan();saveLiveCookingState();if(document.getElementById('live-cooking-planner-modal'))rerenderLiveCookingPreserveScroll();};
