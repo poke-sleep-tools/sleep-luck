@@ -28297,9 +28297,10 @@ function sleepSplitResolveLocatorTarget(targets) {
     }
     if (sleepSplitLocatorMode === 'total') {
         const total=Number(document.getElementById('sleep-split-locate-total')?.value)||16;
-        const rows=targets.filter(item=>item.total===total).sort((a,b)=>a.energy-b.energy||Math.abs(a.first-a.second)-Math.abs(b.first-b.second));
+        const rows=targets.filter(item=>item.total===total).sort((a,b)=>a.energy-b.energy||Math.abs(a.first-a.second)-Math.abs(b.first-b.second)||b.first-a.first);
         const minimum=rows[0]?.energy, equivalentRows=rows.filter(item=>item.energy===minimum);
-        const selected=equivalentRows.find(item=>item.key===sleepSplitSelectedTarget)||equivalentRows[0]||null;
+        // 合计只数查询没有指定方向时，默认优先一觉不少于二觉；反向方案仍作为并列结果保留。
+        const selected=equivalentRows.find(item=>item.first>=item.second)||equivalentRows[0]||null;
         return { mode:'total', row:selected, rows:equivalentRows, label:`合计${total}只`, candidates:rows.length };
     }
     return { mode:'manual', row:targets.find(item=>item.key===sleepSplitSelectedTarget)||null, label:sleepSplitSelectedTarget };
@@ -28368,6 +28369,7 @@ function sleepSplitRenderAxis(state, targets) {
         const group=energyGroups[energyGroups.length-1];
         if(group&&group.energy===row.energy)group.rows.push(row);else energyGroups.push({energy:row.energy,rows:[row]});
     });
+    energyGroups.forEach(group=>group.rows.sort((a,b)=>b.first-a.first||b.second-a.second));
     const width = Math.max(980,energyGroups.length*64);
     const maxEnergy = Math.max(1,...targets.map(row=>row.energy),state.energy||0);
     const nodes = energyGroups.map((group,groupIndex) => {
@@ -28398,7 +28400,7 @@ function renderSleepSplitPlanner() {
     const targets=sleepSplitAllTargets(state.bonus,state.map.starts);
     const locator=sleepSplitResolveLocatorTarget(targets);
     if (sleepSplitLocatorMode==='pair'&&locator.row) sleepSplitSelectedTarget=locator.row.key;
-    if (sleepSplitLocatorMode==='total'&&locator.row&&!(locator.rows||[]).some(item=>item.key===sleepSplitSelectedTarget)) sleepSplitSelectedTarget=locator.row.key;
+    if (sleepSplitLocatorMode==='total'&&locator.row) sleepSplitSelectedTarget=locator.row.key;
     sleepSplitRenderCurrent(state,targets); sleepSplitRenderAxis(state,targets); sleepSplitRenderDetail(state,targets);
     sleepSplitRenderLocatorStatus(locator);
 }
