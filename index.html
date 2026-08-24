@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.11</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.12</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -4335,18 +4335,25 @@ function isSameSleepResearchKey(log, date, session) {
 
 function getVisibleSleepResearchLogs(logs = []) {
     const map = new Map();
+    const deletedIds = new Set(
+        (Array.isArray(logs) ? logs : [])
+            .filter(isHistoryDeleteMarker)
+            .map(log => String(log.deletedId))
+    );
     (Array.isArray(logs) ? logs : [])
         .filter(log => log && isSleepResearchLog(log))
         .forEach(log => {
             const r = normalizeSleepResearchLogInPlace(Object.assign({}, log));
-            if (!r || !r.id) return;
+            if (!r || !r.id || deletedIds.has(String(r.id))) return;
             map.set(String(r.id), chooseNewerHistoryLog(map.get(String(r.id)), r));
         });
 
     // 合并本机元信息缓存，确保刚保存的睡眠分数/睡意/笔记/合照不会被旧空壳覆盖。
+    // 删除墓碑必须优先于本机摘要缓存，否则另一台设备删除研究后，手机会把旧摘要
+    // 重新显示成一个“没有捕捉记录的空研究”。摘要只是缓存，不能复活已删除的主记录。
     Object.values(readSleepResearchMetaMap()).forEach(meta => {
         const r = normalizeSleepResearchLogInPlace(Object.assign({}, meta, { type: 'sleep_research' }));
-        if (!r || !r.id) return;
+        if (!r || !r.id || deletedIds.has(String(r.id))) return;
         const old = map.get(String(r.id)) || {};
         map.set(String(r.id), mergeSleepResearchWithMeta(Object.assign({}, old, r), r.date, r.session));
     });
@@ -4362,6 +4369,11 @@ function getVisibleSleepResearchLogs(logs = []) {
 function findSleepResearch(date, session) {
     const normalizedDate = normalizeSleepResearchDateValue(date);
     const normalizedSession = normalizeSleepResearchSessionValue(session || '一觉');
+    const researchId = getSleepResearchId(normalizedDate, normalizedSession);
+    // 云端删除标记到达后，本机旧 meta 缓存不再具有显示/复活资格。
+    if ((Array.isArray(historyLogs) ? historyLogs : []).some(log => isHistoryDeleteMarker(log) && String(log.deletedId) === String(researchId))) {
+        return null;
+    }
     const fromHistory = getVisibleSleepResearchLogs(historyLogs).find(r => isSameSleepResearchKey(r, normalizedDate, normalizedSession)) || null;
     const fromMeta = getSleepResearchMeta(normalizedDate, normalizedSession);
     if (!fromHistory && !fromMeta) return null;
@@ -14616,8 +14628,11 @@ function submitSleepResearchMeta(event) {
             const payload = { date, session, sleepScore, drowsyPower, note, encounterCount, photoDataUrls: storedPhotos };
             if (ballUsage) payload.ballUsage = ballUsage;
             let research;
+            let historyCloudResult = null;
             try {
-                research = upsertSleepResearch(payload, { syncCloud: count <= 0 });
+                // 研究本体先可靠写入本机；抓 0 只时没有后续“最后一只宝可梦”收尾，
+                // 因此不能只依赖防抖后台上传，否则手机很快离开页面时另一端可能永远看不到这次研究。
+                research = upsertSleepResearch(payload, { syncCloud: false });
             } catch (error) {
                 if (!isStorageQuotaMessage(error)) throw error;
                 setSleepResearchSubmitBusy(true, '本机旧缓存已满，正在安全迁移旧版照片并释放空间…');
@@ -14625,7 +14640,7 @@ function submitSleepResearchMeta(event) {
                     onProgress: migrated => setSleepResearchSubmitBusy(true, `正在安全迁移旧版照片（已处理 ${migrated} 张）…`)
                 });
                 if (!recovery?.ok) throw new Error(`浏览器旧缓存已满，自动整理未能释放足够空间：${recovery?.reason || '未知原因'}。完整历史仍保留，未删除任何资料。`);
-                research = upsertSleepResearch(payload, { syncCloud: count <= 0 });
+                research = upsertSleepResearch(payload, { syncCloud: false });
             }
             const localWriteOk = await waitForHistoryLargeStorageWrite();
             if (!localWriteOk) throw new Error('完整历史写入手机大容量存储失败；本次未进入后续录入，请重新尝试。');
@@ -14643,6 +14658,10 @@ function submitSleepResearchMeta(event) {
                 }, { syncCloud: count <= 0 });
             }
             if (ballUsage) applyResearchBallUsageInventoryDelta(null, ballUsage, { syncCloud: count <= 0 });
+            if (count <= 0 && currentCloudUser) {
+                setSleepResearchSubmitBusy(true, '本机已保存，正在把这次空捕捉研究同步到账号并确认…');
+                historyCloudResult = await saveHistoryToCloudNow();
+            }
             // 有后续宝可梦时暂不在这里上传整份历史：全部录完后由统一收尾一次性保存。
             // 没有宝可梦需要继续录入时，后台同步本次研究；本机详情无需等待网络即可打开。
             // count=0 时，上面的本机保存会合并为一次防抖云同步；count>0 时留到最后一只统一收尾。
@@ -14654,7 +14673,9 @@ function submitSleepResearchMeta(event) {
             clearTimeout(window.__sleepResearchSlowTimer);
             hideBlockingProgress();
             if (count <= 0) {
-                showToast('睡眠研究已创建');
+                showToast(currentCloudUser && !historyCloudResult?.ok
+                    ? '睡眠研究已保存在本机，但账号同步失败；请在历史库点“重试同步”'
+                    : '睡眠研究已创建并已同步');
                 openSleepResearchDetail(date, session);
                 return;
             }
@@ -14854,8 +14875,9 @@ async function deleteSleepResearchWithCaptures(date, session, event) {
     updateBoxUI(true);
     renderTodayReportUI();
 
+    let deleteHistoryCloudResult = null;
     if (currentCloudUser) {
-        await saveHistoryToCloudNow();
+        deleteHistoryCloudResult = await saveHistoryToCloudNow();
         await saveBoxToCloudNow();
         if (graduationChanged) await saveGraduationDexToCloudNow();
     }
@@ -14866,7 +14888,9 @@ async function deleteSleepResearchWithCaptures(date, session, event) {
         openHistoryModal(true);
     }
 
-    showToast('已删除这次睡眠研究，并扣回对应捕捉记录');
+    showToast(currentCloudUser && !deleteHistoryCloudResult?.ok
+        ? '本机已删除研究并扣回捕捉记录，但云端删除标记尚未同步；请在历史库重试同步'
+        : '已删除这次睡眠研究，并已同步扣回对应捕捉记录');
 }
 
 
@@ -28149,11 +28173,33 @@ async function calculateAndRenderWeeklyCooking() {
             updatedAt:String(raw.updatedAt||raw.createdAt||new Date().toISOString())
         };
     }
+    function isWellFormedLiveCookingRecordSource(raw){
+        // 旧版本或写入中断产生的不完整对象不能默认落到“本周第 0 格”。
+        // slotIndex=0 是合法的周一早餐，因此必须显式判断缺失，而不能用真假值判断。
+        if(!raw||typeof raw!=='object')return false;
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(String(raw.weekStart||'')))return false;
+        if(raw.slotIndex===undefined||raw.slotIndex===null||raw.slotIndex==='')return false;
+        const index=Number(raw.slotIndex);
+        return Number.isFinite(index)&&index>=0&&index<=20;
+    }
     function isLiveCookingStateLog(log){ return !!(log&&log.type==='live_cooking_state'); }
     function isLiveCookingMealLog(log){ return !!(log&&log.type==='live_cooking_meal'); }
     function liveCookingNewest(a,b){
         if(!a)return b;if(!b)return a;
         return (Date.parse(b.updatedAt||b.createdAt||'')||0)>=(Date.parse(a.updatedAt||a.createdAt||'')||0)?b:a;
+    }
+    function liveCookingRecordContent(record){
+        if(!record)return null;
+        const item=normalizeLiveCookingRecord(record);
+        return {
+            weekStart:item.weekStart,slotIndex:item.slotIndex,mealType:item.mealType,
+            mealId:item.mealId,mealName:item.mealName,energy:item.energy,
+            extraTasty:item.extraTasty,visibleCritBonus:item.visibleCritBonus,
+            skipped:item.skipped,removed:item.removed,note:item.note
+        };
+    }
+    function liveCookingSameRecordContent(left,right){
+        return !!left&&!!right&&JSON.stringify(liveCookingRecordContent(left))===JSON.stringify(liveCookingRecordContent(right));
     }
     function loadLiveCookingData(){
         let local={};try{local=JSON.parse(localStorage.getItem(liveCookingStorageKey())||'{}')||{};}catch(_){}
@@ -28163,8 +28209,8 @@ async function calculateAndRenderWeeklyCooking() {
         const remoteState=cloudState?normalizeLiveCookingState(cloudState.state||{}):null;
         liveCookingState=remoteState&&((Date.parse(remoteState.updatedAt)||0)>=(Date.parse(localState.updatedAt)||0))?remoteState:localState;
         const map=new Map();
-        (Array.isArray(local.records)?local.records:[]).map(normalizeLiveCookingRecord).forEach(item=>map.set(item.id,liveCookingNewest(map.get(item.id),item)));
-        (Array.isArray(historyLogs)?historyLogs:[]).filter(isLiveCookingMealLog).map(normalizeLiveCookingRecord).forEach(item=>map.set(item.id,liveCookingNewest(map.get(item.id),item)));
+        (Array.isArray(local.records)?local.records:[]).filter(isWellFormedLiveCookingRecordSource).map(normalizeLiveCookingRecord).forEach(item=>map.set(item.id,liveCookingNewest(map.get(item.id),item)));
+        (Array.isArray(historyLogs)?historyLogs:[]).filter(isLiveCookingMealLog).filter(isWellFormedLiveCookingRecordSource).map(normalizeLiveCookingRecord).forEach(item=>map.set(item.id,liveCookingNewest(map.get(item.id),item)));
         liveCookingRecords=[...map.values()];
         restoreLiveCookingPlanForWeek();
         persistLiveCookingLocal();
@@ -28202,22 +28248,41 @@ async function calculateAndRenderWeeklyCooking() {
         return {user_id:userId,record_id:normalized.id,week_start:normalized.weekStart,slot_index:normalized.slotIndex,payload:normalized,updated_at:normalized.updatedAt||new Date().toISOString()};
     }
     function liveCookingCloudRowRecord(row){
-        return normalizeLiveCookingRecord({...((row&&typeof row.payload==='object')?row.payload:{}),id:row?.record_id,weekStart:row?.week_start,slotIndex:row?.slot_index,updatedAt:row?.updated_at});
+        const source={...((row&&typeof row.payload==='object')?row.payload:{}),id:row?.record_id,weekStart:row?.week_start,slotIndex:row?.slot_index,updatedAt:row?.updated_at};
+        return isWellFormedLiveCookingRecordSource(source)?normalizeLiveCookingRecord(source):null;
     }
     function mergeLiveCookingCloudRecords(rows){
         const map=new Map(liveCookingRecords.map(item=>[String(item.id),item]));
-        (Array.isArray(rows)?rows:[]).map(liveCookingCloudRowRecord).forEach(item=>map.set(String(item.id),liveCookingNewest(map.get(String(item.id)),item)));
+        (Array.isArray(rows)?rows:[]).map(liveCookingCloudRowRecord).filter(Boolean).forEach(item=>{
+            const id=String(item.id),local=map.get(id);
+            // 本机尚待确认的编辑不能被云端旧内容覆盖。只有内容一致时才接受云端时间戳。
+            if(liveCookingPendingMealSyncIds.has(id)&&local&&!liveCookingSameRecordContent(local,item))return;
+            map.set(id,liveCookingNewest(local,item));
+        });
         liveCookingRecords=[...map.values()];
     }
     async function saveLiveCookingRecordDedicated(userId,record){
         try{
-            const row=liveCookingCloudRecordRow(record,userId),{data,error}=await supabaseClient.from(LIVE_COOKING_CLOUD_RECORDS_TABLE).upsert(row,{onConflict:'user_id,record_id'}).select('record_id,week_start,slot_index,payload,updated_at').single();
-            if(error)throw error;
-            if(!currentCloudUser||currentCloudUser.id!==userId)return {ok:false,staleUser:true};
-            liveCookingDedicatedCloudSupport=true;
-            const confirmed=liveCookingCloudRowRecord(data||row);
-            mergeLiveCookingCloudRecords([confirmed]);persistLiveCookingLocal();
-            return {ok:true,record:confirmed,dedicated:true};
+            let desired=normalizeLiveCookingRecord(record);
+            for(let attempt=0;attempt<3;attempt++){
+                const row=liveCookingCloudRecordRow(desired,userId),{data,error}=await supabaseClient.from(LIVE_COOKING_CLOUD_RECORDS_TABLE).upsert(row,{onConflict:'user_id,record_id'}).select('record_id,week_start,slot_index,payload,updated_at').single();
+                if(error)throw error;
+                if(!currentCloudUser||currentCloudUser.id!==userId)return {ok:false,staleUser:true};
+                const confirmed=liveCookingCloudRowRecord(data||row);
+                if(confirmed&&liveCookingSameRecordContent(desired,confirmed)){
+                    liveCookingDedicatedCloudSupport=true;
+                    mergeLiveCookingCloudRecords([confirmed]);persistLiveCookingLocal();
+                    return {ok:true,record:confirmed,dedicated:true};
+                }
+                // 云端触发器可能因另一台设备留下的较晚时间戳而保留旧内容。
+                // 使用严格晚于双方的时间再次提交，同时继续保留本机待同步版本。
+                const nextTime=Math.max(Date.now(),(Date.parse(desired.updatedAt)||0)+1,(Date.parse(confirmed?.updatedAt)||0)+1000);
+                desired=normalizeLiveCookingRecord({...desired,updatedAt:new Date(nextTime).toISOString()});
+                const localIndex=liveCookingRecords.findIndex(item=>String(item.id)===String(desired.id));
+                if(localIndex>=0)liveCookingRecords[localIndex]=desired;
+                persistLiveCookingLocal();
+            }
+            return {ok:false,error:new Error('云端回读内容与本机保存内容不一致，已保留本机记录等待重试')};
         }catch(error){
             if(isLiveCookingCloudTableMissing(error)){liveCookingDedicatedCloudSupport=false;return {ok:false,missingTable:true,error};}
             return {ok:false,error};
@@ -28248,7 +28313,8 @@ async function calculateAndRenderWeeklyCooking() {
             if(!currentCloudUser||currentCloudUser.id!==userId)return {ok:false,staleUser:true};
             const remoteRows=recordsResult.data||[],confirmedRecordIds=remoteRows.filter(row=>{
                 const local=liveCookingRecords.find(item=>String(item.id)===String(row.record_id));
-                return (Date.parse(row.updated_at||'')||0)>=(Date.parse(local?.updatedAt||local?.createdAt||'')||0);
+                const remote=liveCookingCloudRowRecord(row);
+                return !!local&&!!remote&&liveCookingSameRecordContent(local,remote);
             }).map(row=>String(row.record_id));
             liveCookingDedicatedCloudSupport=true;mergeLiveCookingCloudRecords(remoteRows);
             if(stateResult.data?.state){const remote=normalizeLiveCookingState({...stateResult.data.state,updatedAt:stateResult.data.updated_at||stateResult.data.state.updatedAt});if((Date.parse(remote.updatedAt)||0)>=(Date.parse(liveCookingState?.updatedAt)||0))liveCookingState=remote;}
@@ -28340,7 +28406,7 @@ async function calculateAndRenderWeeklyCooking() {
                 const {data:verifyData,error:verifyError}=await supabaseClient.from('player_boxes').select('history_logs').eq('user_id',userId).maybeSingle();
                 if(verifyError)throw verifyError;
                 const verified=Array.isArray(verifyData?.history_logs)?verifyData.history_logs:[];
-                const remoteRecord=!recordId||verified.some(item=>String(item?.id)===String(recordId)&&getHistoryLogMergeTime(item)>=getHistoryLogMergeTime(desiredRecord));
+                const remoteRecord=!recordId||verified.some(item=>String(item?.id)===String(recordId)&&liveCookingSameRecordContent(item,desiredRecord));
                 // 保存一顿饭时，只用这顿饭本身作为成功判据。周历状态仍会随本次写入一并合并，
                 // 但另一台设备同时更新城市/预测设置时，不应让已经成功上传的料理继续显示“同步中”。
                 const shouldVerifyState=!recordId&&!!desiredState;
@@ -28851,7 +28917,7 @@ async function calculateAndRenderWeeklyCooking() {
         @media(max-width:600px){.live-cooking-week-row{flex-wrap:wrap}.live-cooking-week-nav{width:100%;justify-content:center}.live-cooking-week-range{white-space:nowrap}.live-cooking-grid{grid-template-columns:40px repeat(3,minmax(0,1fr))}.live-cooking-corner,.live-cooking-calendar-head{height:28px}.live-cooking-day-cell,.live-cooking-cell{min-height:59px}.live-cooking-meal-art{width:24px;height:24px}.live-cooking-meal-row strong{font-size:9px}.live-cooking-state-label{font-size:5px}.live-cooking-meal-name{font-size:5.8px}.live-cooking-subline{font-size:5.4px}.live-cooking-summary{grid-template-columns:repeat(3,1fr)}.live-cooking-summary .live-cooking-luck{grid-column:1/-1}.live-cooking-settings-grid{grid-template-columns:repeat(2,1fr)}.live-cooking-city-input{width:100%;margin-left:0}.live-cooking-city-input small{margin-left:auto}.live-cooking-deadline-badge{font-size:7.5px;padding:4px 3px}}
         </style><div class="live-cooking-app fixed inset-0 z-[105] p-0 backdrop-blur-sm sm:bg-slate-950/65 sm:p-3"><div class="mx-auto flex h-full max-w-3xl flex-col overflow-hidden bg-[#fbf7ef] shadow-2xl sm:h-[calc(100vh-24px)] sm:rounded-[28px]"><header class="flex items-center justify-between border-b border-[#eadfce] bg-[#fffdf8] px-4 py-3"><div><h2 class="text-base font-black text-stone-800">宝睡料理周历</h2><p class="text-[8px] font-bold text-stone-400">实录与理论推荐，一张表看清 · v2026.08.24.5</p></div><button type="button" onclick="closeLiveCookingPlannerModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-stone-100 text-xl font-black text-stone-600" aria-label="关闭">×</button></header><div id="live-cooking-scroll-body" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4"><div class="live-cooking-week-row mb-2 flex items-center justify-between gap-2"><div class="live-cooking-week-nav flex items-center gap-1"><button type="button" onclick="shiftLiveCookingWeek(-1)" class="live-cooking-toolbutton">‹</button><div class="px-2 text-center"><div class="live-cooking-week-range text-xs font-black text-stone-700">${start.getMonth()+1}/${start.getDate()}－${end.getMonth()+1}/${end.getDate()}</div><button type="button" onclick="goLiveCookingCurrentWeek()" class="text-[7px] font-black text-stone-400">回到本周</button></div><button type="button" onclick="shiftLiveCookingWeek(1)" class="live-cooking-toolbutton">›</button></div>${renderLiveCookingTimezoneInput()}</div>${renderLiveCookingCalendar()}${renderLiveCookingWeekSummary()}<div class="live-cooking-plan-status"><div><small>${hasPlan?(liveCookingPlanDirty?'旧推荐预计最终总能量':'预计本周最终总能量'):'规划状态'}</small><strong>${hasPlan?(current>0?liveCookingFormatNumber(finalEnergy):`剩余期望 +${liveCookingFormatNumber(remaining)}`):'等待手动计算'}</strong></div><span class="text-[7px] font-bold ${liveCookingPlanDirty?'text-amber-700':'text-stone-400'}">${hasPlan?(liveCookingPlanDirty?'输入已改变，旧推荐仍保留':`计算于 ${liveCookingEscape(liveCookingPlan.generatedAt?new Date(liveCookingPlan.generatedAt).toLocaleString('zh-CN'):'本次打开期间')}`):'修改输入不会自动开始复杂计算'}</span></div><div class="live-cooking-toolbar"><button id="live-cooking-calculate-button" type="button" onclick="recalculateLiveCookingNow()" class="live-cooking-toolbutton is-primary"><i class="fa-solid fa-calculator"></i> ${hasPlan?'重新计算':'开始计算'}</button><button type="button" onclick="toggleLiveCookingSettings()" class="live-cooking-toolbutton ${liveCookingSettingsOpen?'is-active':''}"><i class="fa-solid fa-sliders"></i> 计算设定</button><button type="button" onclick="toggleLiveCookingDetails()" class="live-cooking-toolbutton ${liveCookingDetailsOpen?'is-active':''}"><i class="fa-solid fa-chart-line"></i> 详细结果</button><button id="live-cooking-forecast-toggle" type="button" onclick="event.preventDefault();event.stopPropagation();toggleLiveCookingForecast()" class="live-cooking-toolbutton" style="touch-action:manipulation;-webkit-tap-highlight-color:transparent"><i class="fa-solid ${liveCookingState.forecastVisible!==false?'fa-eye-slash':'fa-eye'}"></i> ${liveCookingState.forecastVisible!==false?'隐藏预测':'显示预测'}</button>${hasPlan?'<button type="button" onclick="clearLiveCookingForecast()" class="live-cooking-toolbutton"><i class="fa-solid fa-eraser"></i> 清除预测</button>':''}</div>${settings}${details}<div id="live-cooking-sync-status" class="mt-3 text-center text-[7px] font-black text-stone-400">${currentCloudUser?'<i class="fa-solid fa-cloud-circle-check"></i> 周历、城市和预测设置将同步到账号':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机'}</div></div></div></div>`;
         const liveCookingVersionText=document.querySelector('#live-cooking-planner-modal header p');
-        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.11';
+        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.12';
     }
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
