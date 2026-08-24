@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.12</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.13</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1201,22 +1201,18 @@ function getCheckInDisplayShapeTag(item) {
 }
 
 function mergeTodayCheckIns(localLogs = [], historyTodayLogs = []) {
-    const deletedIds = new Set(
-        (Array.isArray(historyLogs) ? historyLogs : [])
-            .filter(log => log && (log.__deleted === true || log.type === 'delete_marker') && log.deletedId !== undefined && log.deletedId !== null)
-            .map(log => String(log.deletedId))
-    );
+    const deleteMarkers = getHistoryDeleteMarkerMap(historyLogs);
 
     const mergedMap = new Map();
 
     // 先放本地，再放云端历史重建结果；同 id 时云端历史作为更完整来源。
     // 但如果这个 id 已经有删除墓碑，就不能再进入今日流水。
     localLogs
-        .filter(log => log && !deletedIds.has(String(log.id)))
+        .filter(log => log && !isHistoryRecordDeletedByMarker(log, deleteMarkers))
         .forEach(log => mergedMap.set(String(log.id), log));
 
     historyTodayLogs
-        .filter(log => log && !deletedIds.has(String(log.id)))
+        .filter(log => log && !isHistoryRecordDeletedByMarker(log, deleteMarkers))
         .forEach(log => mergedMap.set(String(log.id), log));
 
     return Array.from(mergedMap.values()).sort((a, b) => {
@@ -3779,6 +3775,25 @@ function isHistoryDeleteMarker(log) {
     return !!(log && (log.__deleted === true || log.type === 'delete_marker') && log.deletedId !== undefined && log.deletedId !== null);
 }
 
+function getHistoryDeleteMarkerMap(logs = historyLogs) {
+    const map = new Map();
+    (Array.isArray(logs) ? logs : []).filter(isHistoryDeleteMarker).forEach(marker => {
+        const id = String(marker.deletedId);
+        map.set(id, chooseNewerHistoryLog(map.get(id), marker));
+    });
+    return map;
+}
+
+function isHistoryRecordDeletedByMarker(record, logsOrMap = historyLogs) {
+    if (!record || isHistoryDeleteMarker(record)) return false;
+    const map = logsOrMap instanceof Map ? logsOrMap : getHistoryDeleteMarkerMap(logsOrMap);
+    const marker = map.get(String(record.id));
+    if (!marker) return false;
+    // 删除只压住删除当时以及更旧的版本；同一天同一觉后来重新创建时，
+    // 新记录 updatedAt 更晚，必须允许重新出现，不能被永久墓碑误伤。
+    return getHistoryLogMergeTime(marker) >= getHistoryLogMergeTime(record);
+}
+
 function isSleepResearchLog(log) {
     return !!(log && log.type === 'sleep_research');
 }
@@ -4335,16 +4350,12 @@ function isSameSleepResearchKey(log, date, session) {
 
 function getVisibleSleepResearchLogs(logs = []) {
     const map = new Map();
-    const deletedIds = new Set(
-        (Array.isArray(logs) ? logs : [])
-            .filter(isHistoryDeleteMarker)
-            .map(log => String(log.deletedId))
-    );
+    const deleteMarkers = getHistoryDeleteMarkerMap(logs);
     (Array.isArray(logs) ? logs : [])
         .filter(log => log && isSleepResearchLog(log))
         .forEach(log => {
             const r = normalizeSleepResearchLogInPlace(Object.assign({}, log));
-            if (!r || !r.id || deletedIds.has(String(r.id))) return;
+            if (!r || !r.id || isHistoryRecordDeletedByMarker(r, deleteMarkers)) return;
             map.set(String(r.id), chooseNewerHistoryLog(map.get(String(r.id)), r));
         });
 
@@ -4353,7 +4364,7 @@ function getVisibleSleepResearchLogs(logs = []) {
     // 重新显示成一个“没有捕捉记录的空研究”。摘要只是缓存，不能复活已删除的主记录。
     Object.values(readSleepResearchMetaMap()).forEach(meta => {
         const r = normalizeSleepResearchLogInPlace(Object.assign({}, meta, { type: 'sleep_research' }));
-        if (!r || !r.id || deletedIds.has(String(r.id))) return;
+        if (!r || !r.id || isHistoryRecordDeletedByMarker(r, deleteMarkers)) return;
         const old = map.get(String(r.id)) || {};
         map.set(String(r.id), mergeSleepResearchWithMeta(Object.assign({}, old, r), r.date, r.session));
     });
@@ -4366,18 +4377,34 @@ function getVisibleSleepResearchLogs(logs = []) {
         });
 }
 
+function restoreSleepResearchMetaCacheIntoHistory() {
+    const deleteMarkers = getHistoryDeleteMarkerMap(historyLogs);
+    let changed = false;
+    Object.values(readSleepResearchMetaMap()).forEach(meta => {
+        const candidate = normalizeSleepResearchLogInPlace(Object.assign({}, meta, { type: 'sleep_research' }));
+        if (!candidate?.id || isHistoryRecordDeletedByMarker(candidate, deleteMarkers)) return;
+        const existing = (Array.isArray(historyLogs) ? historyLogs : [])
+            .filter(log => log && isSleepResearchLog(log) && String(getSleepResearchMergeKey(log)) === String(candidate.id))
+            .reduce((best, item) => chooseNewerHistoryLog(best, item), null);
+        if (existing && getHistoryLogMergeTime(existing) >= getHistoryLogMergeTime(candidate)) return;
+        historyLogs.push(candidate);
+        changed = true;
+    });
+    if (changed) historyLogs = mergeHistoryLogs([], historyLogs);
+    return changed;
+}
+
 function findSleepResearch(date, session) {
     const normalizedDate = normalizeSleepResearchDateValue(date);
     const normalizedSession = normalizeSleepResearchSessionValue(session || '一觉');
     const researchId = getSleepResearchId(normalizedDate, normalizedSession);
-    // 云端删除标记到达后，本机旧 meta 缓存不再具有显示/复活资格。
-    if ((Array.isArray(historyLogs) ? historyLogs : []).some(log => isHistoryDeleteMarker(log) && String(log.deletedId) === String(researchId))) {
-        return null;
-    }
     const fromHistory = getVisibleSleepResearchLogs(historyLogs).find(r => isSameSleepResearchKey(r, normalizedDate, normalizedSession)) || null;
     const fromMeta = getSleepResearchMeta(normalizedDate, normalizedSession);
-    if (!fromHistory && !fromMeta) return null;
-    return mergeSleepResearchWithMeta(fromHistory || fromMeta, normalizedDate, normalizedSession);
+    const candidate = fromHistory || fromMeta;
+    if (!candidate) return null;
+    const normalizedCandidate = normalizeSleepResearchLogInPlace(Object.assign({}, candidate, { id: researchId, type: 'sleep_research' }));
+    if (isHistoryRecordDeletedByMarker(normalizedCandidate, historyLogs)) return null;
+    return mergeSleepResearchWithMeta(candidate, normalizedDate, normalizedSession);
 }
 
 
@@ -4705,7 +4732,8 @@ function upsertSleepResearch(payload = {}, options = {}) {
     const id = getSleepResearchId(date, session);
     const existingResearches = historyLogs.filter(log => log && isSleepResearchLog(log) && isSameSleepResearchKey(log, date, session));
     const existing = existingResearches.reduce((best, item) => chooseNewerHistoryLog(best, item), null) || {};
-    const now = new Date().toISOString();
+    const previousDeleteMarker = getHistoryDeleteMarkerMap(historyLogs).get(String(id));
+    const now = new Date(Math.max(Date.now(), getHistoryLogMergeTime(previousDeleteMarker) + 1)).toISOString();
     const normalizedPayload = Object.assign({}, payload, { date, session });
     const next = Object.assign({
         id,
@@ -4835,15 +4863,11 @@ function ensureSleepResearchForExistingCaptures(options = {}) {
 }
 
 function getVisibleHistoryLogs(logs = []) {
-    const deletedIds = new Set(
-        (Array.isArray(logs) ? logs : [])
-            .filter(isHistoryDeleteMarker)
-            .map(log => String(log.deletedId))
-    );
+    const deleteMarkers = getHistoryDeleteMarkerMap(logs);
 
     return (Array.isArray(logs) ? logs : [])
         .filter(log => log && !isHistoryDeleteMarker(log) && !isHistorySystemLog(log))
-        .filter(log => !deletedIds.has(String(log.id)));
+        .filter(log => !isHistoryRecordDeletedByMarker(log, deleteMarkers));
 }
 
 function makeHistoryDeleteMarker(deletedId) {
@@ -4887,13 +4911,9 @@ function mergeHistoryLogs(cloudLogs = [], localLogs = []) {
         ...(Array.isArray(localLogs) ? localLogs : [])
     ];
 
-    // 删除墓碑优先级最高：
-    // 任意设备删过的 id，之后任何设备 localStorage 里的旧记录都不能再复活。
-    const deletedIds = new Set(
-        allLogs
-            .filter(isHistoryDeleteMarker)
-            .map(log => String(log.deletedId))
-    );
+    // 删除墓碑优先于旧版本，但不能永久封死这个 id：玩家之后重新创建同一天同一觉时，
+    // updatedAt 更晚的新记录应当重新生效。
+    const deleteMarkers = getHistoryDeleteMarkerMap(allLogs);
 
     const mergedMap = new Map();
 
@@ -4904,7 +4924,7 @@ function mergeHistoryLogs(cloudLogs = [], localLogs = []) {
     allLogs.forEach(log => {
         if (!log || isHistoryDeleteMarker(log)) return;
         normalizeSleepResearchLogInPlace(log);
-        if (deletedIds.has(String(log.id))) return;
+        if (isHistoryRecordDeletedByMarker(log, deleteMarkers)) return;
         const key = getSleepResearchMergeKey(log);
         mergedMap.set(key, chooseNewerHistoryLog(mergedMap.get(key), log));
     });
@@ -4933,6 +4953,9 @@ async function loadHistoryFromCloud(options = {}) {
     // 再与云端按 updatedAt 合并；旧版没有时间戳的本地值使用极早时间，避免覆盖另一台设备已有的新值。
     loadEncounterStatisticsFromLocal();
     loadHistoryFromLocal();
+    // v13 修复：v12 曾把“同一天同一觉重新创建”的记录误判为旧墓碑删除。
+    // 研究摘要缓存里仍保留完整新记录；在联网合并前先无损恢复到主历史，再同步给其他设备。
+    restoreSleepResearchMetaCacheIntoHistory();
     await ensureHistoryLargeStorageReady();
     historyLogs = prepareEncounterStatisticsLogsForMerge(historyLogs);
     syncEncounterStatisticsLocalStateIntoHistory();
@@ -15596,13 +15619,11 @@ function getSleepTypeRecordSortValue(record) {
 }
 
 function getVisibleSleepTypeRecords(logs = historyLogs) {
-    const deletedIds = new Set(
-        (Array.isArray(logs) ? logs : []).filter(isHistoryDeleteMarker).map(log => String(log.deletedId))
-    );
+    const deleteMarkers = getHistoryDeleteMarkerMap(logs);
     const map = new Map();
     (Array.isArray(logs) ? logs : [])
         .filter(isSleepTypeRecordLog)
-        .filter(log => !deletedIds.has(String(log.id)))
+        .filter(log => !isHistoryRecordDeletedByMarker(log, deleteMarkers))
         .forEach(log => {
             const normalized = normalizeSleepTypeRecord(log);
             const key = getSleepTypeRecordKey(normalized.date, normalized.session);
@@ -28917,7 +28938,7 @@ async function calculateAndRenderWeeklyCooking() {
         @media(max-width:600px){.live-cooking-week-row{flex-wrap:wrap}.live-cooking-week-nav{width:100%;justify-content:center}.live-cooking-week-range{white-space:nowrap}.live-cooking-grid{grid-template-columns:40px repeat(3,minmax(0,1fr))}.live-cooking-corner,.live-cooking-calendar-head{height:28px}.live-cooking-day-cell,.live-cooking-cell{min-height:59px}.live-cooking-meal-art{width:24px;height:24px}.live-cooking-meal-row strong{font-size:9px}.live-cooking-state-label{font-size:5px}.live-cooking-meal-name{font-size:5.8px}.live-cooking-subline{font-size:5.4px}.live-cooking-summary{grid-template-columns:repeat(3,1fr)}.live-cooking-summary .live-cooking-luck{grid-column:1/-1}.live-cooking-settings-grid{grid-template-columns:repeat(2,1fr)}.live-cooking-city-input{width:100%;margin-left:0}.live-cooking-city-input small{margin-left:auto}.live-cooking-deadline-badge{font-size:7.5px;padding:4px 3px}}
         </style><div class="live-cooking-app fixed inset-0 z-[105] p-0 backdrop-blur-sm sm:bg-slate-950/65 sm:p-3"><div class="mx-auto flex h-full max-w-3xl flex-col overflow-hidden bg-[#fbf7ef] shadow-2xl sm:h-[calc(100vh-24px)] sm:rounded-[28px]"><header class="flex items-center justify-between border-b border-[#eadfce] bg-[#fffdf8] px-4 py-3"><div><h2 class="text-base font-black text-stone-800">宝睡料理周历</h2><p class="text-[8px] font-bold text-stone-400">实录与理论推荐，一张表看清 · v2026.08.24.5</p></div><button type="button" onclick="closeLiveCookingPlannerModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-stone-100 text-xl font-black text-stone-600" aria-label="关闭">×</button></header><div id="live-cooking-scroll-body" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4"><div class="live-cooking-week-row mb-2 flex items-center justify-between gap-2"><div class="live-cooking-week-nav flex items-center gap-1"><button type="button" onclick="shiftLiveCookingWeek(-1)" class="live-cooking-toolbutton">‹</button><div class="px-2 text-center"><div class="live-cooking-week-range text-xs font-black text-stone-700">${start.getMonth()+1}/${start.getDate()}－${end.getMonth()+1}/${end.getDate()}</div><button type="button" onclick="goLiveCookingCurrentWeek()" class="text-[7px] font-black text-stone-400">回到本周</button></div><button type="button" onclick="shiftLiveCookingWeek(1)" class="live-cooking-toolbutton">›</button></div>${renderLiveCookingTimezoneInput()}</div>${renderLiveCookingCalendar()}${renderLiveCookingWeekSummary()}<div class="live-cooking-plan-status"><div><small>${hasPlan?(liveCookingPlanDirty?'旧推荐预计最终总能量':'预计本周最终总能量'):'规划状态'}</small><strong>${hasPlan?(current>0?liveCookingFormatNumber(finalEnergy):`剩余期望 +${liveCookingFormatNumber(remaining)}`):'等待手动计算'}</strong></div><span class="text-[7px] font-bold ${liveCookingPlanDirty?'text-amber-700':'text-stone-400'}">${hasPlan?(liveCookingPlanDirty?'输入已改变，旧推荐仍保留':`计算于 ${liveCookingEscape(liveCookingPlan.generatedAt?new Date(liveCookingPlan.generatedAt).toLocaleString('zh-CN'):'本次打开期间')}`):'修改输入不会自动开始复杂计算'}</span></div><div class="live-cooking-toolbar"><button id="live-cooking-calculate-button" type="button" onclick="recalculateLiveCookingNow()" class="live-cooking-toolbutton is-primary"><i class="fa-solid fa-calculator"></i> ${hasPlan?'重新计算':'开始计算'}</button><button type="button" onclick="toggleLiveCookingSettings()" class="live-cooking-toolbutton ${liveCookingSettingsOpen?'is-active':''}"><i class="fa-solid fa-sliders"></i> 计算设定</button><button type="button" onclick="toggleLiveCookingDetails()" class="live-cooking-toolbutton ${liveCookingDetailsOpen?'is-active':''}"><i class="fa-solid fa-chart-line"></i> 详细结果</button><button id="live-cooking-forecast-toggle" type="button" onclick="event.preventDefault();event.stopPropagation();toggleLiveCookingForecast()" class="live-cooking-toolbutton" style="touch-action:manipulation;-webkit-tap-highlight-color:transparent"><i class="fa-solid ${liveCookingState.forecastVisible!==false?'fa-eye-slash':'fa-eye'}"></i> ${liveCookingState.forecastVisible!==false?'隐藏预测':'显示预测'}</button>${hasPlan?'<button type="button" onclick="clearLiveCookingForecast()" class="live-cooking-toolbutton"><i class="fa-solid fa-eraser"></i> 清除预测</button>':''}</div>${settings}${details}<div id="live-cooking-sync-status" class="mt-3 text-center text-[7px] font-black text-stone-400">${currentCloudUser?'<i class="fa-solid fa-cloud-circle-check"></i> 周历、城市和预测设置将同步到账号':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机'}</div></div></div></div>`;
         const liveCookingVersionText=document.querySelector('#live-cooking-planner-modal header p');
-        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.12';
+        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.13';
     }
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
