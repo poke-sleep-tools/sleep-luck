@@ -28281,6 +28281,8 @@ const SLEEP_SPLIT_BONUSES = [
 ];
 let sleepSplitSelectedTarget = '8+8';
 let sleepSplitLocatorMode = 'manual';
+let sleepSplitLockedOutcome = '';
+let sleepSplitFirstScore = 50;
 
 function sleepSplitEsc(value) {
     return typeof escapeHtml === 'function' ? escapeHtml(String(value ?? '')) : String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -28379,6 +28381,15 @@ function sleepSplitCurrentOutcomes(energy, bonus, starts) {
     }
     return [...grouped.values()].sort((a,b) => b.total-a.total || Math.abs(a.first-a.second)-Math.abs(b.first-b.second) || b.first-a.first);
 }
+function sleepSplitOutcomeAtScore(energy,bonus,starts,firstScore) {
+    const first=Math.max(1,Math.min(99,Math.round(Number(firstScore)||50))),second=100-first;
+    const firstCount=sleepSplitCountForPower(Math.floor(energy*first*bonus),starts),secondCount=sleepSplitCountForPower(Math.floor(energy*second*bonus),starts);
+    return {firstScore:first,secondScore:second,first:firstCount,second:secondCount,total:firstCount+secondCount,key:`${firstCount}+${secondCount}`};
+}
+function sleepSplitSliderBackground(firstScore,allowedMin=1,allowedMax=99) {
+    const first=Math.max(1,Math.min(99,Number(firstScore)||50)),min=Math.max(1,Math.min(first,Number(allowedMin)||1)),max=Math.min(99,Math.max(first,Number(allowedMax)||99));
+    return `linear-gradient(90deg,#64748b 0%,#64748b ${min}%,#60a5fa ${min}%,#60a5fa ${first}%,#c4b5fd ${first}%,#c4b5fd ${max}%,#64748b ${max}%,#64748b 100%)`;
+}
 function sleepSplitReadInputs() {
     const island = document.getElementById('sleep-split-island')?.value || 'greengrass';
     const bonus = Number(document.getElementById('sleep-split-bonus')?.value)||1;
@@ -28399,8 +28410,58 @@ function sleepSplitRenderCurrent(state, targets) {
     const best = outcomes[0];
     const reached = targets.filter(row=>row.energy<=state.energy);
     const next = targets.find(row=>row.energy>state.energy);
-    const secondMin=100-best.maxScore,secondMax=100-best.minScore;
-    box.innerHTML = `<div class="rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 p-4 text-white shadow-lg"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-blue-100">当前总只数最高的拆法</div><div class="mt-1 text-3xl font-black">${best.key} <span class="text-sm text-blue-100">共${best.total}只</span></div><div class="mt-2 grid gap-1 text-[10px] font-bold text-blue-100"><div><b class="text-white">一觉</b>：${sleepSplitScoreRange(best.minScore,best.maxScore)} · 睡眠时长 ${sleepSplitDurationRange(best.minScore,best.maxScore)}</div><div><b class="text-white">二觉</b>：${sleepSplitScoreRange(secondMin,secondMax)} · 睡眠时长 ${sleepSplitDurationRange(secondMin,secondMax)}</div></div></div><div class="rounded-2xl bg-white/15 px-3 py-2 text-right"><div class="text-[9px] font-bold text-blue-100">已跨过目标</div><div class="text-xl font-black">${reached.length}<span class="text-xs"> / ${targets.length}</span></div>${next?`<div class="mt-1 text-[9px] font-bold text-blue-100">下一节点还差 ${sleepSplitFmtNumber(next.energy-state.energy)}</div>`:'<div class="mt-1 text-[9px] font-bold text-emerald-200">全部节点已达到</div>'}</div></div></div><div class="mt-3"><div class="mb-2 text-[10px] font-black text-slate-500">所有可行结果（点击查看对应最低能量）</div><div class="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto">${outcomes.map((row,index)=>`<button type="button" onclick="sleepSplitSelectTarget('${row.key}')" class="rounded-xl border ${index===0?'border-blue-500 bg-blue-50 text-blue-800':'border-slate-200 bg-white text-slate-600'} px-2.5 py-1.5 text-[10px] font-black">${row.key}<span class="ml-1 opacity-60">${row.minScore}${row.maxScore!==row.minScore?`～${row.maxScore}`:''}分</span></button>`).join('')}</div></div>`;
+    let locked=outcomes.find(row=>row.key===sleepSplitLockedOutcome)||null;
+    if(sleepSplitLockedOutcome&&!locked)sleepSplitLockedOutcome='';
+    const sliderMin=locked?locked.minScore:1,sliderMax=locked?locked.maxScore:99;
+    if(sleepSplitFirstScore<sliderMin||sleepSplitFirstScore>sliderMax){
+        const preferred=Math.max(50,Math.round((sliderMin+sliderMax)/2));
+        sleepSplitFirstScore=Math.max(sliderMin,Math.min(sliderMax,preferred));
+    }
+    const current=sleepSplitOutcomeAtScore(state.energy,state.bonus,state.map.starts,sleepSplitFirstScore),secondMin=100-sliderMax,secondMax=100-sliderMin;
+    const rangeText=locked?`一觉可在 ${sleepSplitScoreRange(sliderMin,sliderMax)}（${sleepSplitDurationRange(sliderMin,sliderMax)}）之间移动；二觉同步反向变化为 ${sleepSplitScoreRange(secondMin,secondMax)}。`:'未锁定方案：可以自由调整一觉与二觉的比例，两觉分数始终合计100。';
+    box.innerHTML = `<style>.sleep-split-range{-webkit-appearance:none;appearance:none;width:100%;height:13px;border-radius:999px;outline:none;box-shadow:inset 0 1px 3px rgba(15,23,42,.22)}.sleep-split-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:30px;height:30px;border:5px solid white;border-radius:50%;background:#4f46e5;box-shadow:0 3px 10px rgba(30,41,59,.35);cursor:grab}.sleep-split-range::-moz-range-thumb{width:22px;height:22px;border:5px solid white;border-radius:50%;background:#4f46e5;box-shadow:0 3px 10px rgba(30,41,59,.35);cursor:grab}.sleep-split-range:disabled{opacity:.75}</style><div class="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-lg"><div class="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 text-white"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-blue-100">当前滑块分配结果</div><div class="mt-1 text-3xl font-black"><span id="sleep-split-slider-result">${current.key}</span> <span id="sleep-split-slider-total" class="text-sm text-blue-100">共${current.total}只</span></div><div class="mt-1 text-[9px] font-bold text-blue-100">当前能量最高总只数：${best.total}只${best.key===current.key?' · 当前已达到':' · 可尝试 '+best.key}</div></div><div class="rounded-2xl bg-white/15 px-3 py-2 text-right"><div class="text-[9px] font-bold text-blue-100">${locked?'已锁定方案':'自由调整'}</div><div class="text-xl font-black">${locked?locked.key:'1～99分'}</div>${locked?`<button type="button" onclick="sleepSplitUnlockOutcome()" class="mt-1 rounded-full bg-white/15 px-2 py-1 text-[8px] font-black hover:bg-white/25">取消锁定</button>`:''}</div></div><div class="mt-4 grid grid-cols-2 gap-3"><div class="rounded-xl bg-white/12 p-3"><div class="text-[9px] font-black text-blue-100">一觉 · <span id="sleep-split-slider-first-count">${current.first}</span>只</div><div class="mt-0.5 text-xl font-black"><span id="sleep-split-slider-first-score">${current.firstScore}</span>分</div><div id="sleep-split-slider-first-time" class="text-[10px] font-bold text-blue-100">约${sleepSplitDuration(current.firstScore)}</div></div><div class="rounded-xl bg-white/12 p-3 text-right"><div class="text-[9px] font-black text-blue-100">二觉 · <span id="sleep-split-slider-second-count">${current.second}</span>只</div><div class="mt-0.5 text-xl font-black"><span id="sleep-split-slider-second-score">${current.secondScore}</span>分</div><div id="sleep-split-slider-second-time" class="text-[10px] font-bold text-blue-100">约${sleepSplitDuration(current.secondScore)}</div></div></div><div class="mt-4 px-1"><input id="sleep-split-score-slider" type="range" min="${sliderMin}" max="${sliderMax}" value="${current.firstScore}" ${sliderMin===sliderMax?'disabled':''} oninput="sleepSplitUpdateSlider(this.value)" class="sleep-split-range" style="background:linear-gradient(90deg,#60a5fa 0%,#60a5fa ${current.firstScore}%,#c4b5fd ${current.firstScore}%,#c4b5fd 100%)" aria-label="调整一觉分数，二觉使用剩余分数"><div class="mt-2 flex justify-between text-[8px] font-black text-blue-100"><span>← 一觉占比</span><span>二觉占比 →</span></div></div><div class="mt-3 rounded-xl bg-white/10 px-3 py-2 text-[9px] font-bold leading-relaxed text-blue-100">${rangeText}</div></div><div class="p-3"><div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div class="text-[10px] font-black text-slate-600">锁定一种捕捉只数组合</div><div class="text-[8px] font-bold text-slate-400">锁定后滑块只能在维持该组合的区间内移动</div></div><div class="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">${outcomes.map((row,index)=>`<button type="button" onclick="sleepSplitLockOutcome('${row.key}')" class="rounded-xl border ${row.key===sleepSplitLockedOutcome?'border-indigo-600 bg-indigo-600 text-white shadow-md':index===0?'border-blue-400 bg-blue-50 text-blue-800':'border-slate-200 bg-white text-slate-600'} px-2.5 py-1.5 text-[10px] font-black">${row.key}<span class="ml-1 opacity-70">一觉${row.minScore}${row.maxScore!==row.minScore?`～${row.maxScore}`:''}分</span></button>`).join('')}</div><div class="mt-2 flex items-center justify-between gap-2 text-[8px] font-bold text-slate-400"><span>反查最低能量仍使用下方数轴。</span><span>已跨过 ${reached.length}/${targets.length} 个门槛${next?` · 下一节点差${sleepSplitFmtNumber(next.energy-state.energy)}`:''}</span></div></div></div>`;
+    // 常用方向优先展示：通常一觉不短于二觉；反向组合仍完整保留在折叠区。
+    const choiceButtons=[...box.querySelectorAll('button[onclick^="sleepSplitLockOutcome"]')];
+    const choiceHost=choiceButtons[0]?.parentElement;
+    if(choiceHost){
+        const readPair=button=>{
+            const match=(button.getAttribute('onclick')||'').match(/'(\d+)\+(\d+)'/);
+            return match?{first:Number(match[1]),second:Number(match[2])}:null;
+        };
+        const common=choiceButtons.filter(button=>{const pair=readPair(button);return pair&&pair.first>=pair.second;});
+        const reverse=choiceButtons.filter(button=>{const pair=readPair(button);return pair&&pair.first<pair.second;});
+        choiceHost.replaceChildren();
+        choiceHost.className='space-y-2';
+        const commonLabel=document.createElement('div');
+        commonLabel.className='flex items-center justify-between gap-2 px-0.5 text-[8px] font-black';
+        commonLabel.innerHTML='<span class="text-indigo-700">常用方向 · 一觉不少于二觉</span><span class="text-slate-400">优先展示</span>';
+        const commonGrid=document.createElement('div');
+        commonGrid.className='grid grid-cols-2 gap-1.5 sm:grid-cols-3';
+        common.forEach(button=>{button.classList.add('w-full');commonGrid.appendChild(button);});
+        choiceHost.append(commonLabel,commonGrid);
+        if(reverse.length){
+            const details=document.createElement('details');
+            details.className='overflow-hidden rounded-xl border border-slate-200 bg-slate-50';
+            const lockedReverse=reverse.some(button=>(button.getAttribute('onclick')||'').includes(`'${sleepSplitLockedOutcome}'`));
+            details.open=lockedReverse;
+            const summary=document.createElement('summary');
+            summary.className='flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[9px] font-black text-slate-500';
+            summary.innerHTML=`<span>二觉更长的反向方案</span><span class="text-[8px] text-slate-400">共${reverse.length}种 · 点击展开</span>`;
+            const reverseGrid=document.createElement('div');
+            reverseGrid.className='grid grid-cols-2 gap-1.5 border-t border-slate-200 p-2 sm:grid-cols-3';
+            reverse.forEach(button=>{button.classList.add('w-full');reverseGrid.appendChild(button);});
+            details.append(summary,reverseGrid);
+            choiceHost.appendChild(details);
+        }
+    }
+    // 横条始终表示完整的1～99分位置；锁定方案只限制其中一段，不把允许区间拉伸成整条。
+    const slider=document.getElementById('sleep-split-score-slider');
+    if(slider){
+        slider.min='1';slider.max='99';slider.dataset.allowedMin=String(sliderMin);slider.dataset.allowedMax=String(sliderMax);
+        slider.style.background=sleepSplitSliderBackground(current.firstScore,sliderMin,sliderMax);
+        slider.title=locked?`整条代表0～100分；当前仅允许一觉在${sliderMin}～${sliderMax}分之间移动`:'整条代表0～100分；当前可以自由调整';
+        slider.insertAdjacentHTML('afterend',`<div class="mt-1 flex items-center justify-between text-[7px] font-black text-blue-200"><span>0分</span><span>${locked?`可移动区间：${sliderMin}～${sliderMax}分`:'完整区间自由移动'}</span><span>100分</span></div>`);
+    }
 }
 function sleepSplitRenderAxis(state, targets) {
     const box = document.getElementById('sleep-split-axis');
@@ -28428,6 +28489,8 @@ function sleepSplitRenderAxis(state, targets) {
     const currentLeft = 34 + Math.min(energyGroups.length-1,Math.max(0,currentRank-.5))*((width-68)/Math.max(1,energyGroups.length-1));
     const marker = state.energy ? `<div style="left:${currentLeft}px" class="absolute bottom-1 top-1 z-10 -translate-x-1/2 border-l-2 border-dashed border-rose-400"><span class="absolute left-1/2 top-1 -translate-x-1/2 rounded-full bg-rose-500 px-2 py-0.5 text-[8px] font-black text-white whitespace-nowrap">你在这里 ${sleepSplitFmtNumber(state.energy)}</span></div>` : '';
     box.innerHTML = `<div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div><div class="text-sm font-black text-slate-900">x+y 最低能量数轴</div><div class="text-[9px] font-bold text-slate-400">横坐标按能量节点排列；相同能量的拆法上下对齐，不再人为分先后。</div></div><div class="flex items-center gap-2 text-[8px] font-black"><span class="text-emerald-600">● 已达到</span><span class="text-slate-400">● 未达到</span></div></div><div class="sleep-split-axis-scroll overflow-x-auto rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white pb-1"><div style="width:${width}px" class="relative h-40"><div class="absolute left-8 right-8 top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-300 via-blue-300 to-indigo-400"></div>${marker}${nodes}<span class="absolute bottom-1 left-3 text-[7px] font-bold text-slate-300">低能量</span><span class="absolute bottom-1 right-3 text-[7px] font-bold text-slate-300">高能量 · ${sleepSplitFmtNumber(maxEnergy)}</span></div></div>`;
+    // 相同最低能量通过上下对齐体现，节点文字不再追加容易误解的等号。
+    box.querySelectorAll('[data-sleep-split-target] span:first-child').forEach(node=>{node.textContent=node.textContent.replace(/\s*[＝=]\s*$/,'');});
 }
 function sleepSplitRenderDetail(state, targets) {
     const box=document.getElementById('sleep-split-target-detail'); if(!box) return;
@@ -28446,6 +28509,27 @@ function renderSleepSplitPlanner() {
     sleepSplitRenderCurrent(state,targets); sleepSplitRenderAxis(state,targets); sleepSplitRenderDetail(state,targets);
     sleepSplitRenderLocatorStatus(locator);
 }
+function sleepSplitUpdateSlider(value) {
+    const state=sleepSplitReadInputs();
+    const slider=document.getElementById('sleep-split-score-slider'),allowedMin=Math.max(1,Number(slider?.dataset.allowedMin)||1),allowedMax=Math.min(99,Number(slider?.dataset.allowedMax)||99);
+    sleepSplitFirstScore=Math.max(allowedMin,Math.min(allowedMax,Math.round(Number(value)||50)));
+    if(slider&&Number(slider.value)!==sleepSplitFirstScore)slider.value=String(sleepSplitFirstScore);
+    if(!state.energy)return;
+    const current=sleepSplitOutcomeAtScore(state.energy,state.bonus,state.map.starts,sleepSplitFirstScore),set=(id,text)=>{const node=document.getElementById(id);if(node)node.textContent=text;};
+    set('sleep-split-slider-result',current.key);set('sleep-split-slider-total',`共${current.total}只`);
+    set('sleep-split-slider-first-count',current.first);set('sleep-split-slider-second-count',current.second);
+    set('sleep-split-slider-first-score',current.firstScore);set('sleep-split-slider-second-score',current.secondScore);
+    set('sleep-split-slider-first-time',`约${sleepSplitDuration(current.firstScore)}`);set('sleep-split-slider-second-time',`约${sleepSplitDuration(current.secondScore)}`);
+    if(slider){slider.style.background=sleepSplitSliderBackground(current.firstScore,allowedMin,allowedMax);slider.setAttribute('aria-valuetext',`一觉${current.firstScore}分${sleepSplitDuration(current.firstScore)}，二觉${current.secondScore}分${sleepSplitDuration(current.secondScore)}，遇见${current.first}加${current.second}只`);}
+}
+function sleepSplitLockOutcome(key) {
+    const state=sleepSplitReadInputs();if(!state.energy)return;
+    const row=sleepSplitCurrentOutcomes(state.energy,state.bonus,state.map.starts).find(item=>item.key===key);if(!row)return;
+    sleepSplitLockedOutcome=row.key;sleepSplitSelectedTarget=row.key;sleepSplitLocatorMode='manual';
+    const preferred=Math.max(50,Math.round((row.minScore+row.maxScore)/2));sleepSplitFirstScore=Math.max(row.minScore,Math.min(row.maxScore,preferred));
+    renderSleepSplitPlanner();
+}
+function sleepSplitUnlockOutcome(){sleepSplitLockedOutcome='';renderSleepSplitPlanner();}
 function sleepSplitSelectTarget(key) { sleepSplitLocatorMode='manual'; sleepSplitSelectedTarget=key; renderSleepSplitPlanner(); sleepSplitScrollToSelected(); }
 function closeSleepSplitPlannerModal() { document.getElementById('sleep-split-planner-modal')?.remove(); }
 function openSleepSplitPlannerModal() {
