@@ -1645,7 +1645,7 @@ function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
-        !!(log && (log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state'));
+        !!(log && (log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
 function isBallPlannerEnabled() {
@@ -28273,6 +28273,19 @@ const SLEEP_SPLIT_SCORE_LINES = {
     greengrass_ex: { label:'萌绿之岛 EX', starts:[0,6010340,14339760,30491720,49915476,97371672] },
     cyan_ex: { label:'天青沙滩 EX', starts:[0,6010340,14339760,30491720,49915476,97371672] }
 };
+// 卡比兽评级门槛：普通1～5、超级1～5、高级1～5、大师1～20。
+// 评级取决于卡比兽自身能量，不受睡意之力活动倍率影响。
+const SLEEP_SPLIT_RATING_LINES = {
+    greengrass:[0,3118,7171,11693,17149,23385,31492,41314,53006,65634,79197,93540,109130,125032,156121,187832,220177,253169,286821,321146,356158,391870,428296,465451,532707,601308,742056,885619,1029700,1199506,1486800,1795052,2165541,2604280,3245795],
+    greengrass_ex:[0,41895,96358,157104,228205,309675,414995,539088,684812,839478,997610,1178280,1374658,1580857,1797364,2014314,2251791,2501141,2760321,3057187,3361630,3667816,4014149,4378519,4778794,5184989,5614239,6067795,6541407,7152862,7780648,8414117,9067058,9752517,10981171],
+    cyan:[0,4822,11090,18082,26520,36164,48700,63889,81971,101499,122474,144654,168763,195283,224455,256544,291842,330670,373381,420363,472043,528891,591424,660210,735875,819107,910662,1018462,1184155,1379432,1709820,2064310,2490372,2994922,3732664],
+    taupe:[0,6885,15835,25817,37865,51635,69534,91221,117038,144921,174869,206538,240961,278826,320478,366295,416694,472133,533116,600197,673986,755154,844439,942653,1050688,1169527,1300250,1444045,1602220,1776213,1967605,2333568,2815203,3385564,4219534],
+    snowdrop:[0,10486,24118,39323,57673,78645,105909,138940,178262,220730,266344,314580,367010,424683,488123,557907,634669,719107,811989,914159,1026546,1150172,1286161,1435749,1600296,1781298,1980400,2199412,2440325,2705329,2996833,3317487,3670206,4058197,4706403],
+    lapis:[0,12938,29756,48515,71156,97031,130668,171420,219936,272333,328610,388122,452809,522025,596086,675330,760123,850852,958702,1075709,1202596,1340143,1489190,1650645,1825483,2014758,2219603,2441243,2680993,2925574,3188730,3454577,3739033,4166848,5193272],
+    powerplant:[0,20142,46326,75531,110779,151061,203429,266875,342406,423979,511595,604246,704953,810696,921725,1038306,1160717,1289248,1431702,1582395,1741777,1910321,2088527,2276921,2476059,2686523,2908932,3143935,3442846,3744954,4086475,4451914,4909073,5472793,6674166],
+    amber:[0,26478,60899,99293,145629,198585,264456,344986,440123,541880,654607,774923,900988,1033561,1176798,1325740,1485571,1650692,1828870,2015408,2215366,2427642,2655957,2904897,3179971,3470704,3774089,4097770,4430839,4815792,5236414,5715237,6304719,7019168,8528976],
+    cyan_ex:[0,41895,96358,157104,228205,309675,418230,548434,698799,860468,1037612,1235275,1444644,1665846,1907355,2194292,2495790,2813784,3141221,3489192,3851643,4237798,4654094,5118523,5609891,6124856,6656321,7217801,7802011,8552888,9410567,10274627,11147108,12160074,14780152]
+};
 const SLEEP_SPLIT_BONUSES = [
     { value:1, label:'平时 ×1' }, { value:1.3, label:'活动 ×1.3' },
     { value:1.5, label:'好眠日 ×1.5' }, { value:2, label:'满月日 ×2' },
@@ -28280,6 +28293,8 @@ const SLEEP_SPLIT_BONUSES = [
     { value:4, label:'满月日 ×4' }
 ];
 let sleepSplitSelectedTarget = '8+8';
+let sleepSplitTargetMarkerVisible = true;
+let sleepSplitSelectedRatingIndex = null;
 let sleepSplitLocatorMode = 'manual';
 let sleepSplitLockedOutcome = '';
 let sleepSplitFirstScore = 50;
@@ -28288,6 +28303,20 @@ function sleepSplitEsc(value) {
     return typeof escapeHtml === 'function' ? escapeHtml(String(value ?? '')) : String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function sleepSplitFmtNumber(value) { return Math.max(0, Math.ceil(Number(value)||0)).toLocaleString('zh-CN'); }
+function sleepSplitRatingLabel(index) {
+    const i=Math.max(0,Math.min(34,Number(index)||0));
+    if(i<5)return `普通${i+1}`;
+    if(i<10)return `超级${i-4}`;
+    if(i<15)return `高级${i-9}`;
+    return `大师${i-14}`;
+}
+function sleepSplitRatingState(state) {
+    const ratings=SLEEP_SPLIT_RATING_LINES[state.island]||SLEEP_SPLIT_RATING_LINES.greengrass;
+    let index=0;
+    for(let i=1;i<ratings.length;i++)if(state.energy>=ratings[i])index=i;else break;
+    const next=index<ratings.length-1?{index:index+1,label:sleepSplitRatingLabel(index+1),energy:ratings[index+1]}:null;
+    return {ratings,index,label:sleepSplitRatingLabel(index),energy:ratings[index],next};
+}
 function sleepSplitDuration(score) {
     const minutes = Math.max(0, Math.round((Number(score)||0) * 5.1));
     const hours = Math.floor(minutes / 60), rest = minutes % 60;
@@ -28366,8 +28395,8 @@ function sleepSplitScrollToSelected() {
         document.getElementById('sleep-split-target-detail')?.scrollIntoView({behavior:'smooth',block:'nearest'});
     });
 }
-function sleepSplitLocatePair() { sleepSplitLocatorMode='pair'; renderSleepSplitPlanner(); sleepSplitScrollToSelected(); }
-function sleepSplitLocateTotal() { sleepSplitLocatorMode='total'; renderSleepSplitPlanner(); sleepSplitScrollToSelected(); }
+function sleepSplitLocatePair() { sleepSplitLocatorMode='pair'; sleepSplitTargetMarkerVisible=true; renderSleepSplitPlanner(); sleepSplitScrollToSelected(); }
+function sleepSplitLocateTotal() { sleepSplitLocatorMode='total'; sleepSplitTargetMarkerVisible=true; renderSleepSplitPlanner(); sleepSplitScrollToSelected(); }
 function sleepSplitCurrentOutcomes(energy, bonus, starts) {
     const grouped = new Map();
     for (let firstScore=1; firstScore<=99; firstScore++) {
@@ -28407,6 +28436,7 @@ function sleepSplitRenderCurrent(state, targets) {
         return;
     }
     const outcomes = sleepSplitCurrentOutcomes(state.energy,state.bonus,state.map.starts);
+    const rating=sleepSplitRatingState(state);
     const best = outcomes[0];
     const reached = targets.filter(row=>row.energy<=state.energy);
     const next = targets.find(row=>row.energy>state.energy);
@@ -28419,7 +28449,7 @@ function sleepSplitRenderCurrent(state, targets) {
     }
     const current=sleepSplitOutcomeAtScore(state.energy,state.bonus,state.map.starts,sleepSplitFirstScore),secondMin=100-sliderMax,secondMax=100-sliderMin;
     const rangeText=locked?`一觉可在 ${sleepSplitScoreRange(sliderMin,sliderMax)}（${sleepSplitDurationRange(sliderMin,sliderMax)}）之间移动；二觉同步反向变化为 ${sleepSplitScoreRange(secondMin,secondMax)}。`:'未锁定方案：可以自由调整一觉与二觉的比例，两觉分数始终合计100。';
-    box.innerHTML = `<style>.sleep-split-range{-webkit-appearance:none;appearance:none;width:100%;height:13px;border-radius:999px;outline:none;box-shadow:inset 0 1px 3px rgba(15,23,42,.22)}.sleep-split-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:30px;height:30px;border:5px solid white;border-radius:50%;background:#4f46e5;box-shadow:0 3px 10px rgba(30,41,59,.35);cursor:grab}.sleep-split-range::-moz-range-thumb{width:22px;height:22px;border:5px solid white;border-radius:50%;background:#4f46e5;box-shadow:0 3px 10px rgba(30,41,59,.35);cursor:grab}.sleep-split-range:disabled{opacity:.75}</style><div class="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-lg"><div class="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 text-white"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-blue-100">当前滑块分配结果</div><div class="mt-1 text-3xl font-black"><span id="sleep-split-slider-result">${current.key}</span> <span id="sleep-split-slider-total" class="text-sm text-blue-100">共${current.total}只</span></div><div class="mt-1 text-[9px] font-bold text-blue-100">当前能量最高总只数：${best.total}只${best.key===current.key?' · 当前已达到':' · 可尝试 '+best.key}</div></div><div class="rounded-2xl bg-white/15 px-3 py-2 text-right"><div class="text-[9px] font-bold text-blue-100">${locked?'已锁定方案':'自由调整'}</div><div class="text-xl font-black">${locked?locked.key:'1～99分'}</div>${locked?`<button type="button" onclick="sleepSplitUnlockOutcome()" class="mt-1 rounded-full bg-white/15 px-2 py-1 text-[8px] font-black hover:bg-white/25">取消锁定</button>`:''}</div></div><div class="mt-4 grid grid-cols-2 gap-3"><div class="rounded-xl bg-white/12 p-3"><div class="text-[9px] font-black text-blue-100">一觉 · <span id="sleep-split-slider-first-count">${current.first}</span>只</div><div class="mt-0.5 text-xl font-black"><span id="sleep-split-slider-first-score">${current.firstScore}</span>分</div><div id="sleep-split-slider-first-time" class="text-[10px] font-bold text-blue-100">约${sleepSplitDuration(current.firstScore)}</div></div><div class="rounded-xl bg-white/12 p-3 text-right"><div class="text-[9px] font-black text-blue-100">二觉 · <span id="sleep-split-slider-second-count">${current.second}</span>只</div><div class="mt-0.5 text-xl font-black"><span id="sleep-split-slider-second-score">${current.secondScore}</span>分</div><div id="sleep-split-slider-second-time" class="text-[10px] font-bold text-blue-100">约${sleepSplitDuration(current.secondScore)}</div></div></div><div class="mt-4 px-1"><input id="sleep-split-score-slider" type="range" min="${sliderMin}" max="${sliderMax}" value="${current.firstScore}" ${sliderMin===sliderMax?'disabled':''} oninput="sleepSplitUpdateSlider(this.value)" class="sleep-split-range" style="background:linear-gradient(90deg,#60a5fa 0%,#60a5fa ${current.firstScore}%,#c4b5fd ${current.firstScore}%,#c4b5fd 100%)" aria-label="调整一觉分数，二觉使用剩余分数"><div class="mt-2 flex justify-between text-[8px] font-black text-blue-100"><span>← 一觉占比</span><span>二觉占比 →</span></div></div><div class="mt-3 rounded-xl bg-white/10 px-3 py-2 text-[9px] font-bold leading-relaxed text-blue-100">${rangeText}</div></div><div class="p-3"><div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div class="text-[10px] font-black text-slate-600">锁定一种捕捉只数组合</div><div class="text-[8px] font-bold text-slate-400">锁定后滑块只能在维持该组合的区间内移动</div></div><div class="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">${outcomes.map((row,index)=>`<button type="button" onclick="sleepSplitLockOutcome('${row.key}')" class="rounded-xl border ${row.key===sleepSplitLockedOutcome?'border-indigo-600 bg-indigo-600 text-white shadow-md':index===0?'border-blue-400 bg-blue-50 text-blue-800':'border-slate-200 bg-white text-slate-600'} px-2.5 py-1.5 text-[10px] font-black">${row.key}<span class="ml-1 opacity-70">一觉${row.minScore}${row.maxScore!==row.minScore?`～${row.maxScore}`:''}分</span></button>`).join('')}</div><div class="mt-2 flex items-center justify-between gap-2 text-[8px] font-bold text-slate-400"><span>反查最低能量仍使用下方数轴。</span><span>已跨过 ${reached.length}/${targets.length} 个门槛${next?` · 下一节点差${sleepSplitFmtNumber(next.energy-state.energy)}`:''}</span></div></div></div>`;
+    box.innerHTML = `<style>.sleep-split-range{-webkit-appearance:none;appearance:none;width:100%;height:13px;border-radius:999px;outline:none;box-shadow:inset 0 1px 3px rgba(15,23,42,.22)}.sleep-split-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:30px;height:30px;border:5px solid white;border-radius:50%;background:#4f46e5;box-shadow:0 3px 10px rgba(30,41,59,.35);cursor:grab}.sleep-split-range::-moz-range-thumb{width:22px;height:22px;border:5px solid white;border-radius:50%;background:#4f46e5;box-shadow:0 3px 10px rgba(30,41,59,.35);cursor:grab}.sleep-split-range:disabled{opacity:.75}</style><div class="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-lg"><div class="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 text-white"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-[10px] font-black text-blue-100">当前滑块分配结果</div><div class="mt-1 text-3xl font-black"><span id="sleep-split-slider-result">${current.key}</span> <span id="sleep-split-slider-total" class="text-sm text-blue-100">共${current.total}只</span></div><div class="mt-1 text-[9px] font-bold text-blue-100">当前能量最高总只数：${best.total}只${best.key===current.key?' · 当前已达到':' · 可尝试 '+best.key}</div></div><div class="space-y-1.5 text-right"><div class="rounded-2xl bg-white/15 px-3 py-2"><div class="text-[9px] font-bold text-blue-100">${locked?'已锁定方案':'自由调整'}</div><div class="text-xl font-black">${locked?locked.key:'1～99分'}</div>${locked?`<button type="button" onclick="sleepSplitUnlockOutcome()" class="mt-1 rounded-full bg-white/15 px-2 py-1 text-[8px] font-black hover:bg-white/25">取消锁定</button>`:''}</div><div class="px-1 text-[8px] font-black text-blue-100"><span class="text-white">${rating.label}</span>${rating.next?` · 距${rating.next.label}还差 ${sleepSplitFmtNumber(rating.next.energy-state.energy)}`:' · 已达最高评级'}</div></div></div><div class="mt-4 grid grid-cols-2 gap-3"><div class="rounded-xl bg-white/12 p-3"><div class="text-[9px] font-black text-blue-100">一觉 · <span id="sleep-split-slider-first-count">${current.first}</span>只</div><div class="mt-0.5 text-xl font-black"><span id="sleep-split-slider-first-score">${current.firstScore}</span>分</div><div id="sleep-split-slider-first-time" class="text-[10px] font-bold text-blue-100">约${sleepSplitDuration(current.firstScore)}</div></div><div class="rounded-xl bg-white/12 p-3 text-right"><div class="text-[9px] font-black text-blue-100">二觉 · <span id="sleep-split-slider-second-count">${current.second}</span>只</div><div class="mt-0.5 text-xl font-black"><span id="sleep-split-slider-second-score">${current.secondScore}</span>分</div><div id="sleep-split-slider-second-time" class="text-[10px] font-bold text-blue-100">约${sleepSplitDuration(current.secondScore)}</div></div></div><div class="mt-4 px-1"><input id="sleep-split-score-slider" type="range" min="${sliderMin}" max="${sliderMax}" value="${current.firstScore}" ${sliderMin===sliderMax?'disabled':''} oninput="sleepSplitUpdateSlider(this.value)" class="sleep-split-range" style="background:linear-gradient(90deg,#60a5fa 0%,#60a5fa ${current.firstScore}%,#c4b5fd ${current.firstScore}%,#c4b5fd 100%)" aria-label="调整一觉分数，二觉使用剩余分数"><div class="mt-2 flex justify-between text-[8px] font-black text-blue-100"><span>← 一觉占比</span><span>二觉占比 →</span></div></div><div class="mt-3 rounded-xl bg-white/10 px-3 py-2 text-[9px] font-bold leading-relaxed text-blue-100">${rangeText}</div></div><div class="p-3"><div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div class="text-[10px] font-black text-slate-600">锁定一种捕捉只数组合</div><div class="text-[8px] font-bold text-slate-400">锁定后滑块只能在维持该组合的区间内移动</div></div><div class="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">${outcomes.map((row,index)=>`<button type="button" onclick="sleepSplitLockOutcome('${row.key}')" class="rounded-xl border ${row.key===sleepSplitLockedOutcome?'border-indigo-600 bg-indigo-600 text-white shadow-md':index===0?'border-blue-400 bg-blue-50 text-blue-800':'border-slate-200 bg-white text-slate-600'} px-2.5 py-1.5 text-[10px] font-black">${row.key}<span class="ml-1 opacity-70">一觉${row.minScore}${row.maxScore!==row.minScore?`～${row.maxScore}`:''}分</span></button>`).join('')}</div><div class="mt-2 flex items-center justify-between gap-2 text-[8px] font-bold text-slate-400"><span>反查最低能量仍使用下方数轴。</span><span>已跨过 ${reached.length}/${targets.length} 个门槛${next?` · 下一节点差${sleepSplitFmtNumber(next.energy-state.energy)}`:''}</span></div></div></div>`;
     // 常用方向优先展示：通常一觉不短于二觉；反向组合仍完整保留在折叠区。
     const choiceButtons=[...box.querySelectorAll('button[onclick^="sleepSplitLockOutcome"]')];
     const choiceHost=choiceButtons[0]?.parentElement;
@@ -28466,29 +28496,57 @@ function sleepSplitRenderCurrent(state, targets) {
 function sleepSplitRenderAxis(state, targets) {
     const box = document.getElementById('sleep-split-axis');
     if (!box) return;
-    if (!targets.some(row=>row.key===sleepSplitSelectedTarget)) sleepSplitSelectedTarget = targets[targets.length-1]?.key || '8+8';
+    if (!targets.some(row=>row.key===sleepSplitSelectedTarget)) { sleepSplitSelectedTarget = targets[targets.length-1]?.key || '8+8'; sleepSplitTargetMarkerVisible=true; }
     const energyGroups=[];
     targets.forEach(row=>{
         const group=energyGroups[energyGroups.length-1];
         if(group&&group.energy===row.energy)group.rows.push(row);else energyGroups.push({energy:row.energy,rows:[row]});
     });
     energyGroups.forEach(group=>group.rows.sort((a,b)=>b.first-a.first||b.second-a.second));
-    const width = Math.max(980,energyGroups.length*64);
-    const maxEnergy = Math.max(1,...targets.map(row=>row.energy),state.energy||0);
+    const ratings=SLEEP_SPLIT_RATING_LINES[state.island]||SLEEP_SPLIT_RATING_LINES.greengrass;
+    // 真实能量并不是均匀增长的，前半段节点会天然挤在一起。
+    // 增加横向空间并用多轨避让，既保留能量位置关系，也保证每个标签可读。
+    const width = Math.max(2600,energyGroups.length*130);
+    const maxEnergy = Math.max(1,...targets.map(row=>row.energy),...ratings,state.energy||0);
+    // 平方根尺度兼顾前期密集门槛与大师后期的大数值，同时让同能量节点严格对齐。
+    const axisLeft=energy=>34+(width-68)*Math.sqrt(Math.max(0,Number(energy)||0)/maxEnergy);
+    const semanticLaneLast={top:{},bottom:{}};
+    const chooseSemanticVertical=(side,left,semanticBand)=>{
+        // 不同总只数使用互不跨越的固定带；同一带只做12px的小幅错层。
+        const lanes=semanticLaneLast[side][semanticBand]||(semanticLaneLast[side][semanticBand]=[-Infinity,-Infinity]);
+        let subLane=left-lanes[0]>=72?0:left-lanes[1]>=72?1:(lanes[0]<=lanes[1]?0:1);
+        lanes[subLane]=left;
+        return (side==='top'?8:245)+semanticBand*30+subLane*12;
+    };
     const nodes = energyGroups.map((group,groupIndex) => {
-        const left = 34 + groupIndex * ((width-68)/Math.max(1,energyGroups.length-1));
+        const left = axisLeft(group.energy);
         return group.rows.map((row,memberIndex)=>{
-            const reached = state.energy && row.energy<=state.energy,selected = row.key===sleepSplitSelectedTarget;
-            const above=group.rows.length>1?memberIndex%2===0:groupIndex%2===0;
-            const vertical=group.rows.length>2?8+Math.floor(memberIndex/2)*32:18;
+            const reached = state.energy && row.energy<=state.energy,selected = sleepSplitTargetMarkerVisible&&row.key===sleepSplitSelectedTarget;
+            // 一觉不少于二觉是更常见的选择，固定放在上半区；反向方案放在下半区。
+            // 同一半区按总只数分显著层级，避免6+6被7+4、7+7被8+3压在上方。
+            const above=row.first>=row.second,total=row.first+row.second;
+            const semanticBand=total>=16?0:total===15?1:total===14?2:total===13?3:total===12?4:5;
+            const side=above?'top':'bottom',vertical=chooseSemanticVertical(side,left,semanticBand);
             const equalTitle=group.rows.length>1?`与${group.rows.filter(item=>item!==row).map(item=>item.key).join('、')}能量相同`:'';
-            return `<button type="button" data-sleep-split-target="${row.key}" onclick="sleepSplitSelectTarget('${row.key}')" title="${equalTitle}" style="left:${left}px;${above?`top:${vertical}px`:`bottom:${vertical}px`}" class="absolute -translate-x-1/2 group text-center"><span class="block rounded-lg border ${selected?'border-indigo-600 bg-indigo-600 text-white shadow-md':reached?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-slate-200 bg-white text-slate-600'} px-1.5 py-1 text-[9px] font-black whitespace-nowrap">${row.key}${group.rows.length>1?' ＝':''}</span><span class="mt-0.5 block text-[7px] font-bold ${reached?'text-emerald-600':'text-slate-400'} whitespace-nowrap">${sleepSplitFmtNumber(row.energy)}</span><span class="absolute left-1/2 ${above?'top-full':'bottom-full'} h-5 w-px -translate-x-1/2 ${selected?'bg-indigo-500':reached?'bg-emerald-300':'bg-slate-200'}"></span></button>`;
+            return `<button type="button" data-sleep-split-target="${row.key}" onclick="sleepSplitSelectTarget('${row.key}')" title="${equalTitle}" style="left:${left}px;top:${vertical}px" class="absolute -translate-x-1/2 group text-center"><span class="block rounded-lg border ${selected?'border-indigo-600 bg-indigo-600 text-white shadow-md':reached?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-slate-200 bg-white text-slate-600'} px-1.5 py-1 text-[9px] font-black whitespace-nowrap">${row.key}${group.rows.length>1?' ＝':''}</span><span class="mt-0.5 block text-[7px] font-bold ${reached?'text-emerald-600':'text-slate-400'} whitespace-nowrap">${sleepSplitFmtNumber(row.energy)}</span><span class="absolute left-1/2 ${above?'top-full':'bottom-full'} h-4 w-px -translate-x-1/2 ${selected?'bg-indigo-500':reached?'bg-emerald-300':'bg-slate-200'}"></span></button>`;
         }).join('');
     }).join('');
-    const currentRank = state.energy ? energyGroups.filter(group=>group.energy<=state.energy).length : 0;
-    const currentLeft = 34 + Math.min(energyGroups.length-1,Math.max(0,currentRank-.5))*((width-68)/Math.max(1,energyGroups.length-1));
-    const marker = state.energy ? `<div style="left:${currentLeft}px" class="absolute bottom-1 top-1 z-10 -translate-x-1/2 border-l-2 border-dashed border-rose-400"><span class="absolute left-1/2 top-1 -translate-x-1/2 rounded-full bg-rose-500 px-2 py-0.5 text-[8px] font-black text-white whitespace-nowrap">你在这里 ${sleepSplitFmtNumber(state.energy)}</span></div>` : '';
-    box.innerHTML = `<div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div><div class="text-sm font-black text-slate-900">x+y 最低能量数轴</div><div class="text-[9px] font-bold text-slate-400">横坐标按能量节点排列；相同能量的拆法上下对齐，不再人为分先后。</div></div><div class="flex items-center gap-2 text-[8px] font-black"><span class="text-emerald-600">● 已达到</span><span class="text-slate-400">● 未达到</span></div></div><div class="sleep-split-axis-scroll overflow-x-auto rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white pb-1"><div style="width:${width}px" class="relative h-40"><div class="absolute left-8 right-8 top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-300 via-blue-300 to-indigo-400"></div>${marker}${nodes}<span class="absolute bottom-1 left-3 text-[7px] font-bold text-slate-300">低能量</span><span class="absolute bottom-1 right-3 text-[7px] font-bold text-slate-300">高能量 · ${sleepSplitFmtNumber(maxEnergy)}</span></div></div>`;
+    const currentLeft = axisLeft(state.energy||0);
+    const marker = state.energy ? `<div style="left:${currentLeft}px" class="absolute bottom-1 top-1 z-10 -translate-x-1/2 border-l-2 border-dashed border-rose-400"><span class="absolute left-1/2 top-[211px] -translate-x-1/2 -translate-y-full rounded-full bg-rose-500 px-2 py-0.5 text-[8px] font-black text-white whitespace-nowrap">你在这里 ${sleepSplitFmtNumber(state.energy)}</span></div>` : '';
+    const selectedRow=targets.find(row=>row.key===sleepSplitSelectedTarget),selectedLeft=selectedRow?axisLeft(selectedRow.energy):0;
+    const selectedMarker=selectedRow&&sleepSplitTargetMarkerVisible?`<div data-sleep-split-target-marker style="left:${selectedLeft}px" class="pointer-events-none absolute bottom-9 top-0 z-[8] -translate-x-1/2 border-l-2 border-indigo-500/70"><span class="absolute left-1/2 top-[227px] -translate-x-1/2 rounded-full bg-indigo-600 px-2 py-0.5 text-[8px] font-black text-white shadow-sm whitespace-nowrap">${selectedRow.key} · ${sleepSplitFmtNumber(selectedRow.energy)}</span></div>`:'';
+    const selectedRatingIndex=Number.isInteger(sleepSplitSelectedRatingIndex)&&ratings[sleepSplitSelectedRatingIndex]!=null?sleepSplitSelectedRatingIndex:null;
+    const selectedRatingEnergy=selectedRatingIndex===null?null:ratings[selectedRatingIndex],selectedRatingLabel=selectedRatingIndex===null?'':sleepSplitRatingLabel(selectedRatingIndex);
+    const selectedRatingMarker=selectedRatingIndex===null?'':`<div data-sleep-split-rating-marker style="left:${axisLeft(selectedRatingEnergy)}px" class="pointer-events-none absolute bottom-6 top-0 z-[9] -translate-x-1/2 border-l-2 border-amber-500/90"><span class="absolute left-2 top-[201px] -translate-y-full rounded-full bg-amber-500 px-2 py-0.5 text-[8px] font-black text-white shadow-sm whitespace-nowrap">${selectedRatingLabel} · ${sleepSplitFmtNumber(selectedRatingEnergy)}</span></div>`;
+    // 评级轨道显示完整层级：各大段第1级写全名，其余显示级数；大师3额外标亮为低保。
+    const ratingNodes=ratings.map((energy,index)=>{
+        const reached=state.energy&&state.energy>=energy,current=state.energy&&index===sleepSplitRatingState(state).index,selected=index===selectedRatingIndex,label=sleepSplitRatingLabel(index);
+        const sectionStart=index===0||index===5||index===10||index===15,lowGuarantee=index===17,masterEnd=index===34;
+        const shortLabel=sectionStart?label:index<5?String(index+1):index<10?String(index-4):index<15?String(index-9):String(index-14);
+        const badgeClass=selected?'border-amber-500 bg-amber-500 px-2 text-white shadow-md ring-2 ring-amber-200':lowGuarantee?'border-amber-400 bg-amber-100 px-2 text-amber-800 shadow-sm':sectionStart?'border-slate-700 bg-slate-700 px-2 text-white':current?'border-amber-400 bg-amber-50 text-amber-700 ring-2 ring-amber-200':reached?'border-emerald-300 bg-emerald-50 text-emerald-700':masterEnd?'border-indigo-300 bg-indigo-50 text-indigo-600':'border-slate-200 bg-white text-slate-500';
+        return `<button type="button" data-sleep-split-rating="${index}" onclick="sleepSplitSelectRating(${index})" title="${label} · ${sleepSplitFmtNumber(energy)}能量${lowGuarantee?'（低保）':''}" aria-label="${label}，需要${sleepSplitFmtNumber(energy)}能量${lowGuarantee?'，低保节点':''}" aria-pressed="${selected?'true':'false'}" style="left:${axisLeft(energy)}px" class="group absolute bottom-[7px] z-20 -translate-x-1/2 outline-none"><span class="mx-auto block h-2 w-px ${selected?'bg-amber-500':current?'bg-amber-500':reached?'bg-emerald-400':'bg-slate-300'}"></span><span class="block whitespace-nowrap rounded-md border py-0.5 text-[7px] font-black ${badgeClass}">${lowGuarantee?'大师3·低保':shortLabel}</span><span class="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-800 px-1.5 py-1 text-[7px] font-black text-white shadow-lg group-hover:block group-focus:block">${label} · ${sleepSplitFmtNumber(energy)}</span></button>`;
+    }).join('');
+    box.innerHTML = `<div class="mb-2 flex flex-wrap items-center justify-between gap-2"><div><div class="text-sm font-black text-slate-900">x+y 最低能量数轴</div><div class="text-[9px] font-bold text-slate-400">上方是一觉≥二觉的常用方向，下方是反向方向；总只数越高越靠上，拆觉与评级节点均可点按显示对齐线。</div></div><div class="flex items-center gap-2 text-[8px] font-black"><span class="text-emerald-600">● 已达到</span><span class="text-slate-400">● 未达到</span><span class="text-indigo-600">│ 拆觉目标</span><span class="text-amber-600">│ 评级目标</span></div></div><div class="sleep-split-axis-scroll overflow-x-auto rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white pb-1"><div style="width:${width}px;height:480px" class="relative"><div class="absolute left-8 right-8 top-[220px] h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-300 via-blue-300 to-indigo-400"></div>${marker}${selectedMarker}${selectedRatingMarker}${nodes}<div class="absolute bottom-[27px] left-8 right-8 h-px bg-slate-200"></div>${ratingNodes}</div></div>`;
     // 相同最低能量通过上下对齐体现，节点文字不再追加容易误解的等号。
     box.querySelectorAll('[data-sleep-split-target] span:first-child').forEach(node=>{node.textContent=node.textContent.replace(/\s*[＝=]\s*$/,'');});
 }
@@ -28525,12 +28583,27 @@ function sleepSplitUpdateSlider(value) {
 function sleepSplitLockOutcome(key) {
     const state=sleepSplitReadInputs();if(!state.energy)return;
     const row=sleepSplitCurrentOutcomes(state.energy,state.bonus,state.map.starts).find(item=>item.key===key);if(!row)return;
-    sleepSplitLockedOutcome=row.key;sleepSplitSelectedTarget=row.key;sleepSplitLocatorMode='manual';
+    sleepSplitLockedOutcome=row.key;sleepSplitSelectedTarget=row.key;sleepSplitTargetMarkerVisible=true;sleepSplitLocatorMode='manual';
     const preferred=Math.max(50,Math.round((row.minScore+row.maxScore)/2));sleepSplitFirstScore=Math.max(row.minScore,Math.min(row.maxScore,preferred));
     renderSleepSplitPlanner();
 }
 function sleepSplitUnlockOutcome(){sleepSplitLockedOutcome='';renderSleepSplitPlanner();}
-function sleepSplitSelectTarget(key) { sleepSplitLocatorMode='manual'; sleepSplitSelectedTarget=key; renderSleepSplitPlanner(); sleepSplitScrollToSelected(); }
+function sleepSplitKeepAxisScroll(renderAction) {
+    const before=document.querySelector('.sleep-split-axis-scroll'),left=before?.scrollLeft||0;
+    renderAction();
+    requestAnimationFrame(()=>{const after=document.querySelector('.sleep-split-axis-scroll');if(after)after.scrollLeft=left;});
+}
+function sleepSplitSelectTarget(key) {
+    sleepSplitLocatorMode='manual';
+    if (sleepSplitSelectedTarget===key&&sleepSplitTargetMarkerVisible) sleepSplitTargetMarkerVisible=false;
+    else { sleepSplitSelectedTarget=key; sleepSplitTargetMarkerVisible=true; }
+    sleepSplitKeepAxisScroll(()=>renderSleepSplitPlanner());
+}
+function sleepSplitSelectRating(index) {
+    const next=Number(index);
+    sleepSplitSelectedRatingIndex=Number.isInteger(next)&&sleepSplitSelectedRatingIndex!==next?next:null;
+    sleepSplitKeepAxisScroll(()=>renderSleepSplitPlanner());
+}
 function closeSleepSplitPlannerModal() { document.getElementById('sleep-split-planner-modal')?.remove(); }
 function openSleepSplitPlannerModal() {
     closeSleepSplitPlannerModal();
@@ -28552,8 +28625,9 @@ function openSleepSplitPlannerModal() {
     const STATE_ID = 'global_tool_launcher_state_v1';
     const STATE_TYPE = 'tool_launcher_state';
     const POSITION_KEY = 'global_tool_launcher_position_v1';
-    const DEFAULT_SHORTCUTS = ['sleepResearch', 'dailyReward', 'history', 'graduation', 'liveCooking', 'ballPlanner', 'sleepType'];
+    const DEFAULT_SHORTCUTS = ['migration', 'sleepResearch', 'dailyReward', 'history', 'graduation', 'liveCooking', 'ballPlanner', 'sleepType'];
     const GROUPS = [
+        { id: 'data', label: '账号与数据', icon: 'fa-cloud-arrow-up' },
         { id: 'luck', label: '运气与捕捉', icon: 'fa-clover' },
         { id: 'pokemon', label: '宝可梦与培养', icon: 'fa-paw' },
         { id: 'cooking', label: '料理工具', icon: 'fa-utensils' },
@@ -28561,6 +28635,7 @@ function openSleepSplitPlannerModal() {
         { id: 'legacy', label: '旧版与实验功能', icon: 'fa-box-archive' }
     ];
     const TOOLS = [
+        { id: 'migration', group: 'data', label: '域名迁移与备份', desc: '迁移体检、云端校验和完整备份', icon: 'fa-shield-halved', tone: 'bg-emerald-50 text-emerald-800', action: 'openSiteMigrationCenter' },
         { id: 'luckHome', group: 'luck', label: '运气评分首页', desc: '回到评分与大仓顶部', icon: 'fa-clover', tone: 'bg-emerald-50 text-emerald-700', custom: 'home' },
         { id: 'sleepResearch', group: 'luck', label: '完整睡眠研究', desc: '创建一觉并连续录入', icon: 'fa-bed', tone: 'bg-indigo-50 text-indigo-700', action: 'openSleepResearchModal' },
         { id: 'dailyCheckIn', group: 'luck', label: '每日捕捉打卡', desc: '快速录入一只宝可梦', icon: 'fa-calendar-check', tone: 'bg-violet-50 text-violet-700', action: 'openDailyCheckInModal' },
@@ -28817,6 +28892,499 @@ function openSleepSplitPlannerModal() {
     });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', createBall, { once:true });
     else createBall();
+})();
+</script>
+<script>
+/* =========================================================
+ * 域名迁移与数据保险中心 v1
+ * 原则：不删除旧域名数据；先备份、再同步、再从云端读回校验。
+ * ========================================================= */
+(function () {
+    const MIGRATION_TYPE = 'site_migration_bundle_v1';
+    const MIGRATION_VERSION = 1;
+    const LOCAL_MARKER_KEY = 'sleep_site_migration_marker_v1';
+    const CACHE_KEYS = new Set(['poke_sleep_global_master_cooking_v1']);
+    let lastReport = null;
+    let busy = false;
+
+    function esc(value) {
+        if (typeof escapeHtml === 'function') return escapeHtml(String(value ?? ''));
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+
+    function migrationRecordId(userId = currentCloudUser?.id) {
+        return `site_migration_bundle_v1_${String(userId || 'guest')}`;
+    }
+
+    function isOwnedStorageKey(key) {
+        const value = String(key || '');
+        return value.startsWith('sleep_') || value.startsWith('poke_sleep_') ||
+            value.startsWith('tool_launcher_state_') ||
+            ['pokemon_sprite_theme_v1', 'graduation_dex_view_mode_v1', 'global_tool_launcher_position_v1'].includes(value);
+    }
+
+    function isCurrentAccountStorageKey(key) {
+        const value = String(key || '');
+        if (!isOwnedStorageKey(value)) return false;
+        const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+        const accountIds = value.match(uuidPattern) || [];
+        if (accountIds.length) return !!currentCloudUser && accountIds.some(id => id.toLowerCase() === String(currentCloudUser.id).toLowerCase());
+        if (/(?:^|_)guest(?:_|$)/i.test(value)) return !currentCloudUser;
+        return true;
+    }
+
+    function currentCoreKeys() {
+        const keys = new Set();
+        [getHistoryStorageKey, getLocalStorageKey, getGraduationDexStorageKey, getGraduationDexDeletedStorageKey]
+            .forEach(fn => { try { keys.add(fn()); } catch (_) {} });
+        return keys;
+    }
+
+    function currentPhotoKey() {
+        try { return getSleepResearchPhotoStorageKey(); } catch (_) { return ''; }
+    }
+
+    function collectOwnedStorage() {
+        const storage = {};
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (!isCurrentAccountStorageKey(key)) continue;
+            const value = localStorage.getItem(key);
+            if (value !== null) storage[key] = value;
+        }
+        return storage;
+    }
+
+    function stableValue(value) {
+        if (Array.isArray(value)) return value.map(stableValue);
+        if (value && typeof value === 'object') {
+            return Object.keys(value).sort().reduce((result, key) => {
+                result[key] = stableValue(value[key]);
+                return result;
+            }, {});
+        }
+        return value;
+    }
+
+    function stableStringify(value) { return JSON.stringify(stableValue(value)); }
+
+    async function sha256(value) {
+        const textValue = typeof value === 'string' ? value : stableStringify(value);
+        if (window.crypto?.subtle) {
+            const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(textValue));
+            return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+        let hash = 2166136261;
+        for (let i = 0; i < textValue.length; i++) hash = Math.imul(hash ^ textValue.charCodeAt(i), 16777619);
+        return `fallback-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+    }
+
+    function countEmbeddedPhotos(storage) {
+        const raw = storage[currentPhotoKey()];
+        if (!raw) return 0;
+        return (raw.match(/data:image\//g) || []).length;
+    }
+
+    function countPhotoEntries(storage) {
+        const raw = storage[currentPhotoKey()];
+        if (!raw) return 0;
+        try {
+            const map = JSON.parse(raw) || {};
+            return Object.values(map).reduce((sum, value) => sum + (Array.isArray(value) ? value.length : (value ? 1 : 0)), 0);
+        } catch (_) { return 0; }
+    }
+
+    function visibleHistoryCount(logs) {
+        try { return getVisibleHistoryLogs(Array.isArray(logs) ? logs : []).length; }
+        catch (_) { return (Array.isArray(logs) ? logs : []).filter(item => item && !isHistorySystemLog(item)).length; }
+    }
+
+    function buildCounts(storage) {
+        const bytes = Object.entries(storage).reduce((sum, [key, value]) => sum + new Blob([key, value]).size, 0);
+        return {
+            storageKeys: Object.keys(storage).length,
+            storageBytes: bytes,
+            boxSpecies: Array.isArray(playerBox) ? playerBox.length : 0,
+            historyRecords: visibleHistoryCount(historyLogs),
+            sleepResearch: (Array.isArray(historyLogs) ? historyLogs : []).filter(item => typeof isSleepResearchLog === 'function' && isSleepResearchLog(item)).length,
+            graduationEntries: Array.isArray(graduationDex) ? graduationDex.length : 0,
+            photoEntries: countPhotoEntries(storage),
+            embeddedPhotos: countEmbeddedPhotos(storage)
+        };
+    }
+
+    function buildAuxStorage(storage) {
+        const core = currentCoreKeys();
+        const photoKey = currentPhotoKey();
+        const result = {};
+        Object.entries(storage).forEach(([key, value]) => {
+            if (core.has(key) || key === photoKey || CACHE_KEYS.has(key) || key === LOCAL_MARKER_KEY) return;
+            result[key] = value;
+        });
+        return result;
+    }
+
+    async function createBackup() {
+        const storage = collectOwnedStorage();
+        const counts = buildCounts(storage);
+        const payload = {
+            format: 'sleep-luck-tools-complete-backup',
+            version: MIGRATION_VERSION,
+            createdAt: new Date().toISOString(),
+            sourceOrigin: location.origin,
+            sourceHost: location.hostname,
+            userId: currentCloudUser?.id || null,
+            userEmail: currentCloudUser?.email || null,
+            storage,
+            counts
+        };
+        payload.checksum = await sha256({ storage: payload.storage, userId: payload.userId, version: payload.version });
+        return payload;
+    }
+
+    function downloadJson(payload, filename) {
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+
+    async function downloadCompleteBackup(label = '完整备份') {
+        const backup = await createBackup();
+        const date = new Date().toISOString().replace(/[:.]/g, '-');
+        downloadJson(backup, `宝睡工具-${label}-${location.hostname}-${date}.json`);
+        return backup;
+    }
+
+    async function createLocalAuditReport() {
+        const backup = await createBackup();
+        const serialized = JSON.stringify(backup);
+        const parsed = JSON.parse(serialized);
+        const parsedChecksum = await sha256({ storage: parsed.storage, userId: parsed.userId, version: parsed.version });
+        const localRoundTrip = parsedChecksum === backup.checksum;
+        return {
+            kind: 'local',
+            checkedAt: new Date().toISOString(),
+            sourceOrigin: location.origin,
+            counts: backup.counts,
+            localRoundTrip,
+            checksum: backup.checksum,
+            accountReady: !!currentCloudUser,
+            warnings: [
+                ...(currentCloudUser ? [] : ['尚未登录账号：可以下载备份，但不能进行跨域云端迁移。']),
+                ...(backup.counts.embeddedPhotos ? [`检测到 ${backup.counts.embeddedPhotos} 张仍以内嵌形式保存在本机的图片，务必保留完整备份文件。`] : [])
+            ],
+            ready: localRoundTrip
+        };
+    }
+
+    function migrationBundleFromLogs(logs, userId = currentCloudUser?.id) {
+        const id = migrationRecordId(userId);
+        return (Array.isArray(logs) ? logs : [])
+            .filter(item => item && item.type === MIGRATION_TYPE && String(item.id) === id)
+            .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0))[0] || null;
+    }
+
+    async function readCloudRow() {
+        if (!currentCloudUser) throw new Error('请先登录账号');
+        const { data, error } = await supabaseClient
+            .from('player_boxes')
+            .select('box_data,history_logs,graduation_dex,updated_at')
+            .eq('user_id', currentCloudUser.id)
+            .maybeSingle();
+        if (error) throw error;
+        return data || { box_data: [], history_logs: [], graduation_dex: [] };
+    }
+
+    async function uploadAndVerifyMigration() {
+        if (!currentCloudUser) throw new Error('请先登录账号，再上传迁移包');
+        const backup = await createBackup();
+        const auxStorage = buildAuxStorage(backup.storage);
+        const auxChecksum = await sha256(auxStorage);
+        const record = {
+            id: migrationRecordId(),
+            type: MIGRATION_TYPE,
+            version: MIGRATION_VERSION,
+            updatedAt: new Date().toISOString(),
+            sourceOrigin: location.origin,
+            sourceHost: location.hostname,
+            userId: currentCloudUser.id,
+            payload: {
+                auxiliaryStorage: auxStorage,
+                auxiliaryChecksum: auxChecksum,
+                backupChecksum: backup.checksum,
+                counts: backup.counts
+            }
+        };
+
+        historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(item => !(item && item.type === MIGRATION_TYPE && String(item.id) === record.id));
+        historyLogs.push(record);
+        saveHistoryToLocal({ syncCloud: false });
+
+        if (typeof saveCaptureStateBundleToCloudV42 === 'function') await saveCaptureStateBundleToCloudV42();
+        else {
+            await saveBoxToCloudNow();
+            await performHistoryCloudSync(currentCloudUser.id);
+            await saveGraduationDexToCloudNow();
+        }
+
+        const cloud = await readCloudRow();
+        const cloudBundle = migrationBundleFromLogs(cloud.history_logs || []);
+        const checks = {
+            box: await sha256(cloud.box_data || []) === await sha256(playerBox || []),
+            history: await sha256(cloud.history_logs || []) === await sha256(historyLogs || []),
+            graduation: await sha256(cloud.graduation_dex || []) === await sha256(typeof getGraduationDexCloudPayload === 'function' ? getGraduationDexCloudPayload() : (graduationDex || [])),
+            auxiliary: !!cloudBundle && cloudBundle.payload?.auxiliaryChecksum === auxChecksum &&
+                await sha256(cloudBundle.payload?.auxiliaryStorage || {}) === auxChecksum
+        };
+        const ready = Object.values(checks).every(Boolean);
+        const report = {
+            kind: 'cloud',
+            checkedAt: new Date().toISOString(),
+            sourceOrigin: location.origin,
+            counts: backup.counts,
+            checks,
+            checksum: backup.checksum,
+            cloudBundleAt: cloudBundle?.updatedAt || null,
+            cloudUpdatedAt: cloud.updated_at || null,
+            ready,
+            warnings: backup.counts.embeddedPhotos ? [`${backup.counts.embeddedPhotos} 张内嵌本机图片依靠完整备份文件兜底；其余主数据已进行云端读回校验。`] : []
+        };
+        localStorage.setItem(LOCAL_MARKER_KEY, JSON.stringify({
+            sourceOrigin: location.origin,
+            checkedAt: report.checkedAt,
+            checksum: report.checksum,
+            ready
+        }));
+        return report;
+    }
+
+    function restoreAuxiliaryStorage(storage) {
+        const core = currentCoreKeys();
+        const photoKey = currentPhotoKey();
+        Object.entries(storage || {}).forEach(([key, value]) => {
+            if (!isOwnedStorageKey(key) || core.has(key) || key === photoKey || CACHE_KEYS.has(key) || key === LOCAL_MARKER_KEY) return;
+            localStorage.setItem(key, String(value));
+        });
+    }
+
+    async function restoreCloudMigrationBundle() {
+        if (!currentCloudUser) throw new Error('请先登录迁移时使用的同一账号');
+        const cloud = await readCloudRow();
+        const bundle = migrationBundleFromLogs(cloud.history_logs || []);
+        if (!bundle?.payload?.auxiliaryStorage) throw new Error('账号中没有找到旧域名迁移包，请先在旧域名上传并验证');
+        if (bundle.userId && bundle.userId !== currentCloudUser.id) throw new Error('迁移包与当前账号不一致，已停止恢复');
+
+        await downloadCompleteBackup('新域名恢复前安全备份');
+        const expected = bundle.payload.auxiliaryChecksum;
+        if (await sha256(bundle.payload.auxiliaryStorage) !== expected) throw new Error('迁移包校验码不一致，已停止恢复');
+        restoreAuxiliaryStorage(bundle.payload.auxiliaryStorage);
+        const restored = {};
+        Object.keys(bundle.payload.auxiliaryStorage).forEach(key => restored[key] = localStorage.getItem(key));
+        if (await sha256(restored) !== expected) throw new Error('写入后复核失败，当前页面数据没有被清空，请保留备份并重试');
+        localStorage.setItem(LOCAL_MARKER_KEY, JSON.stringify({
+            restoredAt: new Date().toISOString(),
+            sourceOrigin: bundle.sourceOrigin,
+            targetOrigin: location.origin,
+            checksum: expected,
+            ready: true
+        }));
+        return {
+            kind: 'restore', ready: true, checkedAt: new Date().toISOString(),
+            sourceOrigin: bundle.sourceOrigin, targetOrigin: location.origin,
+            counts: bundle.payload.counts || {}, checks: { auxiliary: true, coreLoadedFromCloud: true }, warnings: []
+        };
+    }
+
+    function mergePhotoStorage(importedRaw) {
+        const key = currentPhotoKey();
+        if (!key || !importedRaw) return;
+        let current = {}, imported = {};
+        try { current = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (_) {}
+        try { imported = JSON.parse(importedRaw) || {}; } catch (_) {}
+        const merged = Object.assign({}, imported, current);
+        localStorage.setItem(key, JSON.stringify(merged));
+    }
+
+    async function importCompleteBackup(file) {
+        if (!file) throw new Error('请选择备份文件');
+        const parsed = JSON.parse(await file.text());
+        if (parsed?.format !== 'sleep-luck-tools-complete-backup' || !parsed.storage) throw new Error('这不是本站生成的完整迁移备份');
+        if (parsed.userId && !currentCloudUser) throw new Error('这是账号备份，请先登录迁移时使用的同一账号');
+        if (parsed.userId && currentCloudUser && parsed.userId !== currentCloudUser.id) throw new Error('备份所属账号与当前登录账号不同，已停止恢复');
+        const expected = await sha256({ storage: parsed.storage, userId: parsed.userId || null, version: parsed.version });
+        if (expected !== parsed.checksum) throw new Error('备份校验失败，文件可能不完整，已停止恢复');
+
+        await downloadCompleteBackup('导入前自动备份');
+        const core = currentCoreKeys();
+        const importedHistoryKey = Array.from(core).find(key => key.includes('history'));
+        const importedBoxKey = Array.from(core).find(key => key.includes('player_box'));
+        const importedDexKey = Array.from(core).find(key => key.includes('graduation_dex') && !key.endsWith('_deleted'));
+        const importedDeletedKey = Array.from(core).find(key => key.endsWith('_deleted'));
+        let oldHistory = [], oldBox = [], oldDex = [], oldDeleted = {};
+        try { oldHistory = JSON.parse(parsed.storage[importedHistoryKey] || '[]') || []; } catch (_) {}
+        try { oldBox = JSON.parse(parsed.storage[importedBoxKey] || '[]') || []; } catch (_) {}
+        try { oldDex = JSON.parse(parsed.storage[importedDexKey] || '[]') || []; } catch (_) {}
+        try { oldDeleted = JSON.parse(parsed.storage[importedDeletedKey] || '{}') || {}; } catch (_) {}
+
+        historyLogs = typeof mergeHistoryLogs === 'function' ? mergeHistoryLogs(historyLogs || [], oldHistory) : oldHistory;
+        playerBox = typeof mergePlayerBoxForCaptureBundleV42 === 'function'
+            ? mergePlayerBoxForCaptureBundleV42(playerBox || [], oldBox, historyLogs || [], oldHistory)
+            : (oldBox.length ? oldBox : playerBox);
+        if (typeof mergeGraduationDex === 'function') {
+            const merged = mergeGraduationDex(graduationDex || [], oldDex, Object.assign({}, oldDeleted, graduationDexDeleted || {}));
+            graduationDex = merged.entries;
+            graduationDexDeleted = merged.deleted;
+        } else if (oldDex.length) graduationDex = oldDex;
+
+        localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs || []));
+        localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox || []));
+        localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex || []));
+        localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted || {}));
+        restoreAuxiliaryStorage(parsed.storage);
+        mergePhotoStorage(parsed.storage[currentPhotoKey()]);
+
+        if (currentCloudUser && typeof saveCaptureStateBundleToCloudV42 === 'function') await saveCaptureStateBundleToCloudV42();
+        return {
+            kind: 'import', ready: true, checkedAt: new Date().toISOString(),
+            sourceOrigin: parsed.sourceOrigin, targetOrigin: location.origin,
+            counts: parsed.counts || buildCounts(parsed.storage),
+            checks: { checksum: true, mergedWithoutClearing: true, cloudSaved: !currentCloudUser || true }, warnings: []
+        };
+    }
+
+    function statusPill(ok, label) {
+        return `<span class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-black ${ok ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}"><i class="fa-solid ${ok ? 'fa-check' : 'fa-xmark'}"></i>${esc(label)}</span>`;
+    }
+
+    function renderReport(report) {
+        if (!report) return `<div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs font-bold text-slate-500">尚未体检。建议先下载完整备份，再执行云端迁移演练。</div>`;
+        const counts = report.counts || {};
+        const checks = report.checks || {};
+        return `<div class="rounded-2xl border ${report.ready ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'} p-4">
+            <div class="flex items-center justify-between gap-3"><div><div class="text-sm font-black ${report.ready ? 'text-emerald-900' : 'text-amber-900'}">${report.ready ? '本次检查通过' : '仍有项目需要处理'}</div><div class="mt-0.5 text-[9px] font-bold text-slate-500">${esc(report.checkedAt ? new Date(report.checkedAt).toLocaleString('zh-CN') : '')}</div></div>${statusPill(!!report.ready, report.ready ? '安全' : '未完成')}</div>
+            <div class="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">${[
+                ['Box 种类', counts.boxSpecies], ['捕捉记录', counts.historyRecords], ['睡眠研究', counts.sleepResearch],
+                ['出货个体', counts.graduationEntries], ['照片索引', counts.photoEntries], ['本地数据键', counts.storageKeys]
+            ].map(([label, value]) => `<div class="rounded-xl bg-white p-2 text-center"><div class="text-base font-black text-slate-900">${Number(value) || 0}</div><div class="text-[8px] font-bold text-slate-400">${label}</div></div>`).join('')}</div>
+            ${Object.keys(checks).length ? `<div class="mt-3 flex flex-wrap gap-1.5">${Object.entries(checks).map(([key, ok]) => statusPill(!!ok, ({box:'Box',history:'历史库',graduation:'出货库',auxiliary:'附加设置',checksum:'文件校验',mergedWithoutClearing:'合并恢复',cloudSaved:'云端保存',coreLoadedFromCloud:'核心云端数据'}[key] || key))).join('')}</div>` : ''}
+            ${report.localRoundTrip !== undefined ? `<div class="mt-3">${statusPill(report.localRoundTrip, '本地备份往返校验')}</div>` : ''}
+            ${(report.warnings || []).map(text => `<div class="mt-2 rounded-xl border border-amber-200 bg-white px-3 py-2 text-[9px] font-bold text-amber-800"><i class="fa-solid fa-triangle-exclamation mr-1"></i>${esc(text)}</div>`).join('')}
+            <div class="mt-2 break-all text-[8px] font-mono text-slate-400">校验摘要：${esc(report.checksum || '—')}</div>
+        </div>`;
+    }
+
+    async function detectCloudBundle() {
+        if (!currentCloudUser) return null;
+        try { return migrationBundleFromLogs((await readCloudRow()).history_logs || []); }
+        catch (_) { return null; }
+    }
+
+    async function renderCenter() {
+        const modal = document.getElementById('site-migration-center');
+        if (!modal) return;
+        const bundle = await detectCloudBundle();
+        const differentOrigin = !!bundle && bundle.sourceOrigin && bundle.sourceOrigin !== location.origin;
+        let marker = null;
+        try { marker = JSON.parse(localStorage.getItem(LOCAL_MARKER_KEY) || 'null'); } catch (_) {}
+        modal.innerHTML = `<div class="mx-auto flex max-h-[96vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onclick="event.stopPropagation()">
+            <header class="flex items-center justify-between border-b border-slate-200 bg-gradient-to-r from-emerald-700 to-cyan-700 px-4 py-3 text-white"><div><h2 class="text-lg font-black"><i class="fa-solid fa-shield-halved mr-1"></i>域名迁移与数据保险</h2><p class="text-[9px] font-bold text-white/75">旧数据不删除 · 云端读回校验 · 文件备份兜底</p></div><button onclick="closeSiteMigrationCenter()" class="h-10 w-10 rounded-full bg-white/15 text-xl font-black">×</button></header>
+            <div class="overflow-y-auto p-3 sm:p-5">
+                <div class="grid gap-2 sm:grid-cols-2"><div class="rounded-2xl border border-slate-200 bg-slate-50 p-3"><div class="text-[9px] font-black text-slate-400">当前网址</div><div class="mt-1 truncate text-sm font-black text-slate-900">${esc(location.origin)}</div></div><div class="rounded-2xl border ${currentCloudUser ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'} p-3"><div class="text-[9px] font-black text-slate-400">迁移账号</div><div class="mt-1 truncate text-sm font-black text-slate-900">${currentCloudUser ? esc(currentCloudUser.email || currentCloudUser.id) : '尚未登录'}</div></div></div>
+                ${bundle ? `<div class="mt-3 rounded-2xl border ${differentOrigin ? 'border-cyan-200 bg-cyan-50' : 'border-slate-200 bg-slate-50'} p-3 text-xs font-bold text-slate-700"><i class="fa-solid fa-cloud-arrow-down mr-1 text-cyan-600"></i>账号中检测到迁移包：<b>${esc(bundle.sourceOrigin || '未知来源')}</b> · ${esc(bundle.updatedAt ? new Date(bundle.updatedAt).toLocaleString('zh-CN') : '')}${differentOrigin ? '<div class="mt-1 text-cyan-800">这是来自另一网址的迁移包，可以恢复到当前网址。</div>' : ''}</div>` : ''}
+                ${marker ? `<div class="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[9px] font-bold text-slate-500">本机迁移标记：${esc(marker.restoredAt || marker.checkedAt || '已记录')} · ${marker.ready ? '上次检查通过' : '上次尚未完成'}</div>` : ''}
+                <div id="site-migration-report" class="mt-3">${renderReport(lastReport)}</div>
+                <div class="mt-4 grid gap-2 sm:grid-cols-2">
+                    <button onclick="runSiteMigrationLocalAudit()" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-black text-slate-800 shadow-sm"><i class="fa-solid fa-stethoscope mr-2 text-blue-600"></i>1. 迁移前本地体检<div class="mt-1 text-[9px] font-bold text-slate-400">不会上传或修改任何数据</div></button>
+                    <button onclick="downloadSiteMigrationBackup()" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-black text-slate-800 shadow-sm"><i class="fa-solid fa-file-arrow-down mr-2 text-violet-600"></i>2. 下载完整备份<div class="mt-1 text-[9px] font-bold text-slate-400">包含本网址中可迁移的本地数据与照片兜底</div></button>
+                    <button ${currentCloudUser ? '' : 'disabled'} onclick="prepareSiteDomainMigration()" class="rounded-2xl bg-gradient-to-r from-emerald-600 to-cyan-600 px-4 py-3 text-left text-sm font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-40"><i class="fa-solid fa-cloud-arrow-up mr-2"></i>3. 上传并从云端读回验证<div class="mt-1 text-[9px] font-bold text-white/75">合并另一设备数据后核对四类校验摘要</div></button>
+                    <button ${differentOrigin ? '' : 'disabled'} onclick="restoreSiteDomainMigration()" class="rounded-2xl bg-gradient-to-r from-cyan-600 to-indigo-600 px-4 py-3 text-left text-sm font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-40"><i class="fa-solid fa-cloud-arrow-down mr-2"></i>4. 恢复旧网址附加设置<div class="mt-1 text-[9px] font-bold text-white/75">恢复前自动下载当前网址安全备份</div></button>
+                </div>
+                <label class="mt-3 flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs font-black text-slate-600"><i class="fa-solid fa-file-import mr-2"></i>从完整备份文件合并恢复<input id="site-migration-import-file" type="file" accept="application/json,.json" class="hidden" onchange="importSiteMigrationBackup(this.files?.[0])"></label>
+                <div class="mt-3 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-[10px] font-bold leading-relaxed text-rose-800"><b>切换域名前的通过条件：</b>至少保留一份完整备份，并看到 Box、历史库、出货库、附加设置四项全部通过。迁移模块永远不会清空旧网址 localStorage；恢复时也只合并或写入，不会先删除现有数据。</div>
+            </div>
+        </div>`;
+    }
+
+    function setBusy(value, message) {
+        busy = !!value;
+        let overlay = document.getElementById('site-migration-busy');
+        if (!busy) { overlay?.remove(); return; }
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'site-migration-busy';
+            overlay.className = 'fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/60 p-5 backdrop-blur-sm';
+            document.body.appendChild(overlay);
+        }
+        overlay.innerHTML = `<div class="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl"><i class="fa-solid fa-shield-halved fa-beat text-3xl text-emerald-600"></i><div class="mt-3 text-base font-black text-slate-900">${esc(message || '正在安全处理数据')}</div><div class="mt-1 text-xs font-bold text-slate-500">请不要关闭或刷新网页</div><div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100"><div class="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500"></div></div></div>`;
+    }
+
+    window.openSiteMigrationCenter = async function () {
+        document.getElementById('site-migration-center')?.remove();
+        const modal = document.createElement('div');
+        modal.id = 'site-migration-center';
+        modal.className = 'fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/65 p-2 backdrop-blur-sm sm:p-5';
+        modal.onclick = event => { if (event.target === modal && !busy) modal.remove(); };
+        modal.innerHTML = '<div class="rounded-3xl bg-white px-8 py-10 text-center shadow-2xl"><i class="fa-solid fa-circle-notch fa-spin text-2xl text-emerald-600"></i><div class="mt-2 text-xs font-black text-slate-600">正在检查迁移状态</div></div>';
+        document.body.appendChild(modal);
+        await renderCenter();
+    };
+    window.closeSiteMigrationCenter = function () { if (!busy) document.getElementById('site-migration-center')?.remove(); };
+    window.runSiteMigrationLocalAudit = async function () {
+        try { setBusy(true, '正在进行本地无损演练'); lastReport = await createLocalAuditReport(); }
+        catch (error) { lastReport = { ready:false, warnings:[error.message || String(error)], checkedAt:new Date().toISOString() }; }
+        finally { setBusy(false); await renderCenter(); }
+    };
+    window.downloadSiteMigrationBackup = async function () {
+        try { setBusy(true, '正在生成完整备份'); await downloadCompleteBackup(); if (typeof showToast === 'function') showToast('完整迁移备份已下载，请妥善保留'); }
+        catch (error) { if (typeof showToast === 'function') showToast(`备份失败：${error.message || error}`); }
+        finally { setBusy(false); }
+    };
+    window.prepareSiteDomainMigration = async function () {
+        try {
+            setBusy(true, '正在合并、上传并从云端读回校验');
+            await downloadCompleteBackup('迁移前安全备份');
+            lastReport = await uploadAndVerifyMigration();
+            if (typeof showToast === 'function') showToast(lastReport.ready ? '迁移包已通过云端读回校验' : '迁移校验未全部通过，请不要切换域名');
+        } catch (error) {
+            console.error('域名迁移准备失败：', error);
+            lastReport = { ready:false, checkedAt:new Date().toISOString(), warnings:[error.message || String(error)] };
+            if (typeof showToast === 'function') showToast('迁移未完成，旧网址本机数据仍完整保留');
+        } finally { setBusy(false); await renderCenter(); }
+    };
+    window.restoreSiteDomainMigration = async function () {
+        try {
+            setBusy(true, '正在备份当前网址并恢复旧网址设置');
+            lastReport = await restoreCloudMigrationBundle();
+            await renderCenter();
+            if (confirm('恢复与复核已经完成。重新载入页面后，各模块会读取迁移后的设置。现在重新载入吗？')) location.reload();
+        } catch (error) {
+            console.error('域名迁移恢复失败：', error);
+            lastReport = { ready:false, checkedAt:new Date().toISOString(), warnings:[error.message || String(error)] };
+            if (typeof showToast === 'function') showToast('恢复未完成，当前网址原数据未被清空');
+        } finally { setBusy(false); await renderCenter(); }
+    };
+    window.importSiteMigrationBackup = async function (file) {
+        try {
+            setBusy(true, '正在校验并合并完整备份');
+            lastReport = await importCompleteBackup(file);
+            await renderCenter();
+            if (confirm('备份已经合并并复核。现在重新载入页面吗？')) location.reload();
+        } catch (error) {
+            console.error('完整备份导入失败：', error);
+            lastReport = { ready:false, checkedAt:new Date().toISOString(), warnings:[error.message || String(error)] };
+            if (typeof showToast === 'function') showToast('导入已停止，现有数据没有被清空');
+        } finally {
+            const input = document.getElementById('site-migration-import-file');
+            if (input) input.value = '';
+            setBusy(false); await renderCenter();
+        }
+    };
 })();
 </script>
 </body>
