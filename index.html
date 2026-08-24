@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.6</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.8</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1297,16 +1297,148 @@ function rebuildTodayCheckInsFromHistory() {
 // 🚀 历史时光库多账号核心控制轨：本地按账号隔离，登录账号额外同步到 Supabase
 let historyLogs = [];
 let encounterHistoryReady = false;
+const HISTORY_LARGE_DB_NAME = 'sleep-luck-large-storage-v1';
+const HISTORY_LARGE_DB_STORE = 'history';
+const HISTORY_LOCAL_CACHE_LIMIT = 180;
+let historyLargeDbPromise = null;
+let historyLargeStorageHydrationPromise = null;
+let historyLargeStorageHydratedKey = '';
+let historyLargeStorageWriteChain = Promise.resolve();
 function getHistoryStorageKey() {
     return currentCloudUser ? 'sleep_history_logs_' + currentCloudUser.id : 'sleep_history_logs_guest';
 }
+function getHistoryLargeStorageMarkerKey(storageKey = getHistoryStorageKey()) {
+    return storageKey + '_indexeddb_v1';
+}
+function openHistoryLargeDb() {
+    if (historyLargeDbPromise) return historyLargeDbPromise;
+    historyLargeDbPromise = new Promise((resolve, reject) => {
+        if (!window.indexedDB) return reject(new Error('当前浏览器不支持 IndexedDB'));
+        const request = indexedDB.open(HISTORY_LARGE_DB_NAME, 1);
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains(HISTORY_LARGE_DB_STORE)) db.createObjectStore(HISTORY_LARGE_DB_STORE);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('打开 IndexedDB 失败'));
+    });
+    return historyLargeDbPromise;
+}
+async function readHistoryFromLargeStorage(key) {
+    const db = await openHistoryLargeDb();
+    return new Promise((resolve, reject) => {
+        const request = db.transaction(HISTORY_LARGE_DB_STORE, 'readonly').objectStore(HISTORY_LARGE_DB_STORE).get(key);
+        request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+        request.onerror = () => reject(request.error || new Error('读取 IndexedDB 历史失败'));
+    });
+}
+async function writeHistoryToLargeStorage(key, logs) {
+    const db = await openHistoryLargeDb();
+    const snapshot = Array.isArray(logs) ? logs : [];
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(HISTORY_LARGE_DB_STORE, 'readwrite');
+        transaction.objectStore(HISTORY_LARGE_DB_STORE).put(snapshot, key);
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = () => reject(transaction.error || new Error('写入 IndexedDB 历史失败'));
+        transaction.onabort = () => reject(transaction.error || new Error('写入 IndexedDB 历史已中止'));
+    });
+}
+function createHistoryLocalCache(logs) {
+    const source = Array.isArray(logs) ? logs : [];
+    const selected = [];
+    const seen = new Set();
+    const add = item => {
+        if (!item) return;
+        const key = String(item.id || getSleepResearchMergeKey(item) || '');
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        const copy = Object.assign({}, item);
+        if (isSleepResearchLog(copy)) {
+            copy.photoDataUrls = getCloudSafeSleepResearchPhotoEntries(copy.photoDataUrls || []);
+            copy.photoDataUrl = '';
+        }
+        selected.push(copy);
+    };
+    source.slice(0, HISTORY_LOCAL_CACHE_LIMIT).forEach(add);
+    // 无日期的账号状态记录通常排在历史尾部，但启动首页时会立即使用，因此额外保留。
+    source.filter(item => item && !item.date && !isHistoryDeleteMarker(item)).slice(0, 60).forEach(add);
+    return selected;
+}
+function writeHistoryLocalCache(logs, storageKey = getHistoryStorageKey()) {
+    localStorage.setItem(storageKey, JSON.stringify(createHistoryLocalCache(logs)));
+}
+function replaceFullHistoryWithBoundedCache(logs, storageKey = getHistoryStorageKey()) {
+    // 调用前必须已经确认完整数据写入 IndexedDB。先删旧的大 JSON 才能让已经满额的 Safari 自救；
+    // 标记先于近期缓存写入，哪怕缓存仍失败，下次启动也会从 IndexedDB 读取完整历史。
+    localStorage.removeItem(storageKey);
+    localStorage.setItem(getHistoryLargeStorageMarkerKey(storageKey), '1');
+    try { writeHistoryLocalCache(logs, storageKey); }
+    catch (error) { console.warn('近期历史缓存写入失败，将直接从 IndexedDB 读取完整历史：', error); }
+}
+function queueHistoryLargeStorageWrite(logs = historyLogs) {
+    const key = getHistoryStorageKey();
+    const snapshot = Array.isArray(logs) ? logs.map(item => item && typeof item === 'object' ? Object.assign({}, item) : item) : [];
+    historyLargeStorageWriteChain = historyLargeStorageWriteChain
+        .catch(() => false)
+        .then(() => writeHistoryToLargeStorage(key, snapshot));
+    return historyLargeStorageWriteChain;
+}
+async function ensureHistoryLargeStorageReady() {
+    const key = getHistoryStorageKey();
+    if (historyLargeStorageHydratedKey === key) return { ok: true, count: historyLogs.length };
+    if (historyLargeStorageHydrationPromise?.key === key) return historyLargeStorageHydrationPromise.promise;
+    const hasMarker = localStorage.getItem(getHistoryLargeStorageMarkerKey(key)) === '1';
+    const localSnapshot = Array.isArray(historyLogs) ? [...historyLogs] : [];
+    const promise = (async () => {
+        try {
+            if (hasMarker) {
+                const stored = await readHistoryFromLargeStorage(key);
+                if (getHistoryStorageKey() !== key) return { ok: false, staleUser: true };
+                historyLogs = mergeHistoryLogs(stored, historyLogs);
+            } else {
+                // 首次迁移：完整写入成功之前绝不缩小原 localStorage。
+                await writeHistoryToLargeStorage(key, localSnapshot);
+                if (getHistoryStorageKey() !== key) return { ok: false, staleUser: true };
+                historyLogs = mergeHistoryLogs(localSnapshot, historyLogs);
+            }
+            historyLargeStorageHydratedKey = key;
+            replaceFullHistoryWithBoundedCache(historyLogs, key);
+            return { ok: true, count: historyLogs.length };
+        } catch (error) {
+            console.error('完整历史迁移至 IndexedDB 失败，继续保留旧本地缓存：', error);
+            return { ok: false, error };
+        }
+    })();
+    historyLargeStorageHydrationPromise = { key, promise };
+    const result = await promise;
+    if (historyLargeStorageHydrationPromise?.key === key) historyLargeStorageHydrationPromise = null;
+    return result;
+}
+async function waitForHistoryLargeStorageWrite() {
+    try { await historyLargeStorageWriteChain; return true; }
+    catch (error) { console.error('等待完整历史本机保存失败：', error); return false; }
+}
 function loadHistoryFromLocal() {
+    const key = getHistoryStorageKey();
+    if (historyLargeStorageHydratedKey === key) return historyLogs;
     try {
-        const raw = JSON.parse(localStorage.getItem(getHistoryStorageKey())) || [];
+        const raw = JSON.parse(localStorage.getItem(key)) || [];
         historyLogs = mergeHistoryLogs([], raw);
         encounterHistoryReady = true;
-        ensureSleepResearchForExistingCaptures({ persist: true, syncCloud: false });
-        loadBallPlannerStateFromHistory();
+        const usesLargeStorage = localStorage.getItem(getHistoryLargeStorageMarkerKey(key)) === '1';
+        if (usesLargeStorage) {
+            // 当前 localStorage 只是近期缓存。必须先合并 IndexedDB 完整历史，禁止用部分缓存反写覆盖完整库。
+            void ensureHistoryLargeStorageReady().then(result => {
+                if (!result?.ok || getHistoryStorageKey() !== key) return;
+                ensureSleepResearchForExistingCaptures({ persist: true, syncCloud: false });
+                loadBallPlannerStateFromHistory();
+                if (document.getElementById('history-logs-modal')) applyHistoryCloudRefreshToOpenModal();
+            });
+        } else {
+            ensureSleepResearchForExistingCaptures({ persist: true, syncCloud: false });
+            loadBallPlannerStateFromHistory();
+            void ensureHistoryLargeStorageReady();
+        }
     } catch (e) {
         console.error('历史抽卡库读取失败，已重置：', e);
         historyLogs = [];
@@ -1314,14 +1446,25 @@ function loadHistoryFromLocal() {
     }
 }
 function saveHistoryToLocal(options = {}) {
-    try {
-        localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
-    } catch (e) {
-        console.error('历史库本地保存失败：', e);
-        if (isStorageQuotaExceededError(e)) {
-            throw new Error('浏览器本地存储空间不足。手机原图太大时很容易触发；请减少大合照数量或重新上传压缩后的图片。');
-        }
-        throw e;
+    const key = getHistoryStorageKey();
+    if (localStorage.getItem(getHistoryLargeStorageMarkerKey(key)) === '1' && historyLargeStorageHydratedKey !== key) {
+        // 页面刚打开时内存里只有近期缓存：先读回完整库，再把本次修改合并保存。
+        void ensureHistoryLargeStorageReady().then(result => {
+            if (result?.ok && getHistoryStorageKey() === key) saveHistoryToLocal(options);
+        });
+        return;
+    }
+    const snapshot = Array.isArray(historyLogs) ? historyLogs.map(item => item && typeof item === 'object' ? Object.assign({}, item) : item) : [];
+    // 完整历史进入 IndexedDB；localStorage 只留近期启动缓存，避免记录增长到 Safari 的小容量上限。
+    void queueHistoryLargeStorageWrite(snapshot).then(() => {
+        if (getHistoryStorageKey() !== key) return;
+        historyLargeStorageHydratedKey = key;
+        try { replaceFullHistoryWithBoundedCache(snapshot, key); }
+        catch (error) { console.warn('近期历史缓存整理失败，但完整历史已保存在 IndexedDB：', error); }
+    }).catch(error => console.error('历史库 IndexedDB 保存失败：', error));
+    if (localStorage.getItem(getHistoryLargeStorageMarkerKey(key)) === '1') {
+        try { writeHistoryLocalCache(snapshot, key); }
+        catch (error) { console.warn('近期历史缓存暂时无法更新，将依赖 IndexedDB 与云端：', error); }
     }
     if (options.syncCloud !== false) scheduleSaveHistoryToCloud();
 }
@@ -3707,7 +3850,10 @@ function slimSleepResearchMetaForStorage(item) {
 function writeSleepResearchMetaMap(map) {
     try {
         const slimMap = {};
-        Object.entries(map || {}).forEach(([key, value]) => {
+        Object.entries(map || {})
+        .sort(([, left], [, right]) => (Date.parse(right?.updatedAt || right?.createdAt || '') || 0) - (Date.parse(left?.updatedAt || left?.createdAt || '') || 0))
+        .slice(0, 240)
+        .forEach(([key, value]) => {
             const slim = slimSleepResearchMetaForStorage(value);
             if (slim) slimMap[key] = slim;
         });
@@ -3767,7 +3913,15 @@ function readSleepResearchPhotoMap() {
 
 function writeSleepResearchPhotoMap(map) {
     try {
-        localStorage.setItem(getSleepResearchPhotoStorageKey(), JSON.stringify(map || {}));
+        const boundedMap = {};
+        Object.entries(map || {}).forEach(([key, entries]) => {
+            const compact = compactPhotoEntries(entries);
+            // 登录用户的 Storage 引用已在 history/云端中保存，不在照片缓存里重复一份；
+            // 这里只保留尚未成功上传的本机 dataURL，确保失败时原图不丢。
+            const retained = currentCloudUser ? compact.filter(isLocalDataUrlPhotoEntry) : compact;
+            if (retained.length) boundedMap[key] = retained;
+        });
+        localStorage.setItem(getSleepResearchPhotoStorageKey(), JSON.stringify(boundedMap));
     } catch (e) {
         console.warn('睡眠研究照片缓存保存失败：', e);
         if (isStorageQuotaExceededError(e)) {
@@ -4022,6 +4176,92 @@ async function uploadSleepResearchPhotoDataUrls(date, session, dataUrls) {
         result.push(await uploadSleepResearchPhotoDataUrl(date, session, list[i], i));
     }
     return compactPhotoEntries(result);
+}
+
+// v33：手机 localStorage 被旧版 dataURL 合照占满时的无损自救。
+// 仅在登录且 Storage 可用时运行；每张旧图确认上传成功后，才用很小的云端引用替换本机原图。
+let sleepResearchStorageRecoveryPromise = null;
+function parseSleepResearchPhotoMapId(id) {
+    const match = /^research_(\d{4}-\d{2}-\d{2})_(.+)$/.exec(String(id || ''));
+    return match ? { date: match[1], session: normalizeSleepResearchSessionValue(match[2]) } : null;
+}
+function isStorageQuotaMessage(error) {
+    return isStorageQuotaExceededError(error) || /本地存储空间不足|localstorage|quota/i.test(String(error?.message || error || ''));
+}
+async function recoverSleepResearchLocalStorage(options = {}) {
+    if (sleepResearchStorageRecoveryPromise) return sleepResearchStorageRecoveryPromise;
+    sleepResearchStorageRecoveryPromise = (async () => {
+        if (!canUseSupabasePhotoStorage()) {
+            return { ok: false, migrated: 0, reason: '需要先登录账号并连接图片云端存储' };
+        }
+        const photoKey = getSleepResearchPhotoStorageKey();
+        const photoMap = readSleepResearchPhotoMap();
+        const researchById = new Map((Array.isArray(historyLogs) ? historyLogs : [])
+            .filter(isSleepResearchLog)
+            .map(item => [String(item.id || getSleepResearchId(item.date, item.session)), item]));
+
+        // 兼容更早版本：图片可能仍直接嵌在 history_logs，而没有进入独立照片缓存。
+        researchById.forEach((item, id) => {
+            const combined = compactPhotoEntries([
+                ...(Array.isArray(photoMap[id]) ? photoMap[id] : []),
+                ...(Array.isArray(item.photoDataUrls) ? item.photoDataUrls : []),
+                item.photoDataUrl
+            ].filter(Boolean));
+            if (combined.length) photoMap[id] = combined;
+        });
+
+        const candidates = Object.entries(photoMap)
+            .map(([id, entries]) => ({
+                id,
+                entries: compactPhotoEntries(entries),
+                bytes: compactPhotoEntries(entries).reduce((sum, item) => sum + (isLocalDataUrlPhotoEntry(item) ? estimateDataUrlBytes(getPhotoDisplayUrl(item)) : 0), 0)
+            }))
+            .filter(item => item.bytes > 0 && parseSleepResearchPhotoMapId(item.id))
+            .sort((a, b) => b.bytes - a.bytes);
+
+        let migrated = 0;
+        for (const candidate of candidates) {
+            const key = parseSleepResearchPhotoMapId(candidate.id);
+            const nextEntries = [];
+            for (let index = 0; index < candidate.entries.length; index++) {
+                const entry = candidate.entries[index];
+                if (!isLocalDataUrlPhotoEntry(entry)) {
+                    nextEntries.push(entry);
+                    continue;
+                }
+                try {
+                    if (typeof options.onProgress === 'function') options.onProgress(migrated + 1, candidates.length);
+                    const uploaded = await uploadSleepResearchPhotoDataUrl(key.date, key.session, getPhotoDisplayUrl(entry), index);
+                    nextEntries.push(uploaded);
+                    migrated++;
+                } catch (error) {
+                    console.warn('旧大合照迁移失败，原图继续保留：', candidate.id, error);
+                    nextEntries.push(entry);
+                }
+            }
+            photoMap[candidate.id] = compactPhotoEntries(nextEntries);
+
+            const research = researchById.get(candidate.id);
+            if (research) {
+                research.photoDataUrls = getCloudSafeSleepResearchPhotoEntries(photoMap[candidate.id]);
+                research.photoDataUrl = '';
+                research.updatedAt = research.updatedAt || new Date().toISOString();
+            }
+
+            // 新 JSON 比旧 JSON 小；每迁完一觉就立即落盘，避免中途退出导致重复迁移。
+            try { localStorage.setItem(photoKey, JSON.stringify(photoMap)); }
+            catch (error) { console.warn('缩小旧照片缓存时仍遇到空间限制，将继续迁移下一觉：', error); }
+
+            try {
+                localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs));
+                return { ok: true, migrated };
+            } catch (error) {
+                if (!isStorageQuotaExceededError(error)) throw error;
+            }
+        }
+        return { ok: false, migrated, reason: candidates.length ? '迁移部分旧图后空间仍不足' : '没有可安全迁移的旧版大合照' };
+    })().finally(() => { sleepResearchStorageRecoveryPromise = null; });
+    return sleepResearchStorageRecoveryPromise;
 }
 
 async function removeSleepResearchPhotoEntryFromStorage(entry) {
@@ -4673,6 +4913,7 @@ async function loadHistoryFromCloud(options = {}) {
     // 再与云端按 updatedAt 合并；旧版没有时间戳的本地值使用极早时间，避免覆盖另一台设备已有的新值。
     loadEncounterStatisticsFromLocal();
     loadHistoryFromLocal();
+    await ensureHistoryLargeStorageReady();
     historyLogs = prepareEncounterStatisticsLogsForMerge(historyLogs);
     syncEncounterStatisticsLocalStateIntoHistory();
     loadEncounterStatisticsFromHistory({ refresh: false });
@@ -14188,11 +14429,27 @@ function submitSleepResearchMeta(event) {
 
     const finish = async (photoDataUrls = []) => {
         try {
+            setSleepResearchSubmitBusy(true, '正在确认完整历史的本机安全存储…');
+            const largeStorageReady = await ensureHistoryLargeStorageReady();
+            if (!largeStorageReady?.ok) console.warn('IndexedDB 历史存储尚未就绪，将继续使用现有本地与云端保护：', largeStorageReady?.error || largeStorageReady?.reason);
             setSleepResearchSubmitBusy(true, '正在保存睡眠研究并同步历史库…');
             const storedPhotos = await uploadSleepResearchPhotoDataUrls(date, session, photoDataUrls);
             const payload = { date, session, sleepScore, drowsyPower, note, encounterCount, photoDataUrls: storedPhotos };
             if (ballUsage) payload.ballUsage = ballUsage;
-            const research = upsertSleepResearch(payload, { syncCloud: count <= 0 });
+            let research;
+            try {
+                research = upsertSleepResearch(payload, { syncCloud: count <= 0 });
+            } catch (error) {
+                if (!isStorageQuotaMessage(error)) throw error;
+                setSleepResearchSubmitBusy(true, '本机旧缓存已满，正在安全迁移旧版照片并释放空间…');
+                const recovery = await recoverSleepResearchLocalStorage({
+                    onProgress: migrated => setSleepResearchSubmitBusy(true, `正在安全迁移旧版照片（已处理 ${migrated} 张）…`)
+                });
+                if (!recovery?.ok) throw new Error(`浏览器旧缓存已满，自动整理未能释放足够空间：${recovery?.reason || '未知原因'}。完整历史仍保留，未删除任何资料。`);
+                research = upsertSleepResearch(payload, { syncCloud: count <= 0 });
+            }
+            const localWriteOk = await waitForHistoryLargeStorageWrite();
+            if (!localWriteOk) throw new Error('完整历史写入手机大容量存储失败；本次未进入后续录入，请重新尝试。');
             if (encounterCount !== null) {
                 refreshEncounterStatisticsAfterResearchChange();
             }
@@ -22144,6 +22401,7 @@ async function openHistoryModal(skipCloudRefresh = false) {
             // 保持当前内存中的 historyLogs，不重新读取。
         } else {
             loadHistoryFromLocal();
+            await ensureHistoryLargeStorageReady();
             // 本机完整缓存先用于画面；云端仍执行完整的双端合并，但不再阻塞弹窗。
             if (currentCloudUser) cloudRefreshPromise = loadHistoryFromCloud({ deferRepairUpload: true });
         }
@@ -27721,8 +27979,28 @@ async function calculateAndRenderWeeklyCooking() {
         persistLiveCookingLocal();
         return liveCookingState;
     }
+    function getLiveCookingBoundedLocalRecords(){
+        // 专用逐餐云表尚未确认可用时，旧数据仍以本地/历史库为兜底，不能贸然裁剪。
+        if(liveCookingDedicatedCloudSupport!==true)return liveCookingRecords;
+        const currentWeek=liveCookingMonday(),viewWeek=String(liveCookingState?.viewWeek||currentWeek);
+        const earliestWeek=liveCookingShiftWeek(currentWeek,-16);
+        const pendingIds=liveCookingPendingMealSyncIds;
+        return (Array.isArray(liveCookingRecords)?liveCookingRecords:[]).filter(item=>{
+            if(!item)return false;
+            const id=String(item.id||''),week=String(item.weekStart||'');
+            return pendingIds.has(id)||week===viewWeek||week>=earliestWeek;
+        });
+    }
     function persistLiveCookingLocal(){
-        try{localStorage.setItem(liveCookingStorageKey(),JSON.stringify({state:liveCookingState,records:liveCookingRecords,pendingMealSyncIds:[...liveCookingPendingMealSyncIds]}));}catch(_){}
+        try{
+            localStorage.setItem(liveCookingStorageKey(),JSON.stringify({
+                state:liveCookingState,
+                records:getLiveCookingBoundedLocalRecords(),
+                pendingMealSyncIds:[...liveCookingPendingMealSyncIds]
+            }));
+        }catch(error){
+            console.warn('料理周历本地缓存保存失败：',error);
+        }
     }
     function isLiveCookingCloudTableMissing(error){
         const code=String(error?.code||''),message=String(error?.message||error?.details||'').toLowerCase();
@@ -28382,7 +28660,7 @@ async function calculateAndRenderWeeklyCooking() {
         @media(max-width:600px){.live-cooking-week-row{flex-wrap:wrap}.live-cooking-week-nav{width:100%;justify-content:center}.live-cooking-week-range{white-space:nowrap}.live-cooking-grid{grid-template-columns:40px repeat(3,minmax(0,1fr))}.live-cooking-corner,.live-cooking-calendar-head{height:28px}.live-cooking-day-cell,.live-cooking-cell{min-height:59px}.live-cooking-meal-art{width:24px;height:24px}.live-cooking-meal-row strong{font-size:9px}.live-cooking-state-label{font-size:5px}.live-cooking-meal-name{font-size:5.8px}.live-cooking-subline{font-size:5.4px}.live-cooking-summary{grid-template-columns:repeat(3,1fr)}.live-cooking-summary .live-cooking-luck{grid-column:1/-1}.live-cooking-settings-grid{grid-template-columns:repeat(2,1fr)}.live-cooking-city-input{width:100%;margin-left:0}.live-cooking-city-input small{margin-left:auto}.live-cooking-deadline-badge{font-size:7.5px;padding:4px 3px}}
         </style><div class="live-cooking-app fixed inset-0 z-[105] p-0 backdrop-blur-sm sm:bg-slate-950/65 sm:p-3"><div class="mx-auto flex h-full max-w-3xl flex-col overflow-hidden bg-[#fbf7ef] shadow-2xl sm:h-[calc(100vh-24px)] sm:rounded-[28px]"><header class="flex items-center justify-between border-b border-[#eadfce] bg-[#fffdf8] px-4 py-3"><div><h2 class="text-base font-black text-stone-800">宝睡料理周历</h2><p class="text-[8px] font-bold text-stone-400">实录与理论推荐，一张表看清 · v2026.08.24.5</p></div><button type="button" onclick="closeLiveCookingPlannerModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-stone-100 text-xl font-black text-stone-600" aria-label="关闭">×</button></header><div id="live-cooking-scroll-body" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4"><div class="live-cooking-week-row mb-2 flex items-center justify-between gap-2"><div class="live-cooking-week-nav flex items-center gap-1"><button type="button" onclick="shiftLiveCookingWeek(-1)" class="live-cooking-toolbutton">‹</button><div class="px-2 text-center"><div class="live-cooking-week-range text-xs font-black text-stone-700">${start.getMonth()+1}/${start.getDate()}－${end.getMonth()+1}/${end.getDate()}</div><button type="button" onclick="goLiveCookingCurrentWeek()" class="text-[7px] font-black text-stone-400">回到本周</button></div><button type="button" onclick="shiftLiveCookingWeek(1)" class="live-cooking-toolbutton">›</button></div>${renderLiveCookingTimezoneInput()}</div>${renderLiveCookingCalendar()}${renderLiveCookingWeekSummary()}<div class="live-cooking-plan-status"><div><small>${hasPlan?(liveCookingPlanDirty?'旧推荐预计最终总能量':'预计本周最终总能量'):'规划状态'}</small><strong>${hasPlan?(current>0?liveCookingFormatNumber(finalEnergy):`剩余期望 +${liveCookingFormatNumber(remaining)}`):'等待手动计算'}</strong></div><span class="text-[7px] font-bold ${liveCookingPlanDirty?'text-amber-700':'text-stone-400'}">${hasPlan?(liveCookingPlanDirty?'输入已改变，旧推荐仍保留':`计算于 ${liveCookingEscape(liveCookingPlan.generatedAt?new Date(liveCookingPlan.generatedAt).toLocaleString('zh-CN'):'本次打开期间')}`):'修改输入不会自动开始复杂计算'}</span></div><div class="live-cooking-toolbar"><button id="live-cooking-calculate-button" type="button" onclick="recalculateLiveCookingNow()" class="live-cooking-toolbutton is-primary"><i class="fa-solid fa-calculator"></i> ${hasPlan?'重新计算':'开始计算'}</button><button type="button" onclick="toggleLiveCookingSettings()" class="live-cooking-toolbutton ${liveCookingSettingsOpen?'is-active':''}"><i class="fa-solid fa-sliders"></i> 计算设定</button><button type="button" onclick="toggleLiveCookingDetails()" class="live-cooking-toolbutton ${liveCookingDetailsOpen?'is-active':''}"><i class="fa-solid fa-chart-line"></i> 详细结果</button><button id="live-cooking-forecast-toggle" type="button" onclick="event.preventDefault();event.stopPropagation();toggleLiveCookingForecast()" class="live-cooking-toolbutton" style="touch-action:manipulation;-webkit-tap-highlight-color:transparent"><i class="fa-solid ${liveCookingState.forecastVisible!==false?'fa-eye-slash':'fa-eye'}"></i> ${liveCookingState.forecastVisible!==false?'隐藏预测':'显示预测'}</button>${hasPlan?'<button type="button" onclick="clearLiveCookingForecast()" class="live-cooking-toolbutton"><i class="fa-solid fa-eraser"></i> 清除预测</button>':''}</div>${settings}${details}<div id="live-cooking-sync-status" class="mt-3 text-center text-[7px] font-black text-stone-400">${currentCloudUser?'<i class="fa-solid fa-cloud-circle-check"></i> 周历、城市和预测设置将同步到账号':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机'}</div></div></div></div>`;
         const liveCookingVersionText=document.querySelector('#live-cooking-planner-modal header p');
-        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.6';
+        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.8';
     }
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
@@ -29316,7 +29594,10 @@ function openSleepSplitPlannerModal() {
     }
 
     async function createBackup() {
+        if (typeof ensureHistoryLargeStorageReady === 'function') await ensureHistoryLargeStorageReady();
         const storage = collectOwnedStorage();
+        // localStorage 中只是近期启动缓存；完整备份必须显式放入当前内存中的全量历史。
+        if (typeof getHistoryStorageKey === 'function') storage[getHistoryStorageKey()] = JSON.stringify(Array.isArray(historyLogs) ? historyLogs : []);
         const counts = buildCounts(storage);
         const payload = {
             format: 'sleep-luck-tools-complete-backup',
@@ -29533,7 +29814,15 @@ function openSleepSplitPlannerModal() {
             graduationDexDeleted = merged.deleted;
         } else if (oldDex.length) graduationDex = oldDex;
 
-        localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs || []));
+        if (typeof writeHistoryToLargeStorage === 'function') {
+            const historyKey = getHistoryStorageKey();
+            await writeHistoryToLargeStorage(historyKey, historyLogs || []);
+            historyLargeStorageHydratedKey = historyKey;
+            writeHistoryLocalCache(historyLogs || [], historyKey);
+            localStorage.setItem(getHistoryLargeStorageMarkerKey(historyKey), '1');
+        } else {
+            localStorage.setItem(getHistoryStorageKey(), JSON.stringify(historyLogs || []));
+        }
         localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox || []));
         localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex || []));
         localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted || {}));
