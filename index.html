@@ -26981,17 +26981,39 @@ async function calculateAndRenderWeeklyCooking() {
         producers.forEach(item => Object.entries(item.map).forEach(([name,value]) => {
             const canonicalName = canonicalIngredientName(name);
             if (!relevant.has(canonicalName) || Number(value) <= 0) return;
-            map[canonicalName] = (map[canonicalName] || 0) + value;
-            (details[canonicalName] ||= []).push({ species:item.species, level:item.level, value });
+            const cur = getEntryCurrent(item.entry);
+            const nickname = typeof getGraduationDexNickname === 'function' ? getGraduationDexNickname(item.entry) : item.species;
+            (details[canonicalName] ||= []).push({
+                id:String(item.entry?.id || ''),
+                nickname:nickname || item.species,
+                species:item.species,
+                level:item.level,
+                combo:String(cur.foodCombo || cur.ingredientCombo || cur.foodCode || 'AAA').toUpperCase(),
+                value:Number(value),
+                helpsPerDay:Number(item.helpsPerDay) || 0,
+                ingredientRate:Number(item.ingredientRate) || 0
+            });
         }));
         const nightCapDaily = typeof getNightCapPikachuDailyProduction === 'function' ? getNightCapPikachuDailyProduction() : {};
         Object.entries(nightCapDaily).forEach(([name,value]) => {
             const canonicalName = canonicalIngredientName(name);
             if (!relevant.has(canonicalName) || Number(value) <= 0) return;
             map[canonicalName] = (map[canonicalName] || 0) + Number(value);
-            (details[canonicalName] ||= []).push({ species:'睡帽皮卡丘（队伍外）', level:nightCapPikachuState.level, value:Number(value), passive:true });
+            (details[canonicalName] ||= []).push({ nickname:'睡帽皮卡丘', species:'睡帽皮卡丘（队伍外）', level:nightCapPikachuState.level, combo:'固定收益', value:Number(value), passive:true });
         });
-        Object.values(details).forEach(list => list.sort((a,b) => b.value - a.value));
+        // 每种食材采用产量最高的一只作为主力食材手；其余个体仅作为候补展示。
+        // 睡帽皮卡丘不占队伍位置，因此它的固定收益可在主力产量之外额外叠加。
+        Object.entries(details).forEach(([name,list]) => {
+            list.sort((a,b) => b.value - a.value);
+            const regular = list.filter(item => !item.passive);
+            const primary = regular[0] || null;
+            const passiveTotal = list.filter(item => item.passive).reduce((sum,item) => sum + (Number(item.value) || 0), 0);
+            list.forEach(item => {
+                item.adopted = Boolean(item.passive || item === primary);
+                item.role = item.passive ? 'passive' : (item === primary ? 'primary' : 'backup');
+            });
+            map[name] = (Number(primary?.value) || 0) + passiveTotal;
+        });
         autoProductionCache = { key, map, team:producers, details, calculated, rejected, nightCapDaily };
         return autoProductionCache;
     }
@@ -27034,10 +27056,27 @@ async function calculateAndRenderWeeklyCooking() {
             const cell = input.closest('td');
             if (!cell) return;
             const value = Number(info?.autoDaily ?? info?.baseDaily ?? info?.daily) || 0;
-            const contributors = (info?.autoContributors || []).map(item => `${item.species} Lv.${item.level}`).join('、');
+            const contributionList = info?.autoContributors || [];
+            const contributors = contributionList.map(item => `${item.nickname || item.species} Lv.${item.level}：${Number(item.value).toFixed(1)}/24h`).join('、');
+            const contributionRows = contributionList.map(item => {
+                const itemValue = Number(item.value) || 0;
+                const share = value > 0 && item.adopted ? itemValue / value * 100 : 0;
+                const nickname = item.nickname || item.species;
+                const speciesSuffix = item.species && item.species !== nickname && !item.passive ? ` · ${item.species}` : '';
+                const yieldPerIngredientHelp = item.helpsPerDay > 0 && item.ingredientRate > 0 ? itemValue / (item.helpsPerDay * item.ingredientRate) : 0;
+                const roleBadge = item.passive
+                    ? '<span class="rounded bg-sky-100 px-1 py-0.5 text-[7px] font-black text-sky-700">固定追加</span>'
+                    : (item.adopted
+                        ? '<span class="rounded bg-emerald-100 px-1 py-0.5 text-[7px] font-black text-emerald-700">采用主力</span>'
+                        : '<span class="rounded bg-slate-100 px-1 py-0.5 text-[7px] font-black text-slate-400">候补·未计入</span>');
+                const basis = item.passive
+                    ? '队伍外固定收益，不占5人队位置'
+                    : `${escapeHtml(item.combo || 'AAA')} · 满体帮忙${Number(item.helpsPerDay).toFixed(1)}次/日 · 食材率${(Number(item.ingredientRate) * 100).toFixed(1)}%${yieldPerIngredientHelp ? ` · 本食材平均${yieldPerIngredientHelp.toFixed(2)}个/食材帮助` : ''}`;
+                return `<div class="border-t border-emerald-100 py-1.5 first:border-t-0 ${item.adopted ? '' : 'opacity-70'}"><div class="flex items-center justify-between gap-2"><span class="min-w-0 truncate text-[9px] font-black text-slate-700">${escapeHtml(nickname)}${escapeHtml(speciesSuffix)} <span class="text-slate-400">Lv.${Number(item.level) || '?'}</span></span><span class="shrink-0 font-mono text-[9px] font-black ${item.adopted ? 'text-emerald-700' : 'text-slate-500'}">${itemValue.toFixed(1)}/24h${item.adopted ? ` · ${share.toFixed(1)}%` : ''}</span></div><div class="mt-0.5 flex items-center gap-1">${roleBadge}<span class="text-[7px] font-bold leading-relaxed text-slate-400">${basis}</span></div></div>`;
+            }).join('');
             const rejectedReasons = [...new Set((info?.autoRejected || []).map(item => item.reason).filter(Boolean))];
             const emptyLabel = Number(info?.autoCalculatedCount) > 0 ? 'Box 中暂无可推算个体生产此食材' : (rejectedReasons[0] || '出货库暂无完整培养面板');
-            cell.innerHTML = `<div class="rounded-lg ${value ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'} border px-2 py-1.5"><div class="text-[10px] font-mono font-black ${value ? 'text-emerald-800' : 'text-amber-800'}">${value ? value.toFixed(1) : '0.0'} /24h</div><div class="text-[8px] font-bold ${value ? 'text-emerald-600' : 'text-amber-600'} mt-0.5">${value ? '由出货库面板自动推算' : escapeHtml(emptyLabel)}</div></div>`;
+            cell.innerHTML = `<div class="min-w-[190px] rounded-lg ${value ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'} border px-2 py-1.5"><div class="text-[10px] font-mono font-black ${value ? 'text-emerald-800' : 'text-amber-800'}">${value ? value.toFixed(1) : '0.0'} /24h</div><div class="text-[8px] font-bold ${value ? 'text-emerald-600' : 'text-amber-600'} mt-0.5">${value ? '采用该食材最高产个体' : escapeHtml(emptyLabel)}</div>${contributionRows ? `<details class="mt-1 rounded-lg border border-emerald-200 bg-white/80 px-2 py-1"><summary class="cursor-pointer select-none text-[8px] font-black text-emerald-700">查看主力与 ${Math.max(0, contributionList.filter(item => !item.passive).length - 1)} 只候补</summary><div class="mt-1 max-h-48 overflow-y-auto">${contributionRows}</div></details>` : ''}</div>`;
             if (contributors) cell.title = contributors;
         });
         const table = [...modal.querySelectorAll('table')].find(table => table.textContent.includes('理论24h产量'));
@@ -27048,7 +27087,7 @@ async function calculateAndRenderWeeklyCooking() {
             note.className = 'auto-production-note mb-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[9px] font-bold text-emerald-800';
             const rejectedSummary = Object.entries(bundle.rejected.reduce((acc,item) => { acc[item.reason] = (acc[item.reason] || 0) + 1; return acc; }, {})).map(([reason,count]) => `${reason}${count}只`).join('、');
             note.innerHTML = bundle.team.length
-                ? `<i class="fa-solid fa-box-open"></i> 已识别 ${bundle.team.length} 只与本次食材相关的可推算个体。每种食材分别汇总 Box 中能生产它的个体，并结合等级、性格和已生效副技能推算；各行是独立产能参考，不代表这些24小时产量能够同时实现。${rejectedSummary ? `另有：${escapeHtml(rejectedSummary)}。` : ''}`
+                ? `<i class="fa-solid fa-box-open"></i> 已识别 ${bundle.team.length} 只与本次食材相关的可推算个体。每种食材只采用该食材满体日产量最高的一只主力个体；其他个体作为候补不计入，睡帽皮卡丘的队伍外固定收益另行追加。各行仍是分别选择主力后的独立产能参考。${rejectedSummary ? `另有：${escapeHtml(rejectedSummary)}。` : ''}`
                 : (bundle.calculated.length
                     ? `<i class="fa-solid fa-circle-info"></i> 出货库中已有 ${bundle.calculated.length} 只可以正常推算，但它们不产当前所选料理需要的食材。${rejectedSummary ? `另有：${escapeHtml(rejectedSummary)}。` : ''}`
                     : `<i class="fa-solid fa-triangle-exclamation"></i> 当前没有完成推算。${rejectedSummary ? escapeHtml(rejectedSummary) : '请在出货库补充当前等级和食材组合。'}`);
