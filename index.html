@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.24.16</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.26.6</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -986,6 +986,9 @@
                     </button>
                     <button onclick="openGraduationDexModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-800 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="查看和补录已经出货的宝可梦个体面板">
                         <i class="fa-solid fa-trophy text-amber-600"></i> 🏆 出货库
+                    </button>
+                    <button onclick="openPokemonEfficiencyModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-cyan-100 text-cyan-800 shadow-sm flex items-center gap-1 hover:bg-cyan-200" title="勾选出货库个体，查看当前或培养后的食材、技能与树果效率">
+                        <i class="fa-solid fa-gauge-high"></i> 个体效率预览
                     </button>
                     <button onclick="openBallPlannerModal()" id="ball-planner-main-btn" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-sky-100 text-sky-800 shadow-sm flex items-center gap-1 hover:bg-sky-200" title="记录精灵球库存、研究用球、活动/礼包计划和睡眠点数商店预算">
                         <i class="fa-solid fa-baseball text-sky-600"></i> 🎒 精灵球规划
@@ -26890,7 +26893,10 @@ async function calculateAndRenderWeeklyCooking() {
             return entry?.id || entry?.pokedexId || 0;
         } catch (_) { return 0; }
     }
-    function calculateEntryIngredientProduction(entry) {
+    function calculateEntryIngredientProduction(entry, options = {}) {
+        if (options.useTrainingPreview && typeof window.getPokemonTrainingPreviewVirtualEntry === 'function') {
+            entry = window.getPokemonTrainingPreviewVirtualEntry(entry, true);
+        }
         if (!cookingMaster) return { ok:false, entry, reason:'内置资料尚未加载' };
         const species = getEntrySpecies(entry);
         const level = getEntryLevel(entry);
@@ -26941,8 +26947,8 @@ async function calculateAndRenderWeeklyCooking() {
         const params = cookingMaster?.pokemonProducingParamsMap?.[pokedexId] || cookingMaster?.pokemonProducingParamsMap?.[String(pokedexId)] || {};
         return pokedexId ? { pokedexId, helpFrequencyBaseSec:Number(server.helpFrequencyBaseSec)||0, ingredientSplit:Number(params.ingredientSplit)||0, skillPercent:Number(params.skillPercent)||0, mainSkillId:Number(server.mainSkillId)||0, specialty:server.specialty||'' } : null;
     };
-    window.calculateCookingPokemonEstimate = function(entry) {
-        const result = calculateEntryIngredientProduction(entry);
+    window.calculateCookingPokemonEstimate = function(entry, options = {}) {
+        const result = calculateEntryIngredientProduction(entry, options);
         return result?.ok ? result : (result || { ok:false, reason:'无法推算' });
     };
     function getGraduationEntries() {
@@ -27259,6 +27265,201 @@ async function calculateAndRenderWeeklyCooking() {
     });
 })();
 </script>
+<!-- 出货库培养预览与个体有效效率 -->
+<script>
+(() => {
+    const LOG_ID = 'pokemon_training_preview_state_v1';
+    const TYPE = 'pokemon_training_preview_state';
+    const BERRY_BASE = {1:28,2:27,3:31,4:25,5:30,6:32,7:27,8:32,9:29,10:24,11:26,12:24,13:30,14:26,15:35,16:31,17:33,18:26};
+    const BERRY_LABEL = {1:'一般',2:'火',3:'水',4:'电',5:'草',6:'冰',7:'格斗',8:'毒',9:'地面',10:'飞行',11:'超能力',12:'虫',13:'岩石',14:'幽灵',15:'龙',16:'恶',17:'钢',18:'妖精'};
+    const ISLAND_FAVORITES = {cyan:[3,10,18],taupe:[2,9,13],snowdrop:[1,6,16],lapis:[5,7,11],oldgold:[4,14,17],amber:[8,12,15],cyan_ex:[3,10,18]};
+    const ISLANDS = [
+        ['greengrass','萌绿之岛（树果自选）'],['cyan','天青沙滩'],['taupe','灰褐洞窟'],['snowdrop','白花雪原'],
+        ['lapis','宝蓝湖畔'],['oldgold','黄金旧发电厂'],['greengrass_ex','萌绿之岛 EX（树果自选）'],['cyan_ex','天青沙滩 EX'],['amber','琥珀峡谷']
+    ];
+    let state = null;
+    let efficiencySearchText = '';
+    let efficiencySelectedOnly = false;
+    const efficiencyExpandedIds = new Set();
+
+    function emptyState() {
+        let island = 'greengrass', bonus = 0;
+        try { island = weeklyCookingState?.selectedIsland || island; bonus = Number(weeklyCookingState?.islandBonuses?.[island]) || 0; } catch (_) {}
+        return { updatedAt:'', selectedIds:[], items:{}, island, islandBonus:bonus, favorite:[...(ISLAND_FAVORITES[island]||[0,0,0])], goodCamp:false, recipeEnabled:true, idealEnabled:true };
+    }
+    function storageKey() { return currentCloudUser ? `sleep_training_preview_${currentCloudUser.id}` : 'sleep_training_preview_guest'; }
+    function normalize(raw={}) {
+        const def=emptyState(), items={};
+        Object.entries(raw.items||{}).forEach(([id,value])=>{
+            const level=Math.max(1,Math.min(100,Math.floor(Number(value?.targetLevel)||1)));
+            items[String(id)]={mode:value?.mode==='preview'?'preview':'current',targetLevel:level,targetSpecies:String(value?.targetSpecies||''),autoEvolutionSkill:value?.autoEvolutionSkill!==false};
+        });
+        return {...def,...raw,selectedIds:Array.isArray(raw.selectedIds)?raw.selectedIds.map(String):[],items,
+            favorite:Array.isArray(raw.favorite)?[0,1,2].map(i=>Number(raw.favorite[i])||0):def.favorite,
+            islandBonus:Math.max(0,Number(raw.islandBonus)||0),goodCamp:raw.goodCamp===true,
+            recipeEnabled:raw.recipeEnabled!==false,idealEnabled:raw.idealEnabled!==false};
+    }
+    function historyState() {
+        try { return (historyLogs||[]).filter(x=>x?.type===TYPE).sort((a,b)=>(Date.parse(b.updatedAt||'')||0)-(Date.parse(a.updatedAt||'')||0))[0] || null; } catch (_) { return null; }
+    }
+    function load() {
+        let local={}; try { local=JSON.parse(localStorage.getItem(storageKey())||'{}')||{}; } catch (_) {}
+        const cloud=historyState(), cloudState=cloud?.state||{}, localTime=Date.parse(local.updatedAt||'')||0, cloudTime=Date.parse(cloud?.updatedAt||cloudState.updatedAt||'')||0;
+        state=normalize(cloudTime>localTime?cloudState:local);
+        return state;
+    }
+    function save() {
+        state=normalize({...state,updatedAt:new Date().toISOString()});
+        try { localStorage.setItem(storageKey(),JSON.stringify(state)); } catch (_) {}
+        if(currentCloudUser && Array.isArray(historyLogs)) {
+            const old=historyState(), now=state.updatedAt;
+            historyLogs=historyLogs.filter(x=>x?.type!==TYPE);
+            historyLogs.push({id:LOG_ID,type:TYPE,state:JSON.parse(JSON.stringify(state)),createdAt:old?.createdAt||now,updatedAt:now});
+            try { saveHistoryToLocal(); if(typeof scheduleSaveHistoryToCloud==='function')scheduleSaveHistoryToCloud(); } catch (_) {}
+        }
+    }
+    function esc(value) { return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+    function cur(entry) { try { return getGraduationCurrent(entry)||{}; } catch (_) { return entry?.current||entry||{}; } }
+    function cap(entry) { try { return getGraduationCapture(entry)||{}; } catch (_) { return entry?.capture||entry||{}; } }
+    function species(entry) { const c=cur(entry),p=cap(entry); return c.name||c.currentName||p.name||''; }
+    function currentLevel(entry) { const value=Number(cur(entry).trainingLevel||cur(entry).level); return Number.isFinite(value)&&value>=1?Math.floor(value):0; }
+    function familyNames(name) {
+        const standard=pokemonDictionary?.[name]?.standard||name, meta=typeof EVOLUTION_STAGE_META!=='undefined'?EVOLUTION_STAGE_META[standard]:null;
+        if(!meta)return [standard];
+        return Object.entries(EVOLUTION_STAGE_META).filter(([,row])=>row?.line===meta.line).sort((a,b)=>(Number(a[1].stage)||0)-(Number(b[1].stage)||0)).map(([key])=>key);
+    }
+    function config(entry) {
+        load(); const id=String(entry?.id||''), base=state.items[id]||{}, name=species(entry), level=currentLevel(entry)||1;
+        return {mode:base.mode==='preview'?'preview':'current',targetLevel:Math.max(1,Number(base.targetLevel)||level),targetSpecies:familyNames(name).includes(base.targetSpecies)?base.targetSpecies:name,autoEvolutionSkill:base.autoEvolutionSkill!==false};
+    }
+    function virtualEntry(entry, enabled=true) {
+        if(!enabled)return entry;
+        const cfg=config(entry); if(cfg.mode!=='preview')return entry;
+        const clone=JSON.parse(JSON.stringify(entry||{})), source=cur(entry), sourceName=species(entry), targetName=cfg.targetSpecies||sourceName;
+        clone.current={...source,name:targetName,currentName:targetName,trainingLevel:cfg.targetLevel};
+        if(cfg.autoEvolutionSkill) {
+            const from=EVOLUTION_STAGE_META?.[sourceName],to=EVOLUTION_STAGE_META?.[targetName];
+            const steps=from&&to&&from.line===to.line?Math.max(0,(Number(to.stage)||0)-(Number(from.stage)||0)):0;
+            clone.current.mainSkillLevel=Math.min(8,Math.max(1,Number(source.mainSkillLevel)||1)+steps);
+        }
+        clone.__trainingPreview={sourceSpecies:sourceName,sourceLevel:currentLevel(entry),...cfg};
+        return clone;
+    }
+    window.getPokemonTrainingPreviewState=()=>load();
+    window.getPokemonTrainingPreviewVirtualEntry=(entry,enabled=true)=>virtualEntry(entry,enabled);
+    window.isPokemonTrainingPreviewEnabled=module=>{load();return module==='ideal'?state.idealEnabled!==false:module==='recipe'?state.recipeEnabled!==false:true;};
+    window.setPokemonTrainingPreviewModuleEnabled=(module,enabled)=>{load();if(module==='ideal')state.idealEnabled=!!enabled;if(module==='recipe')state.recipeEnabled=!!enabled;save();};
+
+    function berryMeta(estimate) {
+        try { return window.getCookingPokemonBerryMeta?.(estimate.pokedexId)||null; } catch (_) { return null; }
+    }
+    let recipeCoverageDemandCache = null;
+    function recipeCoverageIngredientKey(name) {
+        const raw=String(name||'').trim();
+        try { return typeof canonicalizeMealPrepIngredientName==='function' ? canonicalizeMealPrepIngredientName(raw) : raw; }
+        catch (_) { return raw; }
+    }
+    function getRecipeCoverageDemand() {
+        if (recipeCoverageDemandCache) return recipeCoverageDemandCache;
+        const demand={};
+        try {
+            if (typeof EMBEDDED_MEAL_ROWS !== 'undefined' && typeof INGREDIENT_NAME_BY_ID !== 'undefined') {
+                EMBEDDED_MEAL_ROWS.forEach(([mealId,,baseStrength,ingredients])=>{
+                    if (!(Number(baseStrength)>0)) return;
+                    (ingredients||[]).forEach(([ingredientId,amount])=>{
+                        const rawName=INGREDIENT_NAME_BY_ID[Number(ingredientId)], name=recipeCoverageIngredientKey(rawName), quantity=Number(amount)||0;
+                        if (name && quantity>(demand[name]?.amount||0)) demand[name]={amount:quantity,recipe:(typeof MEAL_NAME_BY_ID!=='undefined'&&MEAL_NAME_BY_ID[mealId])||`料理${mealId}`};
+                    });
+                });
+            } else if (typeof window.getCookingDatabaseMeals === 'function') {
+                ['curry','salad','dessert'].flatMap(type=>window.getCookingDatabaseMeals(type)||[]).forEach(meal=>(meal.ingredients||[]).forEach(item=>{
+                    const name=recipeCoverageIngredientKey(item.name),quantity=Number(item.amount)||0;
+                    if(name&&quantity>(demand[name]?.amount||0))demand[name]={amount:quantity,recipe:String(meal.name||'未知料理')};
+                }));
+            }
+        } catch (_) {}
+        recipeCoverageDemandCache=demand;
+        return demand;
+    }
+    function resultFor(entry) {
+        let effective=entry, estimate=null;
+        try {
+            effective=virtualEntry(entry,true);
+            estimate=window.calculateCookingPokemonEstimate?.(effective,{useTrainingPreview:false});
+        } catch (error) {
+            estimate={ok:false,reason:error?.message||'培养预览推算异常'};
+        }
+        if(!estimate?.ok)return {entry,effective,estimate};
+        const camp=state.goodCamp?1.2:1, helps=Number(estimate.helpsPerDay)*camp, triggers=Number(estimate.dailySkillTriggers)*camp;
+        const ingredients=Object.fromEntries(Object.entries(estimate.map||{}).map(([name,value])=>[name,Number(value)*camp]));
+        const coverageDemand=getRecipeCoverageDemand(),coverage={};
+        Object.entries(ingredients).forEach(([name,value])=>{
+            const row=coverageDemand[recipeCoverageIngredientKey(name)],dailyNeed=(Number(row?.amount)||0)*3;
+            if(dailyNeed>0)coverage[name]={percent:Number(value)/dailyNeed*100,maxPerMeal:Number(row.amount),dailyNeed,recipe:row.recipe};
+        });
+        const meta=berryMeta(estimate)||{berryId:0,baseCount:1}, c=cur(effective), text=JSON.stringify(c.subskills||{}).toLowerCase();
+        const bfs=/树果数量s|樹果數量s|berry finding s|\bbfs\b/.test(text), count=(Number(meta.baseCount)||1)+(bfs?1:0);
+        const piece=(BERRY_BASE[Number(meta.berryId)]||0)*Math.pow(1.025,Math.max(0,Number(estimate.level)-1));
+        const favorite=state.favorite.map(Number).includes(Number(meta.berryId))?2:1;
+        const berry=helps*Math.max(0,1-Number(estimate.ingredientRate||0))*count*piece*favorite*(1+Number(state.islandBonus||0)/100);
+        return {entry,effective,estimate,helps,triggers,ingredients,coverage,berry,berryId:Number(meta.berryId)||0,count,favorite:favorite===2};
+    }
+    function berrySelect(index) { return `<select onchange="updatePokemonEfficiencySetting('favorite${index}',this.value)" class="mt-1 w-full rounded-xl border border-cyan-200 bg-white p-2 text-xs font-black"><option value="0">未指定</option>${Object.entries(BERRY_LABEL).map(([id,label])=>`<option value="${id}" ${Number(state.favorite[index])===Number(id)?'selected':''}>${label}系</option>`).join('')}</select>`; }
+    function rowHtml(entry, inlineResult=null) {
+        const id=String(entry.id), cfg=config(entry), selected=state.selectedIds.includes(id), name=species(entry), level=currentLevel(entry), families=familyNames(name);
+        const nickname=typeof getGraduationDexNickname==='function'?getGraduationDexNickname(entry):name;
+        const searchValue=`${nickname} ${name}`.toLowerCase(), visible=(!efficiencySelectedOnly||selected)&&(!efficiencySearchText||searchValue.includes(efficiencySearchText.toLowerCase()));
+        const quickLevels=[30,50,60,70,80].map(n=>`<button type="button" data-efficiency-quick-id="${esc(id)}" data-efficiency-quick-level="${n}" onclick="window.handlePokemonEfficiencyQuickLevelClick(this);return false" class="touch-manipulation rounded-lg px-2 py-1 text-[9px] font-black ${cfg.mode==='preview'&&Number(cfg.targetLevel)===n?'bg-indigo-600 text-white':'border border-indigo-100 bg-indigo-50 text-indigo-700'}">Lv.${n}</button>`).join('');
+        const expanded=efficiencyExpandedIds.has(id);
+        return `<div data-efficiency-entry data-search="${esc(searchValue)}" data-selected="${selected?'1':'0'}" class="${visible?'':'hidden '}rounded-2xl border ${selected?'border-cyan-300 bg-cyan-50/60':'border-slate-200 bg-white'} p-3"><div class="flex items-center gap-2"><input type="checkbox" ${selected?'checked':''} onchange='togglePokemonEfficiencyEntry(${JSON.stringify(id)},this.checked)' class="h-5 w-5 shrink-0 accent-cyan-600"><div class="min-w-0 flex-1"><div class="truncate text-xs font-black text-slate-900">${esc(nickname)}</div><div class="text-[8px] font-bold text-slate-400">${esc(name)} · ${level?`当前 Lv.${level}`:'当前等级未录入'}</div></div>${selected?`<button type="button" onclick='togglePokemonEfficiencyInlineResult(${JSON.stringify(id)})' class="lg:hidden rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[9px] font-black text-cyan-700">${expanded?'收起结果':'查看结果'}</button>`:''}</div><div class="mt-2 grid grid-cols-3 gap-2"><label class="text-[8px] font-black text-slate-500">计算面板<select onchange='updatePokemonEfficiencyEntry(${JSON.stringify(id)},"mode",this.value)' class="mt-1 w-full rounded-lg border border-slate-200 bg-white p-1.5 text-[10px] font-black"><option value="current" ${cfg.mode==='current'?'selected':''}>当前状态</option><option value="preview" ${cfg.mode==='preview'?'selected':''}>培养预览</option></select></label><label class="text-[8px] font-black text-slate-500">预览等级<input type="number" min="1" max="100" value="${cfg.targetLevel}" ${cfg.mode==='preview'?'':'disabled'} onchange='updatePokemonEfficiencyEntry(${JSON.stringify(id)},"targetLevel",this.value)' class="mt-1 w-full rounded-lg border border-slate-200 bg-white p-1.5 text-[10px] font-black disabled:bg-slate-100"></label><label class="text-[8px] font-black text-slate-500">预览形态<select ${cfg.mode==='preview'?'':'disabled'} onchange='updatePokemonEfficiencyEntry(${JSON.stringify(id)},"targetSpecies",this.value)' class="mt-1 w-full rounded-lg border border-slate-200 bg-white p-1.5 text-[10px] font-black disabled:bg-slate-100">${families.map(x=>`<option value="${esc(x)}" ${cfg.targetSpecies===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label></div><div class="mt-2 flex items-center gap-1"><span class="mr-1 text-[8px] font-black text-slate-400">快捷预览</span>${quickLevels}</div>${cfg.mode==='preview'?`<label class="mt-2 flex items-center gap-2 text-[8px] font-bold text-indigo-700"><input type="checkbox" ${cfg.autoEvolutionSkill?'checked':''} onchange='updatePokemonEfficiencyEntry(${JSON.stringify(id)},"autoEvolutionSkill",this.checked)'>按向后进化次数自动提升主技能等级</label>`:''}${selected&&expanded&&inlineResult?`<div class="mt-3 border-t border-cyan-200 pt-3 lg:hidden">${resultHtml(inlineResult)}</div>`:''}</div>`;
+    }
+    function resultHtml(result, idSuffix='') {
+        const entry=result.entry, effective=result.effective, p=effective?.__trainingPreview, display=typeof getGraduationDexNickname==='function'?getGraduationDexNickname(entry):species(entry);
+        if(!result.estimate?.ok)return `<div class="rounded-2xl border border-amber-200 bg-amber-50 p-3"><div class="font-black text-slate-900">${esc(display)}</div><div class="mt-1 text-[9px] font-bold text-amber-700">无法推算：${esc(result.estimate?.reason||'面板资料不完整')}</div></div>`;
+        const ingredientEntries=Object.entries(result.ingredients), maxIngredientOutput=Math.max(0,...ingredientEntries.map(([,value])=>Number(value)||0));
+        const ingredientText=ingredientEntries.map(([name,value])=>{const row=result.coverage?.[name],isPrimary=maxIngredientOutput>0&&Math.abs(Number(value)-maxIngredientOutput)<0.001;return `<div class="mb-1 rounded-lg bg-white/70 px-2 py-1 text-left last:mb-0"><div class="flex items-center justify-between gap-2"><span>${esc(name)}${isPrimary?'<em class="ml-1 not-italic text-[7px] font-black text-emerald-600">主产</em>':'<em class="ml-1 not-italic text-[7px] font-bold text-slate-400">副产</em>'}</span><b>${Number(value).toFixed(1)}</b></div>${row?`<div class="mt-0.5 text-[7px] font-bold text-emerald-700" title="最高单顿需求：${esc(row.recipe)} ${row.maxPerMeal}个">食谱覆盖率 <b>${row.percent.toFixed(1)}%</b> · ${row.maxPerMeal}×3/日</div>`:'<div class="mt-0.5 text-[7px] font-bold text-slate-400">暂无完整食谱需求可比</div>'}</div>`;}).join('');
+        const current=cur(effective), skill=window.getWeeklyCookingMainSkillInfo?.(species(effective));
+        return `<div id="pokemon-efficiency-result-${esc(String(entry.id))}" class="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"><div class="flex items-start justify-between gap-2"><div><div class="font-black text-slate-900">${esc(display)}</div><div class="text-[8px] font-bold text-slate-400">${esc(species(effective))} Lv.${result.estimate.level}${p?` · 预览自 ${esc(p.sourceSpecies)} Lv.${p.sourceLevel||'?'}`:' · 当前面板'}</div></div><span class="rounded-full bg-indigo-50 px-2 py-1 text-[8px] font-black text-indigo-700">${esc(skill?.label||'主技能')} Lv.${Number(current.mainSkillLevel)||1}</span></div><div class="mt-3 grid grid-cols-3 gap-2 text-center"><div class="rounded-xl bg-emerald-50 p-2"><div class="text-[8px] font-black text-emerald-600">食材期望 / 24h</div><div class="mt-1 text-[9px] font-bold text-emerald-900">${ingredientText||'无'}</div></div><div class="rounded-xl bg-violet-50 p-2"><div class="text-[8px] font-black text-violet-600">技能发动期望 / 24h</div><div class="mt-1 text-sm font-black text-violet-900">${result.triggers.toFixed(2)} 次</div></div><div class="rounded-xl bg-amber-50 p-2"><div class="text-[8px] font-black text-amber-600">树果能量期望 / 24h</div><div class="mt-1 text-sm font-black text-amber-900">${Math.round(result.berry).toLocaleString()}</div><div class="text-[7px] font-bold text-amber-600">${BERRY_LABEL[result.berryId]||'未知'}系 · ${result.favorite?'喜爱×2':'非喜爱'} · 每次${result.count}颗</div></div></div><div class="mt-2 text-[8px] font-bold text-slate-400">满体基准：${result.helps.toFixed(1)}次帮忙/日${state.goodCamp?'，已计露营券速度增益':''}。本页用于横向比较；理论最优策略仍会按其场景处理岛屿与队伍资源。</div></div>`;
+    }
+    function render() {
+        load(); let modal=document.getElementById('pokemon-efficiency-modal');
+        if(!modal){modal=document.createElement('div');modal.id='pokemon-efficiency-modal';modal.className='fixed inset-0 z-[115] hidden overflow-y-auto bg-slate-950/60 p-2 backdrop-blur-sm sm:p-5';document.body.appendChild(modal);}
+        const entries=Array.isArray(graduationDex)?graduationDex:[], selected=entries.filter(x=>state.selectedIds.includes(String(x.id))), results=selected.map(resultFor);
+        const resultMap=new Map(results.map(x=>[String(x.entry.id),x]));
+        const emptyResult='<div class="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-center text-sm font-bold text-slate-400">请先勾选要查看的宝可梦。</div>';
+        modal.innerHTML=`<div class="mx-auto my-2 w-full max-w-7xl overflow-hidden rounded-3xl bg-slate-50 shadow-2xl"><header class="sticky top-0 z-30 flex items-center justify-between bg-gradient-to-r from-cyan-700 to-indigo-700 px-4 py-3 text-white"><div><div class="text-lg font-black">📈 出货个体有效效率</div><div class="text-[9px] font-bold text-white/75">左侧随时改面板，右侧同步看结果；手机可在个体卡片内就地展开</div></div><button onclick="closePokemonEfficiencyModal()" class="h-10 w-10 rounded-full bg-white/15 text-xl font-black">×</button></header><div class="p-3 sm:p-5"><details class="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-3"><summary class="cursor-pointer text-xs font-black text-cyan-900">计算环境与联动设置</summary><div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-6"><label class="text-[8px] font-black text-slate-500">树果环境<select onchange="updatePokemonEfficiencySetting('island',this.value)" class="mt-1 w-full rounded-xl border border-cyan-200 bg-white p-2 text-xs font-black">${ISLANDS.map(([id,label])=>`<option value="${id}" ${state.island===id?'selected':''}>${label}</option>`).join('')}</select></label><label class="text-[8px] font-black text-slate-500">岛屿加成 %<input type="number" min="0" max="999" value="${state.islandBonus}" onchange="updatePokemonEfficiencySetting('islandBonus',this.value)" class="mt-1 w-full rounded-xl border border-cyan-200 bg-white p-2 text-xs font-black"></label><label class="text-[8px] font-black text-slate-500">喜爱树果①${berrySelect(0)}</label><label class="text-[8px] font-black text-slate-500">喜爱树果②${berrySelect(1)}</label><label class="text-[8px] font-black text-slate-500">喜爱树果③${berrySelect(2)}</label><label class="flex items-end"><span class="flex w-full items-center gap-2 rounded-xl border border-cyan-200 bg-white p-2 text-[9px] font-black text-cyan-800"><input type="checkbox" ${state.goodCamp?'checked':''} onchange="updatePokemonEfficiencySetting('goodCamp',this.checked)">开露营卷</span></label></div><div class="mt-2 flex flex-wrap gap-2"><label class="rounded-xl bg-white px-3 py-2 text-[9px] font-black text-emerald-700"><input type="checkbox" ${state.recipeEnabled?'checked':''} onchange="updatePokemonEfficiencySetting('recipeEnabled',this.checked)"> 食谱适配度采用培养预览</label><label class="rounded-xl bg-white px-3 py-2 text-[9px] font-black text-indigo-700"><input type="checkbox" ${state.idealEnabled?'checked':''} onchange="updatePokemonEfficiencySetting('idealEnabled',this.checked)"> 理论最优策略采用培养预览</label></div></details><div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]"><section class="rounded-2xl border border-slate-200 bg-white p-3"><div class="sticky top-[68px] z-20 -mx-1 mb-3 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur"><div class="flex items-center justify-between gap-2"><div class="text-xs font-black text-slate-800">选择与培养预览 <span class="text-cyan-600">${selected.length}/${entries.length}</span></div><div class="flex gap-1"><button onclick="selectAllPokemonEfficiencyEntries(true)" class="rounded-lg bg-slate-900 px-2 py-1 text-[8px] font-black text-white">全选</button><button onclick="selectAllPokemonEfficiencyEntries(false)" class="rounded-lg border border-slate-200 px-2 py-1 text-[8px] font-black text-slate-500">清空</button></div></div><div class="mt-2 flex gap-2"><input value="${esc(efficiencySearchText)}" oninput="filterPokemonEfficiencyEntries(this.value)" placeholder="搜索当前名或捕捉名" class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none focus:border-cyan-400"><label class="flex shrink-0 items-center gap-1 rounded-xl border border-slate-200 px-2 text-[9px] font-black text-slate-600"><input type="checkbox" ${efficiencySelectedOnly?'checked':''} onchange="setPokemonEfficiencySelectedOnly(this.checked)">只看已选</label></div></div><div class="pokemon-efficiency-selection-scroll grid max-h-[62vh] gap-2 overflow-y-auto pr-1">${entries.map(x=>rowHtml(x,resultMap.get(String(x.id)))).join('')||'<div class="text-sm font-bold text-slate-400">出货库暂无个体。</div>'}</div></section><section class="hidden rounded-2xl border border-slate-200 bg-slate-100/70 p-3 lg:block"><div class="sticky top-[68px] z-20 mb-3 rounded-2xl border border-indigo-100 bg-white/95 p-2 shadow-sm backdrop-blur"><div class="text-xs font-black text-slate-800">效率结果 · 全天满体基准</div><div class="mt-2 flex gap-1 overflow-x-auto pb-1">${selected.map(x=>`<button onclick='scrollToPokemonEfficiencyResult(${JSON.stringify(String(x.id))})' class="shrink-0 rounded-full bg-indigo-50 px-2 py-1 text-[8px] font-black text-indigo-700">${esc(typeof getGraduationDexNickname==='function'?getGraduationDexNickname(x):species(x))}</button>`).join('')}</div></div><div class="pokemon-efficiency-results-scroll max-h-[62vh] space-y-2 overflow-y-auto pr-1">${results.map(resultHtml).join('')||emptyResult}</div></section></div><div class="sticky bottom-2 z-20 mt-3 flex justify-center lg:hidden"><button onclick="openPokemonEfficiencyMobileResults()" class="rounded-full bg-gradient-to-r from-cyan-600 to-indigo-600 px-5 py-3 text-xs font-black text-white shadow-xl">查看全部已选结果（${selected.length}）</button></div></div></div>`;
+        if (!modal.__efficiencyQuickLevelBound) {
+            modal.addEventListener('click', event=>{
+                const button=event.target?.closest?.('[data-efficiency-quick-level]');
+                if(!button||!modal.contains(button))return;
+                event.preventDefault();event.stopPropagation();
+                window.setPokemonEfficiencyQuickLevel(button.dataset.efficiencyQuickId,Number(button.dataset.efficiencyQuickLevel));
+            });
+            modal.__efficiencyQuickLevelBound=true;
+        }
+        modal.classList.remove('hidden'); document.body.classList.add('overflow-hidden');
+        requestAnimationFrame(()=>filterPokemonEfficiencyEntries(efficiencySearchText));
+    }
+    window.openPokemonEfficiencyModal=render;
+    window.closePokemonEfficiencyModal=()=>{document.getElementById('pokemon-efficiency-modal')?.classList.add('hidden');document.body.classList.remove('overflow-hidden');};
+    function rerenderPreservingPosition() {
+        const modal=document.getElementById('pokemon-efficiency-modal'), modalTop=modal?.scrollTop||0, listTop=modal?.querySelector('.pokemon-efficiency-selection-scroll')?.scrollTop||0, resultTop=modal?.querySelector('.pokemon-efficiency-results-scroll')?.scrollTop||0;
+        render(); requestAnimationFrame(()=>{const next=document.getElementById('pokemon-efficiency-modal');if(!next)return;next.scrollTop=modalTop;const list=next.querySelector('.pokemon-efficiency-selection-scroll');if(list)list.scrollTop=listTop;const results=next.querySelector('.pokemon-efficiency-results-scroll');if(results)results.scrollTop=resultTop;});
+    }
+    window.togglePokemonEfficiencyEntry=(id,checked)=>{load();state.selectedIds=checked?[...new Set([...state.selectedIds,String(id)])]:state.selectedIds.filter(x=>x!==String(id));if(!checked)efficiencyExpandedIds.delete(String(id));save();rerenderPreservingPosition();};
+    window.selectAllPokemonEfficiencyEntries=checked=>{load();state.selectedIds=checked?(graduationDex||[]).map(x=>String(x.id)):[];save();render();};
+    window.updatePokemonEfficiencyEntry=(id,field,value)=>{load();const entry=(graduationDex||[]).find(x=>String(x.id)===String(id));if(!entry)return;const old=config(entry),next={...old};if(field==='targetLevel')next[field]=Math.max(1,Math.min(100,Math.floor(Number(value)||1)));else if(field==='autoEvolutionSkill')next[field]=!!value;else next[field]=String(value);state.items[String(id)]=next;save();rerenderPreservingPosition();};
+    window.setPokemonEfficiencyQuickLevel=(id,level)=>{load();const key=String(id),entry=(graduationDex||[]).find(x=>String(x.id)===key);if(!entry)return;const previous=state.items[key]||{},name=species(entry),families=familyNames(name);state.items[key]={mode:'preview',targetLevel:Math.max(1,Math.min(100,Math.floor(Number(level)||1))),targetSpecies:families.includes(previous.targetSpecies)?previous.targetSpecies:name,autoEvolutionSkill:previous.autoEvolutionSkill!==false};if(!state.selectedIds.includes(key))state.selectedIds.push(key);efficiencyExpandedIds.add(key);save();rerenderPreservingPosition();};
+    window.handlePokemonEfficiencyQuickLevelClick=button=>{if(!button)return false;button.dataset.efficiencyQuickHandled='1';window.setPokemonEfficiencyQuickLevel(button.dataset.efficiencyQuickId,Number(button.dataset.efficiencyQuickLevel));return false;};
+    window.togglePokemonEfficiencyInlineResult=id=>{const key=String(id);efficiencyExpandedIds.has(key)?efficiencyExpandedIds.delete(key):efficiencyExpandedIds.add(key);rerenderPreservingPosition();};
+    window.filterPokemonEfficiencyEntries=value=>{efficiencySearchText=String(value||'').trim().toLowerCase();document.querySelectorAll('#pokemon-efficiency-modal [data-efficiency-entry]').forEach(node=>{const matchesSearch=!efficiencySearchText||String(node.dataset.search||'').includes(efficiencySearchText),matchesSelected=!efficiencySelectedOnly||node.dataset.selected==='1';node.classList.toggle('hidden',!(matchesSearch&&matchesSelected));});};
+    window.setPokemonEfficiencySelectedOnly=value=>{efficiencySelectedOnly=!!value;filterPokemonEfficiencyEntries(efficiencySearchText);};
+    window.scrollToPokemonEfficiencyResult=id=>document.querySelector(`.pokemon-efficiency-results-scroll #pokemon-efficiency-result-${CSS.escape(String(id))}`)?.scrollIntoView({behavior:'smooth',block:'start'});
+    window.openPokemonEfficiencyMobileResults=()=>{load();const selected=(graduationDex||[]).filter(x=>state.selectedIds.includes(String(x.id))),results=selected.map(resultFor);let sheet=document.getElementById('pokemon-efficiency-mobile-results');if(!sheet){sheet=document.createElement('div');sheet.id='pokemon-efficiency-mobile-results';sheet.className='fixed inset-0 z-[125] bg-slate-950/60 p-2 backdrop-blur-sm lg:hidden';document.body.appendChild(sheet);}sheet.innerHTML=`<div class="absolute inset-x-2 bottom-2 max-h-[88vh] overflow-hidden rounded-3xl bg-slate-100 shadow-2xl"><div class="sticky top-0 z-10 flex items-center justify-between bg-gradient-to-r from-cyan-700 to-indigo-700 px-4 py-3 text-white"><div><div class="font-black">已选个体效率（${selected.length}）</div><div class="text-[8px] font-bold text-white/70">关闭后仍停留在原来的选择位置</div></div><button onclick="document.getElementById('pokemon-efficiency-mobile-results')?.remove()" class="h-9 w-9 rounded-full bg-white/15 text-xl font-black">×</button></div><div class="flex gap-1 overflow-x-auto bg-white p-2">${selected.map(x=>`<button onclick='scrollToPokemonEfficiencyMobileResult(${JSON.stringify(String(x.id))})' class="shrink-0 rounded-full bg-indigo-50 px-2 py-1 text-[8px] font-black text-indigo-700">${esc(typeof getGraduationDexNickname==='function'?getGraduationDexNickname(x):species(x))}</button>`).join('')}</div><div class="max-h-[72vh] space-y-2 overflow-y-auto p-3">${results.map(resultHtml).join('')||'<div class="p-8 text-center text-sm font-bold text-slate-400">尚未选择个体。</div>'}</div></div>`;};
+    window.scrollToPokemonEfficiencyMobileResult=id=>document.querySelector(`#pokemon-efficiency-mobile-results #pokemon-efficiency-result-${CSS.escape(String(id))}`)?.scrollIntoView({behavior:'smooth',block:'start'});
+    window.updatePokemonEfficiencySetting=(field,value)=>{load();if(field.startsWith('favorite'))state.favorite[Number(field.slice(-1))]=Number(value)||0;else if(field==='island'){state.island=String(value);if(ISLAND_FAVORITES[state.island])state.favorite=[...ISLAND_FAVORITES[state.island]];try{state.islandBonus=Number(weeklyCookingState?.islandBonuses?.[state.island])||state.islandBonus||0;}catch(_){}}else if(['goodCamp','recipeEnabled','idealEnabled'].includes(field))state[field]=!!value;else state[field]=Number(value)||0;save();render();};
+})();
+</script>
 <!-- 食谱 × Box 适配度（单顿独立分析） -->
 <script>
 (() => {
@@ -27277,12 +27478,13 @@ async function calculateAndRenderWeeklyCooking() {
         2001:'呆呆兽尾巴的胡椒沙拉',2002:'蘑菇孢子沙拉',2003:'拨雪凯撒沙拉',2004:'贪吃鬼土豆沙拉',2005:'湿润豆腐沙拉',2006:'蛮力豪迈沙拉',2007:'豆制火腿沙拉',2008:'好眠番茄沙拉',2009:'哞哞起司番茄沙拉',2010:'心情不定肉沙拉淋巧克力酱',2011:'过热沙拉',2012:'特选苹果沙拉',2013:'免疫葱花沙拉',2014:'迷人苹果起司沙拉',2015:'忍者沙拉',2016:'热风豆腐沙拉',2017:'萌绿沙拉',2018:'冥想香甜沙拉',2019:'乱击玉米沙拉',2020:'十字切碎丁沙拉',2021:'不服输咖啡沙拉',2022:'落英缤纷含羞草蛋沙拉',2023:'苹果酸奶沙拉',2024:'碎裂牛油果沙拉',2025:'重踏牛油果酱脆片',2026:'大块满满热水沙拉',
         3001:'熟成甜薯烧',3002:'不屈姜饼',3003:'特选苹果汁',3004:'手制劲爽汽水',3005:'火花姜茶',3006:'胖丁百汇布丁',3007:'恶魔之吻水果牛奶',3008:'祈愿苹果派',3009:'橙梦排毒茶',3010:'甜甜香气巧克力蛋糕',3011:'哞哞热鲜奶',3012:'轻装豆香蛋糕',3013:'活力蛋白饮',3014:'我行我素蔬菜汁',3015:'大马拉萨达',3016:'大力士豆香甜甜圈',3017:'大爆炸爆米花',3018:'茶会玉米司康',3019:'花瓣舞巧克力塔',3020:'花之礼马卡龙',3021:'早起咖啡冻',3022:'电光香料可乐',3023:'破格玉米香提拉米苏',3024:'土王闪电泡芙',3025:'心跳加速鬼面松饼',3026:'青草搅拌器冰沙',3027:'采蜜巧克力格子松饼'
     };
-    let state = { type:'curry', dayKind:'weekday', healerId:'auto', basePot:57, goodCamp:false, cookingBoost:false, recipeLevels:{} };
+    let state = { type:'curry', dayKind:'weekday', healerId:'auto', basePot:57, goodCamp:false, cookingBoost:false, useTrainingPreview:true, recipeLevels:{} };
     let lastResults = [];
 
     function loadState() {
         try { state = Object.assign(state, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); } catch (_) {}
         state.recipeLevels = state.recipeLevels && typeof state.recipeLevels === 'object' ? state.recipeLevels : {};
+        if(typeof window.isPokemonTrainingPreviewEnabled==='function')state.useTrainingPreview=window.isPokemonTrainingPreviewEnabled('recipe')!==false;
         if (typeof weeklyCookingState !== 'undefined') {
             state.basePot = Number(state.basePot) || Number(weeklyCookingState.basePot) || 57;
             if (state.goodCamp == null) state.goodCamp = !!weeklyCookingState.goodCamp;
@@ -27299,13 +27501,14 @@ async function calculateAndRenderWeeklyCooking() {
             ingredients:(ingredients||[]).map(([ingredientId,amount]) => ({ name:canonical(INGREDIENT_BY_ID[ingredientId] || `食材${ingredientId}`), amount:Number(amount)||0 }))
         })).filter(item => item.type && item.baseStrength > 0 && item.ingredients.length);
     }
-    function roster() {
+    function roster(useTrainingPreview = state.useTrainingPreview !== false) {
         const list = typeof graduationDex !== 'undefined' && Array.isArray(graduationDex) ? graduationDex : [];
         return list.map(item => {
             const cap = typeof getGraduationCapture === 'function' ? getGraduationCapture(item) : (item.capture || item);
-            const cur = typeof getGraduationCurrent === 'function' ? getGraduationCurrent(item) : (item.current || item);
+            const calculationItem = useTrainingPreview && typeof window.getPokemonTrainingPreviewVirtualEntry === 'function' ? window.getPokemonTrainingPreviewVirtualEntry(item, true) : item;
+            const cur = typeof getGraduationCurrent === 'function' ? getGraduationCurrent(calculationItem) : (calculationItem.current || calculationItem);
             const species = cur.name || cap.name || '';
-            const estimate = typeof window.calculateCookingPokemonEstimate === 'function' ? window.calculateCookingPokemonEstimate(item) : null;
+            const estimate = typeof window.calculateCookingPokemonEstimate === 'function' ? window.calculateCookingPokemonEstimate(calculationItem, {useTrainingPreview:false}) : null;
             if (!estimate?.ok) return null;
             const skill = typeof getWeeklyCookingMainSkillInfo === 'function' ? getWeeklyCookingMainSkillInfo(species) : {key:'other',label:'其他'};
             // 爆锅手未补录技能等级时沿用本功能约定：按满级(+10%)估算；
@@ -27316,7 +27519,7 @@ async function calculateAndRenderWeeklyCooking() {
             const ingredientRates = {};
             Object.entries(estimate.map || {}).forEach(([name,value]) => ingredientRates[canonical(name)] = (ingredientRates[canonical(name)]||0) + Number(value)*campFactor/24);
             return {
-                id:String(item.id), item, species, nickname:typeof getGraduationDexNickname === 'function' ? getGraduationDexNickname(item) : species,
+                id:String(item.id), item:calculationItem, sourceItem:item, species, nickname:typeof getGraduationDexNickname === 'function' ? getGraduationDexNickname(item) : species,
                 skill, mainSkillLevel, ingredientRates,
                 triggersPerHour:(Number(estimate.dailySkillTriggers)||0)*campFactor/24,
                 level:Number(estimate.level)||Number(cur.level)||1,
@@ -27530,7 +27733,7 @@ async function calculateAndRenderWeeklyCooking() {
         let modal=document.getElementById('recipe-box-fit-modal');
         if(!modal){modal=document.createElement('div');modal.id='recipe-box-fit-modal';modal.className='fixed inset-0 z-[100] hidden bg-slate-950/60 backdrop-blur-sm p-2 sm:p-5 overflow-y-auto';document.body.appendChild(modal);}
         const rows=roster(), healers=healerChoices(rows).sort((a,b)=>healerPower(b)-healerPower(a));
-        modal.innerHTML=`<div class="mx-auto my-2 w-full max-w-6xl overflow-hidden rounded-3xl bg-white shadow-2xl"><div class="sticky top-0 z-10 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-cyan-600 px-4 py-3 text-white"><div><div class="text-lg font-black">🍽️ 食谱 × Box 适配度</div><div class="text-[9px] font-bold text-white/80">比较做出一顿料理需要占用多少宝可梦工时；功能位顺带产出的有效食材也会计算。</div></div><button onclick="closeRecipeBoxFitModal()" class="h-10 w-10 rounded-full bg-white/15 text-xl font-black hover:bg-white/25">×</button></div><div class="p-3 sm:p-5"><div class="grid grid-cols-2 md:grid-cols-6 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3"><label class="text-[9px] font-black text-slate-500">料理类型<select onchange="updateRecipeBoxFit('type',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black">${Object.entries(TYPE_META).map(([key,meta])=>`<option value="${key}" ${state.type===key?'selected':''}>${meta.icon} ${meta.label}</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">用餐日<select onchange="updateRecipeBoxFit('dayKind',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"><option value="weekday" ${state.dayKind==='weekday'?'selected':''}>周一～周六</option><option value="sunday" ${state.dayKind==='sunday'?'selected':''}>周日</option></select></label><label class="text-[9px] font-black text-slate-500">基础锅容量<input type="number" min="1" value="${state.basePot}" onchange="updateRecipeBoxFit('basePot',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500 col-span-2">固定奶妈<select onchange="updateRecipeBoxFit('healerId',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"><option value="auto" ${state.healerId==='auto'?'selected':''}>自动选择最强奶妈（推荐）</option><option value="none" ${state.healerId==='none'?'selected':''}>不固定奶妈</option>${healers.map(row=>`<option value="${escapeHtmlAttr(row.id)}" ${String(state.healerId)===row.id?'selected':''}>${escapeHtml(row.nickname)} · ${escapeHtml(row.species)}</option>`).join('')}</select></label><div class="flex flex-col justify-end gap-1"><label class="flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-2 py-1.5 text-[9px] font-black"><input type="checkbox" ${state.goodCamp?'checked':''} onchange="updateRecipeBoxFit('goodCamp',this.checked)">露营卷</label><label class="flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-2 py-1.5 text-[9px] font-black"><input type="checkbox" ${state.cookingBoost?'checked':''} onchange="updateRecipeBoxFit('cookingBoost',this.checked)">料理周×1.5</label></div></div><div class="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[9px] font-bold text-indigo-700"><i class="fa-solid fa-circle-info"></i> 所有主技能为“料理暴击率提升”的个体（包括咚咚鼠、巨沼怪等）都会按 Box 真实面板枚举0～7次技能目标，也可同时使用多只。其站场食材照常抵扣。本模块只比较单顿料理能量与宝可梦工时，不计算树果能量，因此无需填写岛屿喜爱树果；包含树果机会成本的整周决策请使用“理论最优策略”。露营卷同时增加帮忙速度与锅容量。</div><div id="recipe-box-fit-results" class="mt-3"></div></div></div>`;
+        modal.innerHTML=`<div class="mx-auto my-2 w-full max-w-6xl overflow-hidden rounded-3xl bg-white shadow-2xl"><div class="sticky top-0 z-10 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-cyan-600 px-4 py-3 text-white"><div><div class="text-lg font-black">🍽️ 食谱 × Box 适配度</div><div class="text-[9px] font-bold text-white/80">比较做出一顿料理需要占用多少宝可梦工时；功能位顺带产出的有效食材也会计算。</div></div><button onclick="closeRecipeBoxFitModal()" class="h-10 w-10 rounded-full bg-white/15 text-xl font-black hover:bg-white/25">×</button></div><div class="p-3 sm:p-5"><div class="grid grid-cols-2 md:grid-cols-6 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3"><label class="text-[9px] font-black text-slate-500">料理类型<select onchange="updateRecipeBoxFit('type',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black">${Object.entries(TYPE_META).map(([key,meta])=>`<option value="${key}" ${state.type===key?'selected':''}>${meta.icon} ${meta.label}</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">用餐日<select onchange="updateRecipeBoxFit('dayKind',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"><option value="weekday" ${state.dayKind==='weekday'?'selected':''}>周一～周六</option><option value="sunday" ${state.dayKind==='sunday'?'selected':''}>周日</option></select></label><label class="text-[9px] font-black text-slate-500">基础锅容量<input type="number" min="1" value="${state.basePot}" onchange="updateRecipeBoxFit('basePot',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500 col-span-2">固定奶妈<select onchange="updateRecipeBoxFit('healerId',this.value)" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-black"><option value="auto" ${state.healerId==='auto'?'selected':''}>自动选择最强奶妈（推荐）</option><option value="none" ${state.healerId==='none'?'selected':''}>不固定奶妈</option>${healers.map(row=>`<option value="${escapeHtmlAttr(row.id)}" ${String(state.healerId)===row.id?'selected':''}>${escapeHtml(row.nickname)} · ${escapeHtml(row.species)}</option>`).join('')}</select></label><div class="flex flex-col justify-end gap-1"><label class="flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-2 py-1.5 text-[9px] font-black"><input type="checkbox" ${state.goodCamp?'checked':''} onchange="updateRecipeBoxFit('goodCamp',this.checked)">露营卷</label><label class="flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-2 py-1.5 text-[9px] font-black"><input type="checkbox" ${state.cookingBoost?'checked':''} onchange="updateRecipeBoxFit('cookingBoost',this.checked)">料理周×1.5</label><label class="flex items-center gap-2 rounded-xl bg-cyan-50 border border-cyan-200 px-2 py-1.5 text-[9px] font-black text-cyan-800"><input type="checkbox" ${state.useTrainingPreview!==false?'checked':''} onchange="updateRecipeBoxFit('useTrainingPreview',this.checked)">采用培养预览</label></div></div><div class="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[9px] font-bold text-indigo-700"><i class="fa-solid fa-circle-info"></i> 所有主技能为“料理暴击率提升”的个体（包括咚咚鼠、巨沼怪等）都会按 Box 真实面板枚举0～7次技能目标，也可同时使用多只。其站场食材照常抵扣。培养预览来自“出货个体有效效率”，仅虚拟改变计算面板，不会改写出货库。<button onclick="closeRecipeBoxFitModal();openPokemonEfficiencyModal()" class="ml-1 underline">管理培养预览</button></div><div id="recipe-box-fit-results" class="mt-3"></div></div></div>`;
         modal.classList.remove('hidden'); document.body.classList.add('overflow-hidden'); renderResults();
     }
     window.__recipeBoxFitApi={
@@ -27539,7 +27742,8 @@ async function calculateAndRenderWeeklyCooking() {
             const previous=Object.assign({},state,{recipeLevels:Object.assign({},state.recipeLevels||{})});
             Object.assign(state,options||{});
             if(options.recipeLevels)state.recipeLevels=Object.assign({},options.recipeLevels);
-            const rows=roster(), healer=selectedHealer(rows);
+            if(options.useTrainingPreview==null)state.useTrainingPreview=window.isPokemonTrainingPreviewEnabled?.('recipe')!==false;
+            const rows=roster(state.useTrainingPreview!==false), healer=selectedHealer(rows);
             const selected=recipes().filter(item=>!state.type||item.type===state.type);
             const results=selected.map(recipe=>bestForRecipe(recipe,rows,healer));
             state=previous;
@@ -27551,7 +27755,7 @@ async function calculateAndRenderWeeklyCooking() {
     };
     window.openRecipeBoxFitModal=function(){loadState();renderModal();};
     window.closeRecipeBoxFitModal=function(){const modal=document.getElementById('recipe-box-fit-modal');if(modal)modal.classList.add('hidden');document.body.classList.remove('overflow-hidden');};
-    window.updateRecipeBoxFit=function(field,value){state[field]=['goodCamp','cookingBoost'].includes(field)?!!value:(field==='basePot'?Math.max(1,Number(value)||1):value);saveState();renderModal();};
+    window.updateRecipeBoxFit=function(field,value){state[field]=['goodCamp','cookingBoost','useTrainingPreview'].includes(field)?!!value:(field==='basePot'?Math.max(1,Number(value)||1):value);if(field==='useTrainingPreview')window.setPokemonTrainingPreviewModuleEnabled?.('recipe',!!value);saveState();renderModal();};
     window.updateRecipeBoxFitLevel=function(recipeId,value){state.recipeLevels[recipeId]=Math.max(1,Math.min(70,Math.floor(Number(value)||1)));saveState();renderResults();};
 })();
 </script>
@@ -27572,12 +27776,12 @@ async function calculateAndRenderWeeklyCooking() {
     };
     window.getCookingBerryTypeLabels=function(){return {...BERRY_TYPE};};
     const BERRY_BURST={1:[11,1],2:[14,2],3:[21,2],4:[24,3],5:[27,4],6:[30,5]};
-    let state={island:'greengrass',type:'curry',favorite:[0,0,0],healerId:'auto',basePot:57,goodCamp:false,cookingBoost:false,useMealPrepStock:false,weekdayMeals:18,sundayMeals:3,islandBonus:0,deadlineHours:null};
+    let state={island:'greengrass',type:'curry',favorite:[0,0,0],healerId:'auto',basePot:57,goodCamp:false,cookingBoost:false,useMealPrepStock:false,useTrainingPreview:true,weekdayMeals:18,sundayMeals:3,islandBonus:0,deadlineHours:null};
     let lastAudit=null;
 
     const h=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const num=(value,d=1)=>Number.isFinite(Number(value))?Number(value).toFixed(d):'—';
-    function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw)state=Object.assign(state,JSON.parse(raw));else if(typeof weeklyCookingState!=='undefined'){state.island=weeklyCookingState.selectedIsland||state.island;state.basePot=Number(weeklyCookingState.basePot)||state.basePot;state.goodCamp=!!weeklyCookingState.goodCamp;state.cookingBoost=!!weeklyCookingState.cookingWeekBoost;}}catch(_){} state.favorite=Array.isArray(state.favorite)?state.favorite:[0,0,0];}
+    function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw)state=Object.assign(state,JSON.parse(raw));else if(typeof weeklyCookingState!=='undefined'){state.island=weeklyCookingState.selectedIsland||state.island;state.basePot=Number(weeklyCookingState.basePot)||state.basePot;state.goodCamp=!!weeklyCookingState.goodCamp;state.cookingBoost=!!weeklyCookingState.cookingWeekBoost;}}catch(_){} state.favorite=Array.isArray(state.favorite)?state.favorite:[0,0,0];if(typeof window.isPokemonTrainingPreviewEnabled==='function')state.useTrainingPreview=window.isPokemonTrainingPreviewEnabled('ideal')!==false;}
     function save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}catch(_){}}
     function syncDefaults(){
         try{
@@ -27654,7 +27858,7 @@ async function calculateAndRenderWeeklyCooking() {
         const prevIsland=typeof weeklyCookingState!=='undefined'?weeklyCookingState.selectedIsland:null;
         let prevBonus;
         try{if(typeof weeklyCookingState!=='undefined'){weeklyCookingState.selectedIsland=state.island;weeklyCookingState.islandBonuses=weeklyCookingState.islandBonuses||{};prevBonus=weeklyCookingState.islandBonuses[state.island];weeklyCookingState.islandBonuses[state.island]=Number(state.islandBonus)||0;}}catch(_){}
-        const out=api.run({type:state.type,dayKind,healerId:state.healerId,basePot:Number(state.basePot)||57,goodCamp:!!state.goodCamp,cookingBoost:!!state.cookingBoost});
+        const out=api.run({type:state.type,dayKind,healerId:state.healerId,basePot:Number(state.basePot)||57,goodCamp:!!state.goodCamp,cookingBoost:!!state.cookingBoost,useTrainingPreview:state.useTrainingPreview!==false});
         try{if(typeof weeklyCookingState!=='undefined'){if(prevIsland!=null)weeklyCookingState.selectedIsland=prevIsland;if(prevBonus==null)delete weeklyCookingState.islandBonuses[state.island];else weeklyCookingState.islandBonuses[state.island]=prevBonus;}}catch(_){}
         return out;
     }
@@ -28953,7 +29157,7 @@ async function calculateAndRenderWeeklyCooking() {
         @media(max-width:600px){.live-cooking-week-row{flex-wrap:wrap}.live-cooking-week-nav{width:100%;justify-content:center}.live-cooking-week-range{white-space:nowrap}.live-cooking-grid{grid-template-columns:40px repeat(3,minmax(0,1fr))}.live-cooking-corner,.live-cooking-calendar-head{height:28px}.live-cooking-day-cell,.live-cooking-cell{min-height:59px}.live-cooking-meal-art{width:24px;height:24px}.live-cooking-meal-row strong{font-size:9px}.live-cooking-state-label{font-size:5px}.live-cooking-meal-name{font-size:5.8px}.live-cooking-subline{font-size:5.4px}.live-cooking-summary{grid-template-columns:repeat(3,1fr)}.live-cooking-summary .live-cooking-luck{grid-column:1/-1}.live-cooking-settings-grid{grid-template-columns:repeat(2,1fr)}.live-cooking-city-input{width:100%;margin-left:0}.live-cooking-city-input small{margin-left:auto}.live-cooking-deadline-badge{font-size:7.5px;padding:4px 3px}}
         </style><div class="live-cooking-app fixed inset-0 z-[105] p-0 backdrop-blur-sm sm:bg-slate-950/65 sm:p-3"><div class="mx-auto flex h-full max-w-3xl flex-col overflow-hidden bg-[#fbf7ef] shadow-2xl sm:h-[calc(100vh-24px)] sm:rounded-[28px]"><header class="flex items-center justify-between border-b border-[#eadfce] bg-[#fffdf8] px-4 py-3"><div><h2 class="text-base font-black text-stone-800">宝睡料理周历</h2><p class="text-[8px] font-bold text-stone-400">实录与理论推荐，一张表看清 · v2026.08.24.5</p></div><button type="button" onclick="closeLiveCookingPlannerModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-stone-100 text-xl font-black text-stone-600" aria-label="关闭">×</button></header><div id="live-cooking-scroll-body" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4"><div class="live-cooking-week-row mb-2 flex items-center justify-between gap-2"><div class="live-cooking-week-nav flex items-center gap-1"><button type="button" onclick="shiftLiveCookingWeek(-1)" class="live-cooking-toolbutton">‹</button><div class="px-2 text-center"><div class="live-cooking-week-range text-xs font-black text-stone-700">${start.getMonth()+1}/${start.getDate()}－${end.getMonth()+1}/${end.getDate()}</div><button type="button" onclick="goLiveCookingCurrentWeek()" class="text-[7px] font-black text-stone-400">回到本周</button></div><button type="button" onclick="shiftLiveCookingWeek(1)" class="live-cooking-toolbutton">›</button></div>${renderLiveCookingTimezoneInput()}</div>${renderLiveCookingCalendar()}${renderLiveCookingWeekSummary()}<div class="live-cooking-plan-status"><div><small>${hasPlan?(liveCookingPlanDirty?'旧推荐预计最终总能量':'预计本周最终总能量'):'规划状态'}</small><strong>${hasPlan?(current>0?liveCookingFormatNumber(finalEnergy):`剩余期望 +${liveCookingFormatNumber(remaining)}`):'等待手动计算'}</strong></div><span class="text-[7px] font-bold ${liveCookingPlanDirty?'text-amber-700':'text-stone-400'}">${hasPlan?(liveCookingPlanDirty?'输入已改变，旧推荐仍保留':`计算于 ${liveCookingEscape(liveCookingPlan.generatedAt?new Date(liveCookingPlan.generatedAt).toLocaleString('zh-CN'):'本次打开期间')}`):'修改输入不会自动开始复杂计算'}</span></div><div class="live-cooking-toolbar"><button id="live-cooking-calculate-button" type="button" onclick="recalculateLiveCookingNow()" class="live-cooking-toolbutton is-primary"><i class="fa-solid fa-calculator"></i> ${hasPlan?'重新计算':'开始计算'}</button><button type="button" onclick="toggleLiveCookingSettings()" class="live-cooking-toolbutton ${liveCookingSettingsOpen?'is-active':''}"><i class="fa-solid fa-sliders"></i> 计算设定</button><button type="button" onclick="toggleLiveCookingDetails()" class="live-cooking-toolbutton ${liveCookingDetailsOpen?'is-active':''}"><i class="fa-solid fa-chart-line"></i> 详细结果</button><button id="live-cooking-forecast-toggle" type="button" onclick="event.preventDefault();event.stopPropagation();toggleLiveCookingForecast()" class="live-cooking-toolbutton" style="touch-action:manipulation;-webkit-tap-highlight-color:transparent"><i class="fa-solid ${liveCookingState.forecastVisible!==false?'fa-eye-slash':'fa-eye'}"></i> ${liveCookingState.forecastVisible!==false?'隐藏预测':'显示预测'}</button>${hasPlan?'<button type="button" onclick="clearLiveCookingForecast()" class="live-cooking-toolbutton"><i class="fa-solid fa-eraser"></i> 清除预测</button>':''}</div>${settings}${details}<div id="live-cooking-sync-status" class="mt-3 text-center text-[7px] font-black text-stone-400">${currentCloudUser?'<i class="fa-solid fa-cloud-circle-check"></i> 周历、城市和预测设置将同步到账号':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机'}</div></div></div></div>`;
         const liveCookingVersionText=document.querySelector('#live-cooking-planner-modal header p');
-        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.24.16';
+        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.26.6';
     }
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
@@ -29503,6 +29707,7 @@ function openSleepSplitPlannerModal() {
         { id: 'dailyCheckIn', group: 'luck', label: '每日捕捉打卡', desc: '快速录入一只宝可梦', icon: 'fa-calendar-check', tone: 'bg-violet-50 text-violet-700', action: 'openDailyCheckInModal' },
         { id: 'history', group: 'luck', label: '历史抽卡库', desc: '睡眠研究与捕捉流水', icon: 'fa-clock-rotate-left', tone: 'bg-slate-100 text-slate-700', action: 'openHistoryModal' },
         { id: 'graduation', group: 'luck', label: '出货宝可梦库', desc: '查看已收录个体面板', icon: 'fa-trophy', tone: 'bg-amber-50 text-amber-700', action: 'openGraduationDexModal' },
+        { id: 'efficiency', group: 'luck', label: '个体效率预览', desc: '当前与培养后产能对比', icon: 'fa-gauge-high', tone: 'bg-cyan-50 text-cyan-800', action: 'openPokemonEfficiencyModal' },
         { id: 'drySpell', group: 'luck', label: '毕业断档分析', desc: '查看距离上次毕业数据', icon: 'fa-cloud-rain', tone: 'bg-rose-50 text-rose-700', action: 'openGraduationDrySpellModal' },
         { id: 'calibration', group: 'luck', label: '总捕捉数校准', desc: '调整老玩家捕捉补正', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', custom: 'calibration' },
 
@@ -30412,6 +30617,37 @@ function openSleepSplitPlannerModal() {
             setBusy(false); await renderCenter();
         }
     };
+})();
+</script>
+<script>
+// 培养预览：给理论最优策略补充显式入口，并保持原求解器不变。
+(() => {
+    const originalOpen = window.openIdealStrategyModal;
+    if (typeof originalOpen === 'function') {
+        window.openIdealStrategyModal = function () {
+            originalOpen();
+            const result = document.getElementById('ideal-strategy-result');
+            if (!result || document.getElementById('ideal-training-preview-control')) return;
+            const enabled = window.isPokemonTrainingPreviewEnabled?.('ideal') !== false;
+            const panel = document.createElement('div');
+            panel.id = 'ideal-training-preview-control';
+            panel.className = 'mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[9px] font-bold text-indigo-800';
+            panel.innerHTML = `<label class="flex items-center gap-2"><input type="checkbox" ${enabled?'checked':''} onchange="setIdealTrainingPreviewEnabled(this.checked)">采用“个体效率预览”中设置的培养后面板</label><button onclick="closeIdealStrategyModal();openPokemonEfficiencyModal()" class="rounded-lg bg-white px-2 py-1 font-black shadow-sm">管理预览方案</button>`;
+            result.before(panel);
+        };
+        window.setIdealTrainingPreviewEnabled = function (enabled) {
+            window.setPokemonTrainingPreviewModuleEnabled?.('ideal', !!enabled);
+            originalOpen();
+            window.openIdealStrategyModal();
+        };
+    }
+    const patchVersion = () => {
+        const node = document.querySelector('.live-cooking-app header p');
+        if (node && /v\d/.test(node.textContent || '')) node.textContent = '实录与理论推荐，一张表看清 · v2026.08.26.6';
+    };
+    document.addEventListener('click', event => {
+        if (event.target?.closest?.('[onclick*="openLiveCookingPlannerModal"]')) setTimeout(patchVersion, 30);
+    }, true);
 })();
 </script>
 </body>
