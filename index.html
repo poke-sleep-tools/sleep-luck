@@ -26922,9 +26922,12 @@ async function calculateAndRenderWeeklyCooking() {
         if (skills.includes('hb') || skills.includes('帮手奖励')) subSkillSpeedBonus += 0.05;
         frequencyMultiplier *= Math.max(0.65, 1 - subSkillSpeedBonus);
         frequencyMultiplier *= 1 - (Number(nature.speed) || 0);
-        let ingredientRate = baseIngredientRate;
-        if (skills.includes('ifm') || skills.includes('食材概率提升m') || skills.includes('食材几率m')) ingredientRate *= 1.36;
-        if (skills.includes('ifs') || skills.includes('食材概率提升s') || skills.includes('食材几率s')) ingredientRate *= 1.18;
+        // 同类概率副技能彼此加算：食材M(+36%)与食材S(+18%)合计为+54%，
+        // 不能连续乘成 1.36×1.18。性格修正仍在副技能合计后独立乘算。
+        let ingredientSubSkillBonus = 0;
+        if (skills.includes('ifm') || skills.includes('食材概率提升m') || skills.includes('食材几率m')) ingredientSubSkillBonus += 0.36;
+        if (skills.includes('ifs') || skills.includes('食材概率提升s') || skills.includes('食材几率s')) ingredientSubSkillBonus += 0.18;
+        let ingredientRate = baseIngredientRate * (1 + ingredientSubSkillBonus);
         if (Number(nature.food) > 0) ingredientRate *= 1.2;
         if (Number(nature.food) < 0) ingredientRate *= 0.8;
         ingredientRate = Math.min(1, ingredientRate);
@@ -26933,9 +26936,10 @@ async function calculateAndRenderWeeklyCooking() {
         const procsPerSlot = helpsPerDay * ingredientRate / slots.length;
         const map = {};
         slots.forEach(slot => { map[slot.name] = (map[slot.name] || 0) + procsPerSlot * slot.amount; });
-        let skillRate = Math.max(0, Number(params.skillPercent) || 0) / 100;
-        if (skills.includes('stm') || skills.includes('技能几率m') || skills.includes('技能概率提升m')) skillRate *= 1.36;
-        if (skills.includes('sts') || skills.includes('技能几率s') || skills.includes('技能概率提升s')) skillRate *= 1.18;
+        let skillSubSkillBonus = 0;
+        if (skills.includes('stm') || skills.includes('技能几率m') || skills.includes('技能概率提升m')) skillSubSkillBonus += 0.36;
+        if (skills.includes('sts') || skills.includes('技能几率s') || skills.includes('技能概率提升s')) skillSubSkillBonus += 0.18;
+        let skillRate = Math.max(0, Number(params.skillPercent) || 0) / 100 * (1 + skillSubSkillBonus);
         skillRate *= 1 + (Number(nature.skill) || 0);
         const dailySkillTriggers = helpsPerDay * skillRate;
         return { ok:true, entry, species, level, pokedexId, map, helpsPerDay, ingredientRate, baseSkillPercent:Number(params.skillPercent) || 0, skillRate, dailySkillTriggers, energyBasis:'full', energyMultiplier:WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER, mainSkillId:Number(server.mainSkillId) || 0, specialty:server.specialty || '' };
