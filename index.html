@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.26.6</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.27.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -963,6 +963,7 @@
                         <select id="box-sort-mode" onchange="setBoxSortMode(this.value)" class="bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-slate-400">
                             <option value="entry_desc">录入顺序：新 → 旧</option>
                             <option value="entry_asc">录入顺序：旧 → 新</option>
+                            <option value="capture_desc">最近捕捉：新 → 旧</option>
                             <option value="count_desc">捕捉数：多 → 少</option>
                             <option value="count_asc">捕捉数：少 → 多</option>
                             <option value="name_asc">名字：A → Z</option>
@@ -1574,12 +1575,17 @@ function normalizeBallCounts(obj = {}) {
 function normalizeResearchBallUsage(raw = {}, session = '一觉', options = {}) {
     const hasRaw = raw && typeof raw === 'object' && Object.keys(raw).length > 0;
     const defaultBonus = options.defaultBonus === true ? (normalizeSleepResearchSessionValue(session) === '一觉' ? 1 : 0) : 0;
+    const rawStatus = String(raw?.recordStatus || '').trim();
+    const recordStatus = ['recorded', 'none', 'skipped', 'unconfirmed'].includes(rawStatus)
+        ? rawStatus
+        : (hasRaw ? 'recorded' : 'unconfirmed');
     return {
         bonus: Math.max(0, Math.floor(Number(hasRaw ? raw.bonus : defaultBonus) || 0)),
         poke: Math.max(0, Math.floor(Number(hasRaw ? raw.poke : 0) || 0)),
         great: Math.max(0, Math.floor(Number(hasRaw ? raw.great : 0) || 0)),
         ultra: Math.max(0, Math.floor(Number(hasRaw ? raw.ultra : 0) || 0)),
-        note: String(hasRaw ? (raw.note || '') : '').trim()
+        note: String(hasRaw ? (raw.note || '') : '').trim(),
+        recordStatus
     };
 }
 
@@ -1935,6 +1941,7 @@ function getResearchBallUsageForDisplay(research) {
 function getBallUsageInlineText(usage) {
     if (!usage) return '';
     const u = normalizeResearchBallUsage(usage);
+    if (u.recordStatus === 'skipped') return '本次不记录用球';
     const parts = [];
     if (u.bonus) parts.push(`奖励×${u.bonus}`);
     BALL_KEYS.forEach(k => { if (u[k]) parts.push(`${BALL_LABELS[k]}×${u[k]}`); });
@@ -1989,8 +1996,56 @@ function updateBallUsageTrayUI(context) {
         great: getBallTrayInputValue(context, 'great'),
         ultra: getBallTrayInputValue(context, 'ultra')
     };
+    let recordStatus = String(tray.dataset.recordStatus || 'unconfirmed');
+    const hasUsedBall = Object.values(usage).some(value => Number(value) > 0);
+    // “没用球”不是不可逆锁定：之后只要填写了任何球，立即恢复为正常用球记录。
+    if (recordStatus === 'none' && hasUsedBall) {
+        recordStatus = 'recorded';
+        tray.dataset.recordStatus = 'recorded';
+    }
+    const confirmed = recordStatus !== 'unconfirmed';
     const summary = document.getElementById(`${context}-ball-tray-summary`);
-    if (summary) summary.textContent = getBallTraySummaryFromUsage(usage);
+    if (summary) summary.textContent = !confirmed
+        ? '尚未确认 · 点此填写或确认没用球'
+        : (recordStatus === 'skipped' ? '本次不记录用球' : getBallTraySummaryFromUsage(usage));
+    const statusBadge = document.getElementById(`${context}-ball-tray-status`);
+    if (statusBadge) {
+        statusBadge.textContent = confirmed ? (recordStatus === 'skipped' ? '已跳过' : '已确认') : '待确认';
+        statusBadge.className = `shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${confirmed ? (recordStatus === 'skipped' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700') : 'bg-amber-100 text-amber-800 animate-pulse'}`;
+    }
+    const quickNone = document.getElementById(`${context}-ball-tray-quick-none`);
+    if (quickNone) quickNone.classList.toggle('hidden', confirmed);
+    const noBallButton = document.getElementById(`${context}-ball-confirm-none`);
+    if (noBallButton) {
+        const active = recordStatus === 'none';
+        noBallButton.classList.toggle('bg-emerald-600', active);
+        noBallButton.classList.toggle('text-white', active);
+        noBallButton.classList.toggle('border-emerald-600', active);
+        noBallButton.classList.toggle('bg-emerald-50', !active);
+        noBallButton.classList.toggle('text-emerald-700', !active);
+        noBallButton.classList.toggle('border-emerald-200', !active);
+    }
+    const skipButton = document.getElementById(`${context}-ball-skip-record`);
+    if (skipButton) {
+        const active = recordStatus === 'skipped';
+        skipButton.classList.toggle('bg-slate-700', active);
+        skipButton.classList.toggle('text-white', active);
+        skipButton.classList.toggle('border-slate-700', active);
+        skipButton.classList.toggle('bg-slate-50', !active);
+        skipButton.classList.toggle('text-slate-500', !active);
+        skipButton.classList.toggle('border-slate-200', !active);
+    }
+    const toggle = document.getElementById(`${context}-ball-tray-toggle`);
+    tray.classList.toggle('border-amber-300', !confirmed);
+    tray.classList.toggle('bg-amber-50', !confirmed);
+    tray.classList.toggle('border-sky-100', confirmed);
+    tray.classList.toggle('bg-sky-50/70', confirmed);
+    if (toggle) {
+        toggle.classList.toggle('ring-2', !confirmed);
+        toggle.classList.toggle('ring-amber-200', !confirmed);
+    }
+    const submitHint = document.getElementById(`${context}-ball-submit-hint`);
+    if (submitHint) submitHint.classList.toggle('hidden', confirmed);
     Object.keys(BALL_TRAY_META).forEach(key => {
         const count = document.getElementById(`${context}-ball-tray-count-${key}`);
         if (count) count.textContent = String(usage[key] || 0);
@@ -2030,6 +2085,42 @@ function toggleBallUsageTray(context) {
     if (open) updateBallUsageTrayUI(context);
 }
 
+function markBallUsageTrayStatus(context, status = 'recorded') {
+    const tray = document.getElementById(`${context}-ball-tray`);
+    if (!tray) return;
+    tray.dataset.recordStatus = ['recorded', 'none', 'skipped'].includes(status) ? status : 'recorded';
+    updateBallUsageTrayUI(context);
+}
+
+function confirmNoBallUsage(context) {
+    Object.keys(BALL_TRAY_META).forEach(key => {
+        const input = document.getElementById(`${context}-ball-${key}`);
+        if (input) input.value = '0';
+    });
+    const note = document.getElementById(`${context}-ball-note`);
+    if (note) note.value = '';
+    markBallUsageTrayStatus(context, 'none');
+}
+
+function skipBallUsageRecord(context) {
+    markBallUsageTrayStatus(context, 'skipped');
+}
+
+function ensureBallUsageConfirmedBeforeSubmit(context) {
+    const tray = document.getElementById(`${context}-ball-tray`);
+    if (!tray || tray.dataset.recordStatus !== 'unconfirmed') return true;
+    tray.dataset.open = 'true';
+    document.getElementById(`${context}-ball-tray-body`)?.classList.remove('hidden');
+    document.getElementById(`${context}-ball-tray-toggle`)?.setAttribute('aria-expanded', 'true');
+    const chevron = document.getElementById(`${context}-ball-tray-chevron`);
+    if (chevron) chevron.className = 'fa-solid fa-chevron-up text-[10px] transition-transform';
+    tray.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const skip = window.confirm('本次用球还没有确认。\n\n点“取消”返回填写；点“确定”表示本次不记录用球并继续创建研究。');
+    if (!skip) return false;
+    skipBallUsageRecord(context);
+    return true;
+}
+
 function selectBallUsageTrayBall(context, key) {
     const tray = document.getElementById(`${context}-ball-tray`);
     if (!tray || !BALL_TRAY_META[key]) return;
@@ -2046,6 +2137,7 @@ function syncBallUsageTraySelectedValue(context) {
     if (!sourceInput || sourceInput.disabled) return;
     const value = Math.max(0, Math.min(99, Math.floor(Number(sharedInput.value) || 0)));
     sourceInput.value = String(value);
+    markBallUsageTrayStatus(context, 'recorded');
     updateBallUsageTrayUI(context);
 }
 
@@ -2064,7 +2156,7 @@ function clearBallUsageInventory(context) {
         const input = document.getElementById(`${context}-ball-${key}`);
         if (input) input.value = '0';
     });
-    updateBallUsageTrayUI(context);
+    markBallUsageTrayStatus(context, 'recorded');
 }
 
 function setCompactNumberStepperDisabled(inputId, disabled) {
@@ -2096,20 +2188,22 @@ function renderCompactNumberStepper(inputId, value, options = {}) {
 function renderBallUsageEditorHtml(context, session, usage = null) {
     if (!isBallPlannerEnabled()) return '';
     const u = normalizeResearchBallUsage(usage || {}, session, { defaultBonus: !usage });
+    const initialStatus = usage ? u.recordStatus : 'unconfirmed';
     const bonusDisabled = normalizeSleepResearchSessionValue(session || '一觉') === '二觉' ? 'disabled' : '';
     const initialNote = String(u.note || '');
-    return `<div id="${context}-ball-tray" data-open="false" data-selected="bonus" class="col-span-2 bg-sky-50/70 border border-sky-100 rounded-2xl overflow-hidden">
+    return `<div id="${context}-ball-tray" data-open="false" data-selected="bonus" data-record-status="${initialStatus}" class="col-span-2 ${initialStatus === 'unconfirmed' ? 'bg-amber-50 border-amber-300' : 'bg-sky-50/70 border-sky-100'} border rounded-2xl overflow-hidden">
         <input type="number" min="0" max="99" id="${context}-ball-bonus" value="${u.bonus}" ${bonusDisabled} class="hidden">
         <input type="number" min="0" max="99" id="${context}-ball-poke" value="${u.poke}" class="hidden">
         <input type="number" min="0" max="99" id="${context}-ball-great" value="${u.great}" class="hidden">
         <input type="number" min="0" max="99" id="${context}-ball-ultra" value="${u.ultra}" class="hidden">
-        <button type="button" id="${context}-ball-tray-toggle" aria-expanded="false" onclick="toggleBallUsageTray('${context}')" style="touch-action:manipulation" class="w-full min-h-[3.25rem] px-3 py-2 flex items-center gap-2 text-left active:bg-sky-100/70">
+        <button type="button" id="${context}-ball-tray-toggle" aria-expanded="false" onclick="toggleBallUsageTray('${context}')" style="touch-action:manipulation" class="w-full min-h-[3.25rem] px-3 py-2 flex items-center gap-2 text-left active:bg-sky-100/70 ${initialStatus === 'unconfirmed' ? 'ring-2 ring-amber-200' : ''}">
             <span class="w-8 h-8 shrink-0 rounded-xl bg-white border border-sky-100 shadow-sm flex items-center justify-center text-base">🎒</span>
             <span class="min-w-0 flex-1">
                 <span class="block text-[10px] font-black text-sky-800 tracking-widest">本次用球</span>
-                <span id="${context}-ball-tray-summary" class="block truncate text-[10px] text-sky-700 font-bold">${escapeHtml(getBallTraySummaryFromUsage(u))}</span>
+                <span id="${context}-ball-tray-summary" class="block truncate text-[10px] text-sky-700 font-bold">${initialStatus === 'unconfirmed' ? '尚未确认 · 点此填写或确认没用球' : escapeHtml(initialStatus === 'skipped' ? '本次不记录用球' : getBallTraySummaryFromUsage(u))}</span>
             </span>
-            <span class="shrink-0 text-[10px] font-black text-sky-700">调整</span>
+            <span id="${context}-ball-tray-status" class="shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${initialStatus === 'unconfirmed' ? 'bg-amber-100 text-amber-800 animate-pulse' : (initialStatus === 'skipped' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700')}">${initialStatus === 'unconfirmed' ? '待确认' : (initialStatus === 'skipped' ? '已跳过' : '已确认')}</span>
+            <span id="${context}-ball-tray-quick-none" role="button" tabindex="0" onclick="event.stopPropagation();confirmNoBallUsage('${context}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();confirmNoBallUsage('${context}')}" style="touch-action:manipulation" class="${initialStatus === 'unconfirmed' ? '' : 'hidden '}shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[9px] font-black text-emerald-700 active:bg-emerald-100">没用球</span>
             <i id="${context}-ball-tray-chevron" class="fa-solid fa-chevron-down text-[10px] text-sky-600"></i>
         </button>
         <div id="${context}-ball-tray-body" class="hidden border-t border-sky-100 p-3 pt-2.5">
@@ -2127,6 +2221,10 @@ function renderBallUsageEditorHtml(context, session, usage = null) {
                 </div>
                 ${renderCompactNumberStepper(`${context}-ball-tray-shared`, u.bonus, { min: 0, max: 99, disabled: !!bonusDisabled, ariaLabel: '当前所选精灵球数量', onInput: `syncBallUsageTraySelectedValue('${context}')` })}
             </div>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+                <button type="button" id="${context}-ball-confirm-none" onclick="confirmNoBallUsage('${context}')" style="touch-action:manipulation" class="min-h-[2.5rem] rounded-xl border ${initialStatus === 'none' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-emerald-200 bg-emerald-50 text-emerald-700'} text-[10px] font-black active:bg-emerald-100">✓ 本次没用球</button>
+                <button type="button" id="${context}-ball-skip-record" onclick="skipBallUsageRecord('${context}')" style="touch-action:manipulation" class="min-h-[2.5rem] rounded-xl border ${initialStatus === 'skipped' ? 'border-slate-700 bg-slate-700 text-white' : 'border-slate-200 bg-slate-50 text-slate-500'} text-[10px] font-black active:bg-slate-100">本次不记录</button>
+            </div>
             <button type="button" id="${context}-ball-note-toggle" onclick="toggleBallUsageNote('${context}')" style="touch-action:manipulation" class="mt-2 text-[10px] font-black text-sky-700">${initialNote ? '收起用球备注' : '＋ 添加用球备注'}</button>
             <textarea id="${context}-ball-note" rows="2" placeholder="用球备注（选填，例如：蓝球砸御三家 / 给闪光用了黑球）" class="${initialNote ? '' : 'hidden '}mt-1.5 w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-[11px] font-bold focus:outline-none focus:border-sky-400 resize-y">${escapeHtml(initialNote)}</textarea>
             <div class="mt-2 text-[9px] leading-relaxed text-sky-700 font-bold">库存只扣红白/蓝/黑黄球；奖励球默认一觉1个、二觉0个，不进库存。</div>
@@ -2138,13 +2236,15 @@ function readBallUsageFromEditor(context, session) {
     if (!isBallPlannerEnabled()) return null;
     const num = id => Math.max(0, Math.floor(Number(document.getElementById(`${context}-ball-${id}`)?.value) || 0));
     const normalizedSession = normalizeSleepResearchSessionValue(session || '一觉');
-    return normalizeResearchBallUsage({
+    const usage = normalizeResearchBallUsage({
         bonus: normalizedSession === '二觉' ? 0 : num('bonus'),
         poke: num('poke'),
         great: num('great'),
         ultra: num('ultra'),
         note: String(document.getElementById(`${context}-ball-note`)?.value || '').trim()
     }, session);
+    usage.recordStatus = String(document.getElementById(`${context}-ball-tray`)?.dataset?.recordStatus || 'unconfirmed');
+    return usage;
 }
 
 function syncResearchSessionDefaults(context, dateId, sessionId) {
@@ -2155,6 +2255,8 @@ function syncResearchSessionDefaults(context, dateId, sessionId) {
     const isSecondSleep = session === '二觉';
     bonusInput.value = isSecondSleep ? '0' : '1';
     setCompactNumberStepperDisabled(`${context}-ball-bonus`, isSecondSleep);
+    const tray = document.getElementById(`${context}-ball-tray`);
+    if (tray && context === 'research') tray.dataset.recordStatus = 'unconfirmed';
     updateBallUsageTrayUI(context);
 }
 
@@ -6017,6 +6119,44 @@ function getBoxRecordOutputTotal(p) {
     return (Number(p?.tiedCount) || 0) + (Number(p?.gradCount) || 0) + (Number(p?.bigGradCount) || 0) + (Number(p?.goldGradCount) || 0);
 }
 
+function getLatestPokemonCaptureOrderMap() {
+    const latest = new Map();
+    const logs = getVisibleHistoryLogs(Array.isArray(historyLogs) ? historyLogs : []);
+    logs.forEach((log, index) => {
+        if (!log || isSleepResearchLog(log) || !log.name || !log.date) return;
+        // 捕捉流水会带有面板快照或所属睡眠研究；排除设置、毕业库等同样含 name 的系统资料。
+        const looksLikeCapture = !!(log.sleepResearchId || log.recordedAt || log.subskills || log.foodCombo || Object.prototype.hasOwnProperty.call(log, 'result'));
+        if (!looksLikeCapture) return;
+        const name = typeof normalizeStandardName === 'function' ? normalizeStandardName(log.name) : String(log.name || '').trim();
+        if (!name) return;
+        const date = normalizeSleepResearchDateValue(log.date || '');
+        const sessionRank = normalizeSleepResearchSessionValue(log.session || '一觉') === '二觉' ? 2 : 1;
+        const preciseTime = Date.parse(log.recordedAt || log.createdAt || log.updatedAt || log.timestamp || '') || 0;
+        const candidate = { date, sessionRank, preciseTime, historyIndex: index };
+        const previous = latest.get(name);
+        const isNewer = !previous ||
+            candidate.date > previous.date ||
+            (candidate.date === previous.date && candidate.sessionRank > previous.sessionRank) ||
+            (candidate.date === previous.date && candidate.sessionRank === previous.sessionRank && candidate.preciseTime > previous.preciseTime) ||
+            (candidate.date === previous.date && candidate.sessionRank === previous.sessionRank && candidate.preciseTime === previous.preciseTime && candidate.historyIndex < previous.historyIndex);
+        if (isNewer) latest.set(name, candidate);
+    });
+    return latest;
+}
+
+function compareLatestCaptureOrder(a, b, latestMap) {
+    const standard = value => typeof normalizeStandardName === 'function' ? normalizeStandardName(value) : String(value || '').trim();
+    const left = latestMap.get(standard(a?.name));
+    const right = latestMap.get(standard(b?.name));
+    if (!left && !right) return 0;
+    if (!left) return 1;
+    if (!right) return -1;
+    return String(right.date).localeCompare(String(left.date)) ||
+        right.sessionRank - left.sessionRank ||
+        right.preciseTime - left.preciseTime ||
+        left.historyIndex - right.historyIndex;
+}
+
 function sortBoxRecords(list) {
     const mode = boxSortMode || 'entry_desc';
     const originalIndex = new Map();
@@ -6028,9 +6168,11 @@ function sortBoxRecords(list) {
         return m && Number.isFinite(m.rate) ? m.rate : 50;
     };
     const resultTotal = p => getBoxRecordOutputTotal(p);
+    const latestCaptureMap = mode === 'capture_desc' ? getLatestPokemonCaptureOrderMap() : null;
 
     arr.sort((a, b) => {
         if (mode === 'entry_asc') return idx(a) - idx(b);
+        if (mode === 'capture_desc') return compareLatestCaptureOrder(a, b, latestCaptureMap) || idx(a) - idx(b);
         if (mode === 'count_desc') return (Number(b.count) || 0) - (Number(a.count) || 0) || idx(a) - idx(b);
         if (mode === 'count_asc') return (Number(a.count) || 0) - (Number(b.count) || 0) || idx(a) - idx(b);
         if (mode === 'name_asc') return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN') || idx(a) - idx(b);
@@ -14590,6 +14732,9 @@ function openSleepResearchModal() {
         <div class="bg-indigo-50 border border-indigo-100 rounded-2xl p-3 text-[10px] text-indigo-900 font-bold leading-relaxed">
             注意：完整觉录入只用于新建一次睡眠研究。如果同一日期 + 一觉/二觉已经存在睡眠研究，系统不会覆盖旧研究；请进入历史抽卡库修改该次研究，或在详情中继续添加宝可梦。
         </div>
+        <div id="research-ball-submit-hint" class="${isBallPlannerEnabled() ? '' : 'hidden '}rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-800 leading-relaxed">
+            <i class="fa-solid fa-circle-exclamation mr-1"></i>本次用球尚未确认。没用球可直接点上方“没用球”；确实不想记录也可在托盘中选择“本次不记录”。
+        </div>
         <div id="sleep-research-submit-status" class="hidden rounded-2xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-[10px] font-bold text-indigo-800 leading-relaxed" role="status" aria-live="polite"></div>
         <button id="sleep-research-submit-btn" type="button" onclick="submitSleepResearchMeta(event)" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs py-2.5 rounded-xl shadow-md flex items-center justify-center gap-1.5">
             <i class="fa-solid fa-arrow-right"></i> 创建研究并开始录入宝可梦
@@ -14635,6 +14780,7 @@ function submitSleepResearchMeta(event) {
     if (event && typeof event.preventDefault === 'function') event.preventDefault();
     if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
     if (sleepResearchSubmitting) return;
+    if (!ensureBallUsageConfirmedBeforeSubmit('research')) return;
     const date = normalizeSleepResearchDateValue(document.getElementById('research-date')?.value || getTodayLocalDateString());
     const session = normalizeSleepResearchSessionValue(document.getElementById('research-session')?.value || '一觉');
     const sleepScore = String(document.getElementById('research-score')?.value || '').trim();
@@ -29200,7 +29346,7 @@ async function calculateAndRenderWeeklyCooking() {
         @media(max-width:600px){.live-cooking-week-row{flex-wrap:wrap}.live-cooking-week-nav{width:100%;justify-content:center}.live-cooking-week-range{white-space:nowrap}.live-cooking-grid{grid-template-columns:40px repeat(3,minmax(0,1fr))}.live-cooking-corner,.live-cooking-calendar-head{height:28px}.live-cooking-day-cell,.live-cooking-cell{min-height:59px}.live-cooking-meal-art{width:24px;height:24px}.live-cooking-meal-row strong{font-size:9px}.live-cooking-state-label{font-size:5px}.live-cooking-meal-name{font-size:5.8px}.live-cooking-subline{font-size:5.4px}.live-cooking-summary{grid-template-columns:repeat(3,1fr)}.live-cooking-summary .live-cooking-luck{grid-column:1/-1}.live-cooking-settings-grid{grid-template-columns:repeat(2,1fr)}.live-cooking-city-input{width:100%;margin-left:0}.live-cooking-city-input small{margin-left:auto}.live-cooking-deadline-badge{font-size:7.5px;padding:4px 3px}}
         </style><div class="live-cooking-app fixed inset-0 z-[105] p-0 backdrop-blur-sm sm:bg-slate-950/65 sm:p-3"><div class="mx-auto flex h-full max-w-3xl flex-col overflow-hidden bg-[#fbf7ef] shadow-2xl sm:h-[calc(100vh-24px)] sm:rounded-[28px]"><header class="flex items-center justify-between border-b border-[#eadfce] bg-[#fffdf8] px-4 py-3"><div><h2 class="text-base font-black text-stone-800">宝睡料理周历</h2><p class="text-[8px] font-bold text-stone-400">实录与理论推荐，一张表看清 · v2026.08.24.5</p></div><button type="button" onclick="closeLiveCookingPlannerModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-stone-100 text-xl font-black text-stone-600" aria-label="关闭">×</button></header><div id="live-cooking-scroll-body" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4"><div class="live-cooking-week-row mb-2 flex items-center justify-between gap-2"><div class="live-cooking-week-nav flex items-center gap-1"><button type="button" onclick="shiftLiveCookingWeek(-1)" class="live-cooking-toolbutton">‹</button><div class="px-2 text-center"><div class="live-cooking-week-range text-xs font-black text-stone-700">${start.getMonth()+1}/${start.getDate()}－${end.getMonth()+1}/${end.getDate()}</div><button type="button" onclick="goLiveCookingCurrentWeek()" class="text-[7px] font-black text-stone-400">回到本周</button></div><button type="button" onclick="shiftLiveCookingWeek(1)" class="live-cooking-toolbutton">›</button></div>${renderLiveCookingTimezoneInput()}</div>${renderLiveCookingCalendar()}${renderLiveCookingWeekSummary()}<div class="live-cooking-plan-status"><div><small>${hasPlan?(liveCookingPlanDirty?'旧推荐预计最终总能量':'预计本周最终总能量'):'规划状态'}</small><strong>${hasPlan?(current>0?liveCookingFormatNumber(finalEnergy):`剩余期望 +${liveCookingFormatNumber(remaining)}`):'等待手动计算'}</strong></div><span class="text-[7px] font-bold ${liveCookingPlanDirty?'text-amber-700':'text-stone-400'}">${hasPlan?(liveCookingPlanDirty?'输入已改变，旧推荐仍保留':`计算于 ${liveCookingEscape(liveCookingPlan.generatedAt?new Date(liveCookingPlan.generatedAt).toLocaleString('zh-CN'):'本次打开期间')}`):'修改输入不会自动开始复杂计算'}</span></div><div class="live-cooking-toolbar"><button id="live-cooking-calculate-button" type="button" onclick="recalculateLiveCookingNow()" class="live-cooking-toolbutton is-primary"><i class="fa-solid fa-calculator"></i> ${hasPlan?'重新计算':'开始计算'}</button><button type="button" onclick="toggleLiveCookingSettings()" class="live-cooking-toolbutton ${liveCookingSettingsOpen?'is-active':''}"><i class="fa-solid fa-sliders"></i> 计算设定</button><button type="button" onclick="toggleLiveCookingDetails()" class="live-cooking-toolbutton ${liveCookingDetailsOpen?'is-active':''}"><i class="fa-solid fa-chart-line"></i> 详细结果</button><button id="live-cooking-forecast-toggle" type="button" onclick="event.preventDefault();event.stopPropagation();toggleLiveCookingForecast()" class="live-cooking-toolbutton" style="touch-action:manipulation;-webkit-tap-highlight-color:transparent"><i class="fa-solid ${liveCookingState.forecastVisible!==false?'fa-eye-slash':'fa-eye'}"></i> ${liveCookingState.forecastVisible!==false?'隐藏预测':'显示预测'}</button>${hasPlan?'<button type="button" onclick="clearLiveCookingForecast()" class="live-cooking-toolbutton"><i class="fa-solid fa-eraser"></i> 清除预测</button>':''}</div>${settings}${details}<div id="live-cooking-sync-status" class="mt-3 text-center text-[7px] font-black text-stone-400">${currentCloudUser?'<i class="fa-solid fa-cloud-circle-check"></i> 周历、城市和预测设置将同步到账号':'<i class="fa-solid fa-mobile-screen"></i> 游客数据仅保存在本机'}</div></div></div></div>`;
         const liveCookingVersionText=document.querySelector('#live-cooking-planner-modal header p');
-        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.26.6';
+        if(liveCookingVersionText)liveCookingVersionText.textContent='实录与理论推荐，一张表看清 · v2026.08.27.2';
     }
     function rerenderLiveCookingPreserveScroll(){
         const before=document.getElementById('live-cooking-scroll-body'),top=before?.scrollTop||0;renderLiveCookingModal();requestAnimationFrame(()=>{const after=document.getElementById('live-cooking-scroll-body');if(after)after.scrollTop=top;});
@@ -30707,7 +30853,7 @@ function openSleepSplitPlannerModal() {
     }
     const patchVersion = () => {
         const node = document.querySelector('.live-cooking-app header p');
-        if (node && /v\d/.test(node.textContent || '')) node.textContent = '实录与理论推荐，一张表看清 · v2026.08.26.6';
+        if (node && /v\d/.test(node.textContent || '')) node.textContent = '实录与理论推荐，一张表看清 · v2026.08.27.2';
     };
     document.addEventListener('click', event => {
         if (event.target?.closest?.('[onclick*="openLiveCookingPlannerModal"]')) setTimeout(patchVersion, 30);
