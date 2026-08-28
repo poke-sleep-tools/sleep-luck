@@ -1015,6 +1015,9 @@
                     <button onclick="openSleepSplitPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-blue-100 text-blue-800 shadow-sm flex items-center gap-1 hover:bg-blue-200" title="根据岛屿、当前能量与活动倍率计算两觉拆分，并反推各种 x+y 所需的最低能量">
                         <i class="fa-solid fa-chart-simple text-blue-600"></i> 🛏️ 拆觉规划
                     </button>
+                    <button onclick="openSleepEncounterPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-teal-100 text-teal-900 shadow-sm flex items-center gap-1 hover:bg-teal-200" title="按岛屿、能量、睡眠分数与类型计算各宝可梦的遇见期望，并分析目标宝可梦适合的岛屿和能量区间">
+                        <i class="fa-solid fa-binoculars text-teal-700"></i> 🔭 宝可梦狙击
+                    </button>
                     <details class="relative rounded-xl border border-slate-200 bg-slate-50 text-slate-400 opacity-75">
                         <summary class="cursor-pointer list-none px-3 py-1.5 text-[10px] font-black hover:text-slate-600">
                             <i class="fa-solid fa-box-archive"></i> 旧版实验功能
@@ -29513,6 +29516,124 @@ async function calculateAndRenderWeeklyCooking() {
 </script>
 <script>
 /* =========================================================
+ * 🔭 宝可梦狙击：独立的睡眠研究遇见期望与目标曲线
+ * 抽选规则及岛屿数据固定引用 pokeSleepCalc 的公开版本；只在点击计算后加载。
+ * ========================================================= */
+const SLEEP_ENCOUNTER_REF_SHA='30283143e07657c890c6d90f58cfc5b1185cf733';
+const SLEEP_ENCOUNTER_CDN=`https://cdn.jsdelivr.net/gh/bennyhe/pokeSleepCalc@${SLEEP_ENCOUNTER_REF_SHA}/src`;
+const SLEEP_ENCOUNTER_STORAGE='sleepEncounterPlannerSettingsV1';
+const SLEEP_ENCOUNTER_MAPS=[
+    ['greengrass','萌绿之岛'],['beach','天青沙滩'],['cave','灰褐洞窟'],['snow','白花雪原'],
+    ['lake','宝蓝湖畔'],['plant','黄金旧发电厂'],['valley','琥珀溪谷'],['greenex','萌绿之岛 EX'],['beachex','天青沙滩 EX']
+];
+let sleepEncounterModules=null;
+let sleepEncounterMode='single';
+function sleepEncounterEsc(v){return String(v??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));}
+function sleepEncounterNum(v,f=0){const n=Number(v);return Number.isFinite(n)?n:f;}
+function sleepEncounterFmt(v,d=0){return Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:d,minimumFractionDigits:d});}
+function sleepEncounterDexItem(id){return (typeof POKEMON_INGREDIENT_DEX!=='undefined'?POKEMON_INGREDIENT_DEX:[]).find(x=>Number(x.pokedexId)===Number(id))||null;}
+function sleepEncounterName(id){const row=sleepEncounterDexItem(id);return row?.name||`宝可梦 #${id}`;}
+function sleepEncounterSprite(id){const row=sleepEncounterDexItem(id);if(row&&typeof getPokemonSpriteUrl==='function')return getPokemonSpriteUrl(row.name,false,'official');return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${Number(id)||0}.png`;}
+function sleepEncounterOptions(selected){return SLEEP_ENCOUNTER_MAPS.map((x,i)=>`<option value="${i}" ${Number(selected)===i?'selected':''}>${x[1]}</option>`).join('');}
+function sleepEncounterLoadSettings(){try{return JSON.parse(localStorage.getItem(SLEEP_ENCOUNTER_STORAGE)||'{}')||{};}catch(_){return {};}}
+function sleepEncounterSaveSettings(){
+    const ids=['sleep-enc-map','sleep-enc-energy','sleep-enc-score','sleep-enc-type','sleep-enc-bonus','sleep-enc-target','sleep-enc-target-map','sleep-enc-target-score','sleep-enc-target-type','sleep-enc-target-bonus','sleep-enc-scan-mode','sleep-enc-start','sleep-enc-end','sleep-enc-step','sleep-enc-week-start','sleep-enc-week-growth','sleep-enc-precision'];
+    const out={mode:sleepEncounterMode};ids.forEach(id=>{const el=document.getElementById(id);if(el)out[id]=el.value;});
+    try{localStorage.setItem(SLEEP_ENCOUNTER_STORAGE,JSON.stringify(out));}catch(_){/* 设置很小，失败不影响计算 */}
+}
+async function sleepEncounterLoadModules(){
+    if(sleepEncounterModules)return sleepEncounterModules;
+    const status=document.getElementById('sleep-enc-status');if(status)status.innerHTML='<i class="fa-solid fa-circle-notch fa-spin"></i> 首次使用正在读取岛屿与睡姿资料…';
+    try{
+        const [game,sleep]=await Promise.all([import(`${SLEEP_ENCOUNTER_CDN}/config/game.js`),import(`${SLEEP_ENCOUNTER_CDN}/utils/sleep.js`)]);
+        sleepEncounterModules={gameMap:game.gameMap,getRandomSleepStyle:sleep.getRandomSleepStyle,getLevelIndexByEnergy:sleep.getLevelIndexByEnergy};
+        return sleepEncounterModules;
+    }catch(error){throw new Error(`资料加载失败，请确认网络可访问 jsDelivr（${error?.message||error}）`);}
+}
+function sleepEncounterSleepTypeOptions(value){return [[1,'浅浅'],[2,'安然'],[3,'深深'],[999,'无特征']].map(x=>`<option value="${x[0]}" ${Number(value)===x[0]?'selected':''}>${x[1]}</option>`).join('');}
+function sleepEncounterPrecisionOptions(value){return [[800,'快速 · 800次'],[2000,'均衡 · 2,000次'],[4000,'精细 · 4,000次']].map(x=>`<option value="${x[0]}" ${Number(value)===x[0]?'selected':''}>${x[1]}</option>`).join('');}
+function sleepEncounterPokemonDatalist(){
+    const seen=new Set();return (typeof POKEMON_INGREDIENT_DEX!=='undefined'?POKEMON_INGREDIENT_DEX:[]).filter(x=>{const k=Number(x.pokedexId);if(seen.has(k))return false;seen.add(k);return true;}).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN')).map(x=>`<option value="${sleepEncounterEsc(x.name)}"></option>`).join('');
+}
+function openSleepEncounterPlannerModal(){
+    document.getElementById('sleep-encounter-modal')?.remove();
+    const s=sleepEncounterLoadSettings(),modal=document.createElement('div');modal.id='sleep-encounter-modal';modal.className='fixed inset-0 z-[115] flex items-center justify-center bg-slate-950/70 p-2 backdrop-blur-sm';modal.onclick=e=>{if(e.target===modal)modal.remove();};
+    modal.innerHTML=`<div class="flex max-h-[96vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] bg-slate-50 shadow-2xl">
+      <header class="flex items-center justify-between bg-gradient-to-r from-teal-600 to-cyan-500 px-4 py-3 text-white"><div><h2 class="text-lg font-black">🔭 宝可梦狙击</h2><p class="text-[10px] font-bold text-white/80">独立工具 · 单觉遇见期望 / 目标宝可梦岛屿与能量曲线</p></div><button onclick="document.getElementById('sleep-encounter-modal')?.remove()" class="h-9 w-9 rounded-full bg-white/15 text-xl font-black">×</button></header>
+      <div class="flex-1 overflow-y-auto p-3 sm:p-5">
+        <div class="mb-4 grid grid-cols-2 rounded-2xl bg-slate-200 p-1 text-sm font-black"><button id="sleep-enc-tab-single" onclick="sleepEncounterSetMode('single')" class="rounded-xl px-3 py-2">单觉遇见期望</button><button id="sleep-enc-tab-target" onclick="sleepEncounterSetMode('target')" class="rounded-xl px-3 py-2">目标宝可梦分析</button></div>
+        <section id="sleep-enc-single" class="space-y-4"><div class="grid gap-3 rounded-2xl border border-teal-100 bg-white p-4 sm:grid-cols-5">
+          <label class="text-xs font-black text-slate-600">岛屿<select id="sleep-enc-map" class="mt-1 w-full rounded-xl border p-2">${sleepEncounterOptions(s['sleep-enc-map']??4)}</select></label>
+          <label class="text-xs font-black text-slate-600">卡比兽能量<input id="sleep-enc-energy" type="number" min="1" value="${sleepEncounterEsc(s['sleep-enc-energy']??1450000)}" class="mt-1 w-full rounded-xl border p-2"></label>
+          <label class="text-xs font-black text-slate-600">睡眠分数<input id="sleep-enc-score" type="number" min="1" max="100" value="${sleepEncounterEsc(s['sleep-enc-score']??51)}" class="mt-1 w-full rounded-xl border p-2"></label>
+          <label class="text-xs font-black text-slate-600">睡眠类型<select id="sleep-enc-type" class="mt-1 w-full rounded-xl border p-2">${sleepEncounterSleepTypeOptions(s['sleep-enc-type']??1)}</select></label>
+          <label class="text-xs font-black text-slate-600">活动睡意倍率<input id="sleep-enc-bonus" type="number" min="0.1" step="0.1" value="${sleepEncounterEsc(s['sleep-enc-bonus']??1)}" class="mt-1 w-full rounded-xl border p-2"></label>
+        </div><button onclick="sleepEncounterRunSingle()" class="w-full rounded-2xl bg-teal-600 px-4 py-3 font-black text-white shadow-lg">开始计算这一觉</button></section>
+        <section id="sleep-enc-target-wrap" class="hidden space-y-4"><div class="grid gap-3 rounded-2xl border border-cyan-100 bg-white p-4 sm:grid-cols-3">
+          <label class="text-xs font-black text-slate-600">目标宝可梦<input id="sleep-enc-target" list="sleep-enc-pokemon-list" value="${sleepEncounterEsc(s['sleep-enc-target']||'')}" placeholder="输入或选择宝可梦" class="mt-1 w-full rounded-xl border p-2"><datalist id="sleep-enc-pokemon-list">${sleepEncounterPokemonDatalist()}</datalist></label>
+          <label class="text-xs font-black text-slate-600">分析岛屿<select id="sleep-enc-target-map" class="mt-1 w-full rounded-xl border p-2"><option value="all">比较全部岛屿</option>${sleepEncounterOptions(s['sleep-enc-target-map']??4)}</select></label>
+          <label class="text-xs font-black text-slate-600">计算精度<select id="sleep-enc-precision" class="mt-1 w-full rounded-xl border p-2">${sleepEncounterPrecisionOptions(s['sleep-enc-precision']??800)}</select></label>
+          <label class="text-xs font-black text-slate-600">睡眠分数<input id="sleep-enc-target-score" type="number" min="1" max="100" value="${sleepEncounterEsc(s['sleep-enc-target-score']??100)}" class="mt-1 w-full rounded-xl border p-2"></label>
+          <label class="text-xs font-black text-slate-600">睡眠类型<select id="sleep-enc-target-type" class="mt-1 w-full rounded-xl border p-2">${sleepEncounterSleepTypeOptions(s['sleep-enc-target-type']??999)}</select></label>
+          <label class="text-xs font-black text-slate-600">活动睡意倍率<input id="sleep-enc-target-bonus" type="number" min="0.1" step="0.1" value="${sleepEncounterEsc(s['sleep-enc-target-bonus']??1)}" class="mt-1 w-full rounded-xl border p-2"></label>
+        </div><div class="rounded-2xl border border-cyan-100 bg-white p-4"><div class="mb-3 flex flex-wrap gap-2"><button onclick="sleepEncounterSetScanMode('range')" id="sleep-enc-scan-range-btn" class="rounded-xl px-3 py-2 text-xs font-black">按能量区间</button><button onclick="sleepEncounterSetScanMode('week')" id="sleep-enc-scan-week-btn" class="rounded-xl px-3 py-2 text-xs font-black">按每周增长</button><input id="sleep-enc-scan-mode" type="hidden" value="${sleepEncounterEsc(s['sleep-enc-scan-mode']||'range')}"></div>
+          <div id="sleep-enc-range-fields" class="grid gap-3 sm:grid-cols-3"><label class="text-xs font-black text-slate-600">起始能量<input id="sleep-enc-start" type="number" min="1" value="${sleepEncounterEsc(s['sleep-enc-start']??200000)}" class="mt-1 w-full rounded-xl border p-2"></label><label class="text-xs font-black text-slate-600">结束能量<input id="sleep-enc-end" type="number" min="1" value="${sleepEncounterEsc(s['sleep-enc-end']??3000000)}" class="mt-1 w-full rounded-xl border p-2"></label><label class="text-xs font-black text-slate-600">计算间隔<input id="sleep-enc-step" type="number" min="1" value="${sleepEncounterEsc(s['sleep-enc-step']??200000)}" class="mt-1 w-full rounded-xl border p-2"></label></div>
+          <div id="sleep-enc-week-fields" class="hidden grid gap-3 sm:grid-cols-2"><label class="text-xs font-black text-slate-600">周一初始能量<input id="sleep-enc-week-start" type="number" min="1" value="${sleepEncounterEsc(s['sleep-enc-week-start']??200000)}" class="mt-1 w-full rounded-xl border p-2"></label><label class="text-xs font-black text-slate-600">每天增长能量<input id="sleep-enc-week-growth" type="number" min="0" value="${sleepEncounterEsc(s['sleep-enc-week-growth']??400000)}" class="mt-1 w-full rounded-xl border p-2"></label></div>
+        </div><button onclick="sleepEncounterRunTarget()" class="w-full rounded-2xl bg-cyan-600 px-4 py-3 font-black text-white shadow-lg">开始分析目标宝可梦</button></section>
+        <div id="sleep-enc-status" class="mt-4 rounded-xl bg-slate-100 px-3 py-2 text-center text-xs font-bold text-slate-500">填写条件后点击计算；不会在输入时自动运行。</div>
+        <div id="sleep-enc-result" class="mt-4"></div>
+        <p class="mt-5 text-center text-[10px] font-bold leading-5 text-slate-400">抽选规则与岛屿睡姿数据取自开源 PokeSleepCalc 固定版本 ${SLEEP_ENCOUNTER_REF_SHA.slice(0,7)}；不计熏香、露营券额外一只及宝可梦出现率 UP 活动。结果是抽样期望，并非单次必然结果。</p>
+      </div></div>`;
+    document.body.appendChild(modal);sleepEncounterMode=s.mode||'single';sleepEncounterSetMode(sleepEncounterMode);sleepEncounterSetScanMode(s['sleep-enc-scan-mode']||'range');
+}
+function sleepEncounterSetMode(mode){sleepEncounterMode=mode==='target'?'target':'single';document.getElementById('sleep-enc-single')?.classList.toggle('hidden',sleepEncounterMode!=='single');document.getElementById('sleep-enc-target-wrap')?.classList.toggle('hidden',sleepEncounterMode!=='target');['single','target'].forEach(x=>{const b=document.getElementById(`sleep-enc-tab-${x}`);if(b)b.className=`rounded-xl px-3 py-2 ${sleepEncounterMode===x?'bg-white text-teal-700 shadow':'text-slate-500'}`;});sleepEncounterSaveSettings();}
+function sleepEncounterSetScanMode(mode){mode=mode==='week'?'week':'range';const hidden=document.getElementById('sleep-enc-scan-mode');if(hidden)hidden.value=mode;document.getElementById('sleep-enc-range-fields')?.classList.toggle('hidden',mode!=='range');document.getElementById('sleep-enc-week-fields')?.classList.toggle('hidden',mode!=='week');['range','week'].forEach(x=>{const b=document.getElementById(`sleep-enc-scan-${x}-btn`);if(b)b.className=`rounded-xl px-3 py-2 text-xs font-black ${mode===x?'bg-cyan-600 text-white':'bg-slate-100 text-slate-500'}`;});sleepEncounterSaveSettings();}
+function sleepEncounterStage(mod,map,energy){return mod.getLevelIndexByEnergy(map.levelList,Math.max(1,energy));}
+async function sleepEncounterSample(mapIndex,energy,score,type,bonus,times,onProgress){
+    const mod=await sleepEncounterLoadModules(),map=mod.gameMap[mapIndex];if(!map)throw new Error('未找到岛屿资料');
+    // Pokémon Sleep 的“睡眠分数”直接作为 1～100 的倍率使用：
+    // 睡意之力 = 卡比兽能量 × 睡眠分数 × 活动倍率，而不是再除以 100。
+    const drowsy=Math.max(1,Math.floor(energy*Math.max(1,score)*Math.max(.1,bonus)));
+    const stage=sleepEncounterStage(mod,map,energy);
+    // 与 PokeSleepCalc 的“一次研究”抽选完全同口径逐次执行；同时分别统计：
+    // 1) 同种重复计数后的期望只数（参考站主结果）；2) 至少出现一次的补充概率。
+    const totalCounts=new Map(),presentCounts=new Map();let totalSeen=0;
+    const batchSize=250;
+    for(let i=0;i<times;i++){
+        const once=mod.getRandomSleepStyle(map,Number(type),drowsy,stage,{banPokes:[],noLastPokes:[],useIncensePokemonId:'',isUseTicket:false,isActRandom:false,shinyUp:false,actRandomNum:0});
+        const appeared=new Set();totalSeen+=once.length;
+        once.forEach(item=>{const id=Number(item.pokeId);if(!Number.isFinite(id))return;totalCounts.set(id,(totalCounts.get(id)||0)+1);appeared.add(id);});
+        appeared.forEach(id=>presentCounts.set(id,(presentCounts.get(id)||0)+1));
+        if((i+1)%batchSize===0||i===times-1){onProgress?.(i+1,times);await new Promise(resolve=>setTimeout(resolve,0));}
+    }
+    const ids=new Set([...totalCounts.keys(),...presentCounts.keys()]);
+    const rows=[...ids].map(id=>({id,mean:(totalCounts.get(id)||0)/times,probability:(presentCounts.get(id)||0)/times})).sort((a,b)=>b.mean-a.mean||b.probability-a.probability||a.id-b.id);
+    return {map,drowsy,stage,averageTotal:totalSeen/times,rows};
+}
+async function sleepEncounterRunSingle(){
+    const status=document.getElementById('sleep-enc-status'),result=document.getElementById('sleep-enc-result');sleepEncounterSaveSettings();if(result)result.innerHTML='';
+    try{const map=Number(document.getElementById('sleep-enc-map')?.value)||0,energy=sleepEncounterNum(document.getElementById('sleep-enc-energy')?.value),score=sleepEncounterNum(document.getElementById('sleep-enc-score')?.value),type=sleepEncounterNum(document.getElementById('sleep-enc-type')?.value,999),bonus=sleepEncounterNum(document.getElementById('sleep-enc-bonus')?.value,1),times=4000;if(!energy||score<1||score>100)throw new Error('请填写有效的能量和1～100睡眠分数');
+      if(status)status.innerHTML='<i class="fa-solid fa-circle-notch fa-spin"></i> 正在按公开抽选规则计算 4,000 次研究…';
+      const out=await sleepEncounterSample(map,energy,score,type,bonus,times,(d,t)=>{if(status)status.textContent=`正在计算… ${Math.round(d/t*100)}%`;});
+      if(status)status.textContent=`完成：睡意之力 ${sleepEncounterFmt(out.drowsy)} · ${times.toLocaleString()} 次抽样`;
+      if(result)result.innerHTML=`<div class="mb-3 rounded-2xl bg-teal-50 p-4"><div class="font-black text-teal-900">这一觉平均会遇到 ${sleepEncounterFmt(out.averageTotal,2)} 只</div><div class="mt-1 text-[10px] font-bold text-teal-700">主数字为参考网站同口径的“期望只数”；同种宝可梦在一觉中重复出现会累计。小字同时补充至少出现一次的概率。</div></div><div class="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">${out.rows.map((x,i)=>`<div class="rounded-2xl border ${i<3?'border-teal-200 bg-teal-50':'border-slate-200 bg-white'} p-3 text-center"><img src="${sleepEncounterSprite(x.id)}" loading="lazy" class="mx-auto h-16 w-16 object-contain" onerror="this.style.opacity='.2'"><div class="truncate text-xs font-black text-slate-800">${sleepEncounterEsc(sleepEncounterName(x.id))}</div><div class="mt-1 text-lg font-black text-teal-700">${sleepEncounterFmt(x.mean,3)}</div><div class="text-[9px] font-bold text-slate-400">只/觉 · 至少出现一次 ${(x.probability*100).toFixed(1)}%</div></div>`).join('')}</div>`;
+    }catch(error){if(status)status.textContent=`计算失败：${error?.message||error}`;if(result)result.innerHTML='';console.error(error);}
+}
+function sleepEncounterResolveTarget(value){const q=String(value||'').trim().toLowerCase();const rows=typeof POKEMON_INGREDIENT_DEX!=='undefined'?POKEMON_INGREDIENT_DEX:[];const found=rows.find(x=>[x.name,x.traditionalName,x.englishName,String(x.pokedexId)].some(v=>String(v||'').trim().toLowerCase()===q));return found?Number(found.pokedexId):0;}
+function sleepEncounterEnergies(){const mode=document.getElementById('sleep-enc-scan-mode')?.value||'range';if(mode==='week'){const start=Math.max(1,sleepEncounterNum(document.getElementById('sleep-enc-week-start')?.value,1)),growth=Math.max(0,sleepEncounterNum(document.getElementById('sleep-enc-week-growth')?.value,0));return Array.from({length:7},(_,i)=>Math.round(start+growth*i));}const start=Math.max(1,sleepEncounterNum(document.getElementById('sleep-enc-start')?.value,1)),end=Math.max(start,sleepEncounterNum(document.getElementById('sleep-enc-end')?.value,start)),step=Math.max(1,sleepEncounterNum(document.getElementById('sleep-enc-step')?.value,1));let arr=[];for(let x=start;x<=end&&arr.length<24;x+=step)arr.push(Math.round(x));if(arr[arr.length-1]!==end&&arr.length<24)arr.push(end);return arr;}
+function sleepEncounterCurveSvg(points){const w=900,h=250,p=38,max=Math.max(.0001,...points.map(x=>x.value)),minE=Math.min(...points.map(x=>x.energy)),maxE=Math.max(...points.map(x=>x.energy)),xy=points.map((x,i)=>({x:p+(maxE===minE?0:(x.energy-minE)/(maxE-minE))*(w-p*2),y:h-p-(x.value/max)*(h-p*2),...x}));return `<div class="overflow-x-auto"><svg viewBox="0 0 ${w} ${h}" class="min-w-[700px] w-full rounded-2xl bg-white"><line x1="${p}" y1="${h-p}" x2="${w-p}" y2="${h-p}" stroke="#cbd5e1"/><line x1="${p}" y1="${p}" x2="${p}" y2="${h-p}" stroke="#cbd5e1"/><polyline fill="none" stroke="#0891b2" stroke-width="4" points="${xy.map(x=>`${x.x},${x.y}`).join(' ')}"/>${xy.map(x=>`<g><circle cx="${x.x}" cy="${x.y}" r="6" fill="#0d9488"/><text x="${x.x}" y="${Math.max(14,x.y-10)}" text-anchor="middle" font-size="11" font-weight="800" fill="#0f766e">${x.value.toFixed(3)}</text><text x="${x.x}" y="${h-13}" text-anchor="middle" font-size="10" fill="#64748b">${Math.round(x.energy/10000)}万</text></g>`).join('')}</svg></div>`;}
+async function sleepEncounterRunTarget(){
+    const status=document.getElementById('sleep-enc-status'),result=document.getElementById('sleep-enc-result');sleepEncounterSaveSettings();if(result)result.innerHTML='';
+    try{const target=sleepEncounterResolveTarget(document.getElementById('sleep-enc-target')?.value);if(!target)throw new Error('请选择资料库中的目标宝可梦');const energies=sleepEncounterEnergies();if(!energies.length)throw new Error('请填写有效能量区间');const mapValue=document.getElementById('sleep-enc-target-map')?.value||'all',maps=mapValue==='all'?SLEEP_ENCOUNTER_MAPS.map((_,i)=>i):[Number(mapValue)],score=sleepEncounterNum(document.getElementById('sleep-enc-target-score')?.value,100),type=sleepEncounterNum(document.getElementById('sleep-enc-target-type')?.value,999),bonus=sleepEncounterNum(document.getElementById('sleep-enc-target-bonus')?.value,1),times=sleepEncounterNum(document.getElementById('sleep-enc-precision')?.value,800);if(score<1||score>100)throw new Error('睡眠分数需为1～100');
+      const total=maps.length*energies.length,curves=[];let done=0;if(status)status.innerHTML='<i class="fa-solid fa-circle-notch fa-spin"></i> 正在逐点计算目标曲线…';
+      for(const mapIndex of maps){const points=[];for(const energy of energies){const out=await sleepEncounterSample(mapIndex,energy,score,type,bonus,times);const row=out.rows.find(x=>x.id===target);points.push({energy,value:row?.mean||0,probability:row?.probability||0});done++;if(status)status.textContent=`正在计算 ${sleepEncounterName(target)}… ${done}/${total}`;await new Promise(r=>setTimeout(r,0));}curves.push({mapIndex,points,peak:Math.max(...points.map(x=>x.value))});}
+      curves.sort((a,b)=>b.peak-a.peak);const best=curves[0],peakPoint=best.points.reduce((a,b)=>b.value>a.value?b:a,best.points[0]),broad=best.points.filter(x=>x.value>=best.peak*.9);
+      if(status)status.textContent=`完成：每个点抽样 ${times.toLocaleString()} 次，共 ${total} 个条件`;
+      if(result)result.innerHTML=`<div class="rounded-2xl bg-cyan-50 p-4"><div class="flex items-center gap-3"><img src="${sleepEncounterSprite(target)}" class="h-16 w-16 object-contain"><div><div class="font-black text-cyan-950">${sleepEncounterEsc(sleepEncounterName(target))} · 最推荐 ${SLEEP_ENCOUNTER_MAPS[best.mapIndex][1]}</div><div class="mt-1 text-xs font-bold text-cyan-700">本次扫描峰值：${sleepEncounterFmt(peakPoint.energy)} 能量，期望 ${peakPoint.value.toFixed(3)} 只/觉</div><div class="mt-1 text-[10px] font-bold text-cyan-600">该点至少出现一次的抽样概率约 ${(peakPoint.probability*100).toFixed(1)}% · 高效区间（不低于峰值90%）：${broad.length?sleepEncounterFmt(broad[0].energy)+' ～ '+sleepEncounterFmt(broad[broad.length-1].energy):'暂无'}</div></div></div></div>${curves.map((c,i)=>`<details ${i===0?'open':''} class="mt-3 rounded-2xl border border-slate-200 bg-white p-3"><summary class="cursor-pointer font-black text-slate-800">${i+1}. ${SLEEP_ENCOUNTER_MAPS[c.mapIndex][1]}　峰值 ${c.peak.toFixed(3)}只/觉</summary><div class="mt-3">${sleepEncounterCurveSvg(c.points)}</div></details>`).join('')}`;
+    }catch(error){if(status)status.textContent=`分析失败：${error?.message||error}`;if(result)result.innerHTML='';console.error(error);}
+}
+
+/* =========================================================
  * 🛏️ 拆觉规划：当前能量拆法 + x+y 最低能量数轴
  * 岛屿遇见只数门槛取自 PokeSleepCalc 公开 scoreLine v3.0.4。
  * 计算口径：两觉睡眠分数合计 100，每觉至少 1 分；不计露营券与熏香。
@@ -29933,6 +30054,7 @@ function openSleepSplitPlannerModal() {
 
         { id: 'sleepType', group: 'sleep', label: '睡眠类型规划', desc: '记录比例并规划下一觉', icon: 'fa-moon', tone: 'bg-violet-50 text-violet-700', action: 'openSleepTypePlannerModal' },
         { id: 'sleepSplit', group: 'sleep', label: '拆觉规划', desc: '当前能量拆法与 x+y 数轴', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', action: 'openSleepSplitPlannerModal' },
+        { id: 'sleepEncounter', group: 'sleep', label: '宝可梦狙击', desc: '遇见期望、岛屿与能量曲线', icon: 'fa-binoculars', tone: 'bg-teal-50 text-teal-800', action: 'openSleepEncounterPlannerModal' },
         { id: 'dailyReward', group: 'sleep', label: '每日奖励打卡', desc: '小日历查漏与快速补录', icon: 'fa-gift', tone: 'bg-amber-50 text-amber-800', action: 'openDailyRewardQuickModal' },
         { id: 'ballPlanner', group: 'sleep', label: '精灵球与每日奖励', desc: '库存、奖励和商店规划', icon: 'fa-baseball', tone: 'bg-sky-50 text-sky-700', action: 'openBallPlannerModal' },
 
