@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.28.3</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.28.6</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -12386,6 +12386,7 @@ function openSingleDailyCheckInModal(options = {}) {
     window.checkinNatureUp = null;
     window.checkinNatureDown = null;
     window.activeSubskillSlot = 'sub1';
+    window.quickDailyCheckInResult = 'none';
 
     const modal = document.createElement('div');
     modal.id = 'daily-checkin-modal';
@@ -12402,7 +12403,7 @@ function openSingleDailyCheckInModal(options = {}) {
         
         <div class="text-center">
             <h3 class="text-base font-black text-slate-800 flex items-center justify-center gap-1.5"><i class="fa-solid fa-calculator text-indigo-500 animate-pulse"></i> 智能面板审计 · 气运盲盒</h3>
-            <p class="text-[10px] text-slate-400 font-medium mt-0.5">点击上方5大槽位，再点击下方全品类键盘矩阵无脑填入（支持排他换绑与连击擦除）</p>
+            <p class="text-[10px] text-slate-400 font-medium mt-0.5">点击任一等级槽位，在大号副技能面板中选择；手机和电脑使用同一套操作。</p>
         </div>
 
         <div class="bg-indigo-50/80 border border-indigo-100 rounded-2xl p-3 flex items-center justify-between gap-3">
@@ -12416,10 +12417,30 @@ function openSingleDailyCheckInModal(options = {}) {
         </div>
 
         <div class="space-y-3.5 max-h-[70vh] overflow-y-auto pr-1">
-            <div class="relative" onclick="event.stopPropagation()">
+            <div onclick="event.stopPropagation()">
                 <label class="block text-[10px] font-bold text-slate-500 mb-1">宝可梦名字</label>
-                <input type="text" id="checkin-name" oninput="handleCheckInNameInput(); triggerLivePanelAudit();" onfocus="handleCheckInNameInput()" placeholder="输入名字，如: 杰尼龟" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-slate-400">
-                <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
+                <div class="flex items-stretch gap-2">
+                    <div class="relative min-w-0 flex-1">
+                        <input type="text" id="checkin-name" oninput="handleCheckInNameInput(); triggerLivePanelAudit();" onfocus="handleCheckInNameInput()" placeholder="输入名字，如: 杰尼龟" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-base sm:text-xs font-bold focus:outline-none focus:border-slate-400">
+                        <div id="checkin-suggestion-box" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 hidden max-h-40 overflow-y-auto"></div>
+                    </div>
+                    <div id="checkin-quick-result-actions" class="relative flex shrink-0">
+                        <button type="button" id="checkin-quick-result-submit" onclick="submitQuickDailyCheckInResult(event)" class="min-w-[76px] rounded-l-xl border border-r-0 border-slate-800 bg-slate-900 px-2.5 py-2 text-[10px] font-black text-white shadow-sm transition hover:bg-slate-800 active:scale-[0.98]">
+                            <i class="fa-solid fa-xmark mr-1"></i><span data-quick-result-label>没货 · 录入</span>
+                        </button>
+                        <button type="button" id="checkin-quick-result-toggle" onclick="toggleQuickDailyCheckInResultMenu(event)" aria-label="切换快捷评价" aria-expanded="false" class="w-8 rounded-r-xl border border-slate-800 bg-slate-800 text-[10px] text-white transition hover:bg-slate-700 active:scale-[0.98]">
+                            <i class="fa-solid fa-chevron-down"></i>
+                        </button>
+                        <div id="checkin-quick-result-menu" class="absolute right-0 top-full z-[70] mt-1 hidden w-40 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-2xl">
+                            <button type="button" onclick="selectQuickDailyCheckInResult('none', event)" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-black text-slate-700 hover:bg-slate-100"><i class="fa-solid fa-xmark w-4 text-center text-slate-400"></i>没货</button>
+                            <button type="button" onclick="selectQuickDailyCheckInResult('tied', event)" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-black text-amber-700 hover:bg-amber-50"><i class="fa-solid fa-handshake w-4 text-center"></i>和解</button>
+                            <button type="button" onclick="selectQuickDailyCheckInResult('grad', event)" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-black text-emerald-700 hover:bg-emerald-50"><i class="fa-solid fa-graduation-cap w-4 text-center"></i>毕业</button>
+                            <button type="button" onclick="selectQuickDailyCheckInResult('bigGrad', event)" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-black text-purple-700 hover:bg-purple-50"><i class="fa-solid fa-gem w-4 text-center"></i>大毕业</button>
+                            <button type="button" onclick="selectQuickDailyCheckInResult('goldGrad', event)" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-black text-red-700 hover:bg-red-50"><i class="fa-solid fa-crown w-4 text-center"></i>金帮毕业</button>
+                        </div>
+                    </div>
+                </div>
+                <p id="checkin-quick-result-hint" class="mt-1 text-right text-[8px] font-bold text-slate-400">默认没货；点箭头可换评价</p>
             </div>
 
             <div id="checkin-pokemon-image-preview" class="hidden"></div>
@@ -12438,12 +12459,15 @@ function openSingleDailyCheckInModal(options = {}) {
                 </div>
             </div>
 
-            <div class="space-y-1">
-                <span class="block text-[10px] font-black text-slate-400 uppercase tracking-wider"><i class="fa-solid fa-layer-group text-[9px] mr-0.5"></i> 1. 当前指定录入槽位</span>
-                <div id="subskill-slots-header" class="grid grid-cols-5 gap-1.5 text-center"></div>
+            <div class="space-y-1.5">
+                <div class="flex items-center justify-between gap-2">
+                    <span class="block text-[10px] font-black text-slate-500"><i class="fa-solid fa-layer-group text-[9px] mr-0.5 text-indigo-500"></i> 副技能</span>
+                    <span class="text-[8px] font-bold text-indigo-500">点击槽位选择或修改</span>
+                </div>
+                <div id="subskill-slots-header" class="flex gap-2 overflow-x-auto pb-1 text-center sm:grid sm:grid-cols-5 sm:overflow-visible"></div>
             </div>
 
-            <div class="bg-slate-50/80 p-3 rounded-2xl border border-slate-200/60 space-y-2.5">
+            <div class="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-3">
                 <div id="subskill-grid-picker" class="space-y-2.5"></div>
             </div>
 
@@ -12539,7 +12563,7 @@ function openSingleDailyCheckInModal(options = {}) {
                 <button type="button" onclick="syncToSystemRecommendation(event)" class="w-full mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white border border-indigo-700 px-3 py-2 rounded-xl font-black text-xs transition shadow-md flex items-center justify-center gap-1.5">
                     <i class="fa-solid fa-robot"></i> 系统打分：采用当前算法推荐
                 </button>
-                <select id="checkin-result" onchange="window.userManuallyOverrodeResult = true; toggleCheckInFoodTrack();" class="w-full bg-slate-900 border border-slate-950 rounded-xl px-3 py-2 text-xs font-black text-white focus:outline-none">
+                <select id="checkin-result" onchange="window.userManuallyOverrodeResult = true; syncQuickDailyCheckInResultFromSelect(); toggleCheckInFoodTrack();" class="w-full bg-slate-900 border border-slate-950 rounded-xl px-3 py-2 text-xs font-black text-white focus:outline-none">
                     <option value="none" class="text-slate-400 font-bold">❌ 没货/白条 (给大盘做慈善)</option>
                     <option value="tied" class="text-amber-400 font-bold">🔸 和解 (能当个过渡帮手)</option>
                     <option value="grad" class="text-emerald-400 font-bold">🟩 毕业 (核心功能完全解锁)</option>
@@ -12574,6 +12598,93 @@ function openSingleDailyCheckInModal(options = {}) {
     refreshCheckInIngredientSelectors(false);
     updateCheckInPokemonImagePreview();
     triggerLivePanelAudit();
+}
+
+const QUICK_DAILY_RESULT_META = {
+    none: { label: '没货', icon: 'fa-xmark' },
+    tied: { label: '和解', icon: 'fa-handshake' },
+    grad: { label: '毕业', icon: 'fa-graduation-cap' },
+    bigGrad: { label: '大毕业', icon: 'fa-gem' },
+    goldGrad: { label: '金帮毕业', icon: 'fa-crown' }
+};
+
+function updateQuickDailyCheckInResultButton() {
+    const btn = document.getElementById('checkin-quick-result-submit');
+    if (!btn) return;
+    const result = QUICK_DAILY_RESULT_META[window.quickDailyCheckInResult] ? window.quickDailyCheckInResult : 'none';
+    const meta = QUICK_DAILY_RESULT_META[result];
+    const icon = btn.querySelector('i');
+    const label = btn.querySelector('[data-quick-result-label]');
+    if (icon) icon.className = `fa-solid ${meta.icon} mr-1`;
+    if (label) label.textContent = `${meta.label} · 录入`;
+}
+
+function closeQuickDailyCheckInResultMenu() {
+    const menu = document.getElementById('checkin-quick-result-menu');
+    const toggle = document.getElementById('checkin-quick-result-toggle');
+    if (menu) menu.classList.add('hidden');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
+function toggleQuickDailyCheckInResultMenu(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const menu = document.getElementById('checkin-quick-result-menu');
+    const toggle = document.getElementById('checkin-quick-result-toggle');
+    if (!menu || !toggle) return;
+    const willOpen = menu.classList.contains('hidden');
+    menu.classList.toggle('hidden', !willOpen);
+    toggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+
+function selectQuickDailyCheckInResult(result, event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const nextResult = QUICK_DAILY_RESULT_META[result] ? result : 'none';
+    window.quickDailyCheckInResult = nextResult;
+    const resultSelect = document.getElementById('checkin-result');
+    if (resultSelect) {
+        resultSelect.value = nextResult;
+        window.userManuallyOverrodeResult = true;
+        toggleCheckInFoodTrack();
+    }
+    updateQuickDailyCheckInResultButton();
+    closeQuickDailyCheckInResultMenu();
+}
+
+function syncQuickDailyCheckInResultFromSelect() {
+    const resultSelect = document.getElementById('checkin-result');
+    if (!resultSelect || !QUICK_DAILY_RESULT_META[resultSelect.value]) return;
+    window.quickDailyCheckInResult = resultSelect.value;
+    updateQuickDailyCheckInResultButton();
+    closeQuickDailyCheckInResultMenu();
+}
+
+function submitQuickDailyCheckInResult(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const modal = document.getElementById('daily-checkin-modal');
+    const nameInput = document.getElementById('checkin-name');
+    if (!modal || modal.dataset.mode === 'graduationBackfill' || modal.dataset.editGraduationDexId || modal.dataset.editHistoryId) return;
+    if (!nameInput || !nameInput.value.trim()) {
+        if (nameInput) nameInput.focus();
+        alert('请先输入宝可梦名字，再使用快捷录入。');
+        return;
+    }
+    selectQuickDailyCheckInResult(window.quickDailyCheckInResult || 'none');
+    submitDailyCheckIn(event);
+}
+
+function hideQuickDailyCheckInResultActions() {
+    document.getElementById('checkin-quick-result-actions')?.classList.add('hidden');
+    document.getElementById('checkin-quick-result-hint')?.classList.add('hidden');
+    closeQuickDailyCheckInResultMenu();
 }
 
 // 🖼️ 统一宝可梦图片：玩家可在 PokéAPI Sprites 的完整图集中切换整套画风。
@@ -13755,9 +13866,13 @@ function renderPokemonScreenshotReview(result) {
             </div>
             <p class="text-[9px] text-emerald-700 font-bold">${escapeHtml(result.ingredientNote)}</p>
         </div>
-        <div class="grid grid-cols-2 gap-2">
-            ${subskills.map((key,index)=>`<label class="text-[9px] font-bold text-slate-500">第 ${index+1} 个副技能${result.subskillLevels?.[index] ? `（Lv.${result.subskillLevels[index]}）` : ''}<select id="pokemon-screenshot-sub${index+1}" class="mt-1 w-full bg-white border border-slate-200 rounded-lg p-1.5 text-[10px] font-bold">${getPokemonScreenshotSubskillOptions(key)}</select></label>`).join('')}
-            <label class="text-[9px] font-bold text-slate-500">性格<select id="pokemon-screenshot-nature" class="mt-1 w-full bg-white border border-slate-200 rounded-lg p-1.5 text-[10px] font-bold">${natureOptions}</select></label>
+        <div class="space-y-2">
+            <div class="flex items-center justify-between gap-2"><span class="text-[10px] font-black text-slate-700">副技能核对</span><span class="text-[8px] font-bold text-indigo-500">点击槽位打开选择面板</span></div>
+            <div id="pokemon-screenshot-subskill-slots" class="flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-5 sm:overflow-visible">
+                ${subskills.map((key,index)=>renderScreenshotReviewSubskillSlot(key,index,result.subskillLevels?.[index])).join('')}
+            </div>
+            ${subskills.map((key,index)=>`<input id="pokemon-screenshot-sub${index+1}" type="hidden" value="${escapeHtmlAttr(key)}">`).join('')}
+            <label class="block text-[9px] font-bold text-slate-500">性格<select id="pokemon-screenshot-nature" class="mt-1 w-full bg-white border border-slate-200 rounded-lg p-2 text-[10px] font-bold">${natureOptions}</select></label>
         </div>
         <details class="text-[9px] text-slate-400"><summary class="cursor-pointer font-bold">查看云端识别原文（排错用）</summary><pre class="mt-1 max-h-24 overflow-auto whitespace-pre-wrap bg-slate-50 rounded-xl p-2">${escapeHtml(result.rawText)}</pre></details>`;
     if (applyBtn) applyBtn.disabled = !result.name;
@@ -14126,15 +14241,36 @@ function toggleCheckInFoodTrack() {
 let dailyCheckInSubmitting = false;
 function setDailyCheckInSubmitButtonBusy(isBusy) {
     const btn = document.getElementById('daily-checkin-submit-btn') || document.querySelector('[data-submit-daily-checkin="1"]');
-    if (!btn) return;
+    const quickBtn = document.getElementById('checkin-quick-result-submit');
+    const quickToggle = document.getElementById('checkin-quick-result-toggle');
     if (isBusy) {
-        btn.disabled = true;
-        btn.classList.add('opacity-70', 'cursor-wait');
-        btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> 录入中，请稍候…';
+        if (btn) {
+            btn.disabled = true;
+            btn.classList.add('opacity-70', 'cursor-wait');
+            btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> 录入中，请稍候…';
+        }
+        if (quickBtn) {
+            quickBtn.disabled = true;
+            quickBtn.classList.add('opacity-70', 'cursor-wait');
+            const icon = quickBtn.querySelector('i');
+            const label = quickBtn.querySelector('[data-quick-result-label]');
+            if (icon) icon.className = 'fa-solid fa-spinner animate-spin mr-1';
+            if (label) label.textContent = '录入中…';
+        }
+        if (quickToggle) quickToggle.disabled = true;
+        closeQuickDailyCheckInResultMenu();
     } else {
-        btn.disabled = false;
-        btn.classList.remove('opacity-70', 'cursor-wait');
-        btn.innerHTML = '<i class="fa-solid fa-signature"></i> 盖章！签定这一发因果律';
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-70', 'cursor-wait');
+            btn.innerHTML = '<i class="fa-solid fa-signature"></i> 盖章！签定这一发因果律';
+        }
+        if (quickBtn) {
+            quickBtn.disabled = false;
+            quickBtn.classList.remove('opacity-70', 'cursor-wait');
+        }
+        if (quickToggle) quickToggle.disabled = false;
+        updateQuickDailyCheckInResultButton();
     }
 }
 
@@ -19859,6 +19995,110 @@ function getTrainingShardCostPerCandy(totalExp, expFactor = 1) {
     return Math.max(1, Math.round((shardDelta / expDelta) * 25));
 }
 
+// ==========================================
+// 🍬 单只宝可梦培养计算器
+// ==========================================
+const SINGLE_TRAINING_CALCULATOR_STORAGE_KEY = 'single_training_calculator_v1';
+let singleTrainingCalculatorState = null;
+
+function getDefaultSingleTrainingCalculatorState() {
+    return { source:'box', selectedId:'', virtualName:'虚拟宝可梦', currentLevel:1, expToNext:54,
+        targetLevel:30, expFactor:1, natureMode:'normal', speciesCandy:0, universalCandyS:0,
+        universalCandyM:0, universalCandyL:0, boostCandy:0, boostExpMultiplier:2,
+        boostShardMultiplier:4, sleepExpBonusCount:0, napBaseExpPerDay:150 };
+}
+function normalizeSingleTrainingCalculatorState(raw={}) {
+    const base=Object.assign(getDefaultSingleTrainingCalculatorState(),raw||{});
+    const currentLevel=Math.max(1,Math.min(69,Math.floor(Number(base.currentLevel)||1)));
+    const expFactor=normalizeTrainingExpFactor(base.expFactor);
+    const fullNeed=getTrainingLevelNeed(currentLevel,expFactor);
+    return {
+        source:base.source==='virtual'?'virtual':'box', selectedId:String(base.selectedId||''),
+        virtualName:String(base.virtualName||'虚拟宝可梦').slice(0,30), currentLevel,
+        expToNext:Math.max(0,Math.min(fullNeed,Math.floor(Number(base.expToNext)||0))),
+        targetLevel:Math.max(currentLevel+1,Math.min(70,Math.floor(Number(base.targetLevel)||30))), expFactor,
+        natureMode:['up','normal','down'].includes(base.natureMode)?base.natureMode:'normal',
+        speciesCandy:Math.max(0,Math.floor(Number(base.speciesCandy)||0)), universalCandyS:Math.max(0,Math.floor(Number(base.universalCandyS)||0)),
+        universalCandyM:Math.max(0,Math.floor(Number(base.universalCandyM)||0)), universalCandyL:Math.max(0,Math.floor(Number(base.universalCandyL)||0)),
+        boostCandy:Math.max(0,Math.floor(Number(base.boostCandy)||0)), boostExpMultiplier:Math.max(1,Math.min(5,Number(base.boostExpMultiplier)||2)),
+        boostShardMultiplier:Math.max(1,Math.min(10,Number(base.boostShardMultiplier)||4)),
+        sleepExpBonusCount:Math.max(0,Math.min(5,Math.floor(Number(base.sleepExpBonusCount)||0))),
+        napBaseExpPerDay:Math.max(1,Math.min(9999,Math.floor(Number(base.napBaseExpPerDay)||150)))
+    };
+}
+function loadSingleTrainingCalculatorState() {
+    if(singleTrainingCalculatorState)return singleTrainingCalculatorState;
+    let saved={};try{saved=JSON.parse(localStorage.getItem(SINGLE_TRAINING_CALCULATOR_STORAGE_KEY)||'{}')||{};}catch(_){}
+    return singleTrainingCalculatorState=normalizeSingleTrainingCalculatorState(saved);
+}
+function saveSingleTrainingCalculatorState(){try{localStorage.setItem(SINGLE_TRAINING_CALCULATOR_STORAGE_KEY,JSON.stringify(singleTrainingCalculatorState));}catch(_){}}
+function getSingleTrainingNatureKey(mode){return mode==='up'?'timid':(mode==='down'?'brave':'neutral');}
+function estimateSingleTrainingShardCost(startTotalExp,expFactor,boostedCandy,boostedExp,normalCandy,normalExp,boostShardMultiplier){
+    let totalExp=Math.max(0,Number(startTotalExp)||0),shards=0;
+    const apply=(count,exp,multiplier)=>{for(let i=0;i<count;i++){shards+=getTrainingShardCostPerCandy(totalExp,expFactor)*multiplier;totalExp+=exp;}};
+    apply(boostedCandy,boostedExp,boostShardMultiplier);apply(normalCandy,normalExp,1);return Math.round(shards);
+}
+function applySingleTrainingBoxPokemon(id,rerender=true){
+    normalizeGraduationDex();const item=graduationDex.find(entry=>String(entry.id)===String(id));if(!item)return;
+    const cap=getGraduationCapture(item),cur=getGraduationCurrent(item);
+    const currentLevel=Math.max(1,Math.min(69,Math.floor(Number(cur.trainingLevel)||1)));
+    const expFactor=normalizeTrainingExpFactor(cur.trainingExpFactor),fullNeed=getTrainingLevelNeed(currentLevel,expFactor);
+    const unlock=getSleepExpBonusUnlockLevel(cur.subskills||cap.subskills||{});
+    singleTrainingCalculatorState=normalizeSingleTrainingCalculatorState(Object.assign({},loadSingleTrainingCalculatorState(),{
+        source:'box',selectedId:String(item.id),currentLevel,expFactor,
+        expToNext:cur.trainingExpToNext==null?fullNeed:Number(cur.trainingExpToNext),
+        targetLevel:Math.max(currentLevel+1,Math.min(70,Number(cur.trainingTargetLevel)||Math.max(30,currentLevel+1))),
+        natureMode:getTrainingNatureMode(cur.nature||cap.nature),sleepExpBonusCount:unlock&&unlock<=currentLevel?1:0
+    }));saveSingleTrainingCalculatorState();if(rerender)renderSingleTrainingCalculatorModal();
+}
+function readSingleTrainingCalculatorForm(){
+    const get=id=>document.getElementById(id);singleTrainingCalculatorState=normalizeSingleTrainingCalculatorState(Object.assign({},loadSingleTrainingCalculatorState(),{
+        virtualName:get('single-training-name')?.value,currentLevel:get('single-training-current-level')?.value,
+        expToNext:get('single-training-exp-to-next')?.value,targetLevel:get('single-training-target-level')?.value,
+        expFactor:get('single-training-exp-factor')?.value,natureMode:get('single-training-nature')?.value,
+        speciesCandy:get('single-training-species-candy')?.value,universalCandyS:get('single-training-universal-s')?.value,
+        universalCandyM:get('single-training-universal-m')?.value,universalCandyL:get('single-training-universal-l')?.value,
+        boostCandy:get('single-training-boost-candy')?.value,boostExpMultiplier:get('single-training-boost-exp')?.value,
+        boostShardMultiplier:get('single-training-boost-shard')?.value,sleepExpBonusCount:get('single-training-sleep-bonus')?.value,
+        napBaseExpPerDay:get('single-training-nap-exp')?.value
+    }));saveSingleTrainingCalculatorState();return singleTrainingCalculatorState;
+}
+function calculateSingleTrainingCalculator(){
+    const state=readSingleTrainingCalculatorForm(),result=document.getElementById('single-training-results');if(!result)return;
+    const natureKey=getSingleTrainingNatureKey(state.natureMode),current={trainingLevel:state.currentLevel,trainingExpToNext:state.expToNext,trainingExpFactor:state.expFactor,trainingTargetLevel:state.targetLevel};
+    const missingExp=getTrainingMissingExp(current,state.targetLevel),currentTotalExp=getTrainingCurrentTotalExp(current);
+    const normalCandyExp=getTrainingCandyExp(natureKey,false),boostedCandyExp=Math.max(normalCandyExp,Math.round(normalCandyExp*state.boostExpMultiplier));
+    const boostedCandy=Math.min(state.boostCandy,Math.ceil(missingExp/boostedCandyExp)),normalCandy=Math.ceil(Math.max(0,missingExp-boostedCandy*boostedCandyExp)/normalCandyExp);
+    const totalCandyNeeded=boostedCandy+normalCandy,universalEquivalent=state.universalCandyS*3+state.universalCandyM*20+state.universalCandyL*100;
+    const availableCandy=state.speciesCandy+universalEquivalent,candyGap=Math.max(0,totalCandyNeeded-availableCandy),candySurplus=Math.max(0,availableCandy-totalCandyNeeded);
+    const availableBoosted=Math.min(boostedCandy,availableCandy),availableNormal=Math.max(0,Math.min(normalCandy,availableCandy-availableBoosted));
+    const remainingAfterInventory=Math.max(0,missingExp-Math.min(missingExp,availableBoosted*boostedCandyExp+availableNormal*normalCandyExp));
+    const sleepExpPerDay=getTrainingSleepExp(natureKey,state.sleepExpBonusCount),natureRate=state.natureMode==='up'?1.18:(state.natureMode==='down'?0.82:1);
+    const napExpPerDay=Math.round(state.napBaseExpPerDay*natureRate),shardCost=estimateSingleTrainingShardCost(currentTotalExp,state.expFactor,boostedCandy,boostedCandyExp,normalCandy,normalCandyExp,state.boostShardMultiplier);
+    const fullSleepDays=Math.ceil(missingExp/sleepExpPerDay),fullNapDays=Math.ceil(missingExp/napExpPerDay),remainingSleepDays=Math.ceil(remainingAfterInventory/sleepExpPerDay),remainingNapDays=Math.ceil(remainingAfterInventory/napExpPerDay);
+    const sourceName=state.source==='box'?(()=>{const item=graduationDex.find(entry=>String(entry.id)===state.selectedId);return item?getGraduationDexNickname(item):'出货库个体';})():state.virtualName;
+    result.innerHTML=`<div class="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-teal-50 p-4"><div class="flex flex-wrap items-center justify-between gap-2"><div><h4 class="text-sm font-black text-slate-800">${escapeHtml(sourceName)} · Lv.${state.currentLevel} → Lv.${state.targetLevel}</h4><p class="mt-1 text-[9px] font-bold text-slate-400">经验曲线×${state.expFactor} · ${getTrainingNatureLabel(natureKey)} · 普通糖${normalCandyExp} EXP${boostedCandy?` · 增强糖${boostedCandyExp} EXP`:''}</p></div><span class="rounded-full bg-white px-3 py-1 text-[9px] font-black text-indigo-600 shadow-sm">距下级 ${formatTrainingNumber(state.expToNext)} EXP</span></div>
+    <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">${[['总经验缺口',`${formatTrainingNumber(missingExp)} EXP`,'text-indigo-700'],['所需糖果',`${formatTrainingNumber(totalCandyNeeded)} 颗`,'text-amber-700'],['预计梦碎',formatTrainingNumber(shardCost),'text-violet-700'],['午睡岛（不用糖）',`${formatTrainingNumber(fullNapDays)} 天`,'text-teal-700']].map(([a,b,c])=>`<div class="rounded-xl border border-white bg-white/85 p-3 shadow-sm"><div class="text-[8px] font-black text-slate-400">${a}</div><div class="mt-1 text-sm font-black ${c}">${b}</div></div>`).join('')}</div>
+    <div class="mt-3 grid gap-2 md:grid-cols-2"><div class="rounded-xl bg-white p-3 text-[10px] font-bold leading-5 text-slate-600"><div class="font-black text-amber-700"><i class="fa-solid fa-candy-cane"></i> 糖果方案</div><div>增强糖 <strong>${formatTrainingNumber(boostedCandy)}</strong> 颗＋普通糖 <strong>${formatTrainingNumber(normalCandy)}</strong> 颗。</div><div>本系糖与万能糖共折 <strong>${formatTrainingNumber(availableCandy)}</strong> 颗。${candyGap?`<span class="text-rose-600">仍缺 ${formatTrainingNumber(candyGap)} 颗。</span>`:`<span class="text-emerald-600">资源足够${candySurplus?`，余 ${formatTrainingNumber(candySurplus)} 颗`:''}。</span>`}</div><div class="text-[8px] text-slate-400">万能糖S/M/L按3/20/100折算；梦碎按跨级过程逐颗估算。</div></div>
+    <div class="rounded-xl bg-white p-3 text-[10px] font-bold leading-5 text-slate-600"><div class="font-black text-teal-700"><i class="fa-solid fa-umbrella-beach"></i> 时间方案</div><div>完全靠正常睡眠：<strong>${formatTrainingNumber(fullSleepDays)}</strong> 天（${formatTrainingNumber(sleepExpPerDay)} EXP/天）。</div><div>完全靠午睡岛：<strong>${formatTrainingNumber(fullNapDays)}</strong> 天／${formatTrainingNumber(Math.ceil(fullNapDays/7))} 周（${formatTrainingNumber(napExpPerDay)} EXP/天）。</div><div>先用现有糖后：还需睡眠 <strong>${formatTrainingNumber(remainingSleepDays)}</strong> 天，或午睡岛 <strong>${formatTrainingNumber(remainingNapDays)}</strong> 天。</div><div class="text-[8px] text-slate-400">午睡岛受EXP性格影响，不受睡眠EXP奖励影响。</div></div></div></div>`;
+}
+function setSingleTrainingCalculatorSource(source){singleTrainingCalculatorState=normalizeSingleTrainingCalculatorState(Object.assign({},loadSingleTrainingCalculatorState(),{source}));saveSingleTrainingCalculatorState();renderSingleTrainingCalculatorModal();}
+function setSingleTrainingTarget(level){const input=document.getElementById('single-training-target-level');if(input)input.value=String(level);calculateSingleTrainingCalculator();}
+function closeSingleTrainingCalculatorModal(){document.getElementById('single-training-calculator-modal')?.remove();}
+function openSingleTrainingCalculatorModal(prefillId=''){loadSingleTrainingCalculatorState();if(prefillId)applySingleTrainingBoxPokemon(prefillId,false);renderSingleTrainingCalculatorModal();}
+function renderSingleTrainingCalculatorModal(){
+    normalizeGraduationDex();const state=loadSingleTrainingCalculatorState(),eligible=graduationDex.slice().sort((a,b)=>String(getGraduationDexNickname(a)).localeCompare(String(getGraduationDexNickname(b)),'zh-CN'));
+    if(state.source==='box'&&eligible.length&&!eligible.some(item=>String(item.id)===state.selectedId))applySingleTrainingBoxPokemon(eligible[0].id,false);
+    const s=loadSingleTrainingCalculatorState();closeSingleTrainingCalculatorModal();const modal=document.createElement('div');modal.id='single-training-calculator-modal';modal.className='fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:p-4';modal.onclick=e=>{if(e.target===modal)closeSingleTrainingCalculatorModal();};
+    modal.innerHTML=`<div role="dialog" aria-modal="true" class="flex h-full w-full max-w-5xl flex-col overflow-hidden bg-slate-50 shadow-2xl sm:h-[94vh] sm:rounded-[2rem]" onclick="event.stopPropagation()"><header class="flex items-start gap-3 bg-gradient-to-r from-indigo-700 via-violet-700 to-fuchsia-600 px-5 py-4 text-white"><div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-xl"><i class="fa-solid fa-candy-cane"></i></div><div class="min-w-0 flex-1"><h2 class="text-lg font-black">宝可梦培养计算器</h2><p class="mt-0.5 text-[10px] font-bold text-indigo-100">算糖果、梦碎、正常睡眠与午睡岛时间</p></div><button onclick="closeSingleTrainingCalculatorModal()" class="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-xl"><i class="fa-solid fa-xmark"></i></button></header><div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+    <div class="grid grid-cols-2 gap-2 rounded-2xl bg-slate-200 p-1"><button onclick="setSingleTrainingCalculatorSource('box')" class="rounded-xl px-3 py-2.5 text-xs font-black ${s.source==='box'?'bg-white text-indigo-700 shadow-sm':'text-slate-500'}"><i class="fa-solid fa-box-open"></i> 从出货库调用</button><button onclick="setSingleTrainingCalculatorSource('virtual')" class="rounded-xl px-3 py-2.5 text-xs font-black ${s.source==='virtual'?'bg-white text-indigo-700 shadow-sm':'text-slate-500'}"><i class="fa-solid fa-wand-magic-sparkles"></i> 虚拟宝可梦</button></div>
+    <section class="mt-4 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm">${s.source==='box'?`<label class="block text-[10px] font-black text-slate-500">选择出货库个体<select onchange="applySingleTrainingBoxPokemon(this.value)" class="mt-1 w-full rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-3 text-xs font-black">${eligible.map(item=>`<option value="${escapeHtmlAttr(item.id)}" ${String(item.id)===s.selectedId?'selected':''}>${escapeHtml(getGraduationDexNickname(item))} · Lv.${Number(getGraduationCurrent(item).trainingLevel)||'未录'}</option>`).join('')}</select></label>`:`<label class="block text-[10px] font-black text-slate-500">虚拟宝可梦名称<input id="single-training-name" value="${escapeHtmlAttr(s.virtualName)}" class="mt-1 w-full rounded-xl border border-violet-100 bg-violet-50 px-3 py-3 text-xs font-black"></label>`}
+    <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><label class="text-[9px] font-black text-slate-500">当前等级<input id="single-training-current-level" type="number" min="1" max="69" value="${s.currentLevel}" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500">距离下一级EXP<input id="single-training-exp-to-next" type="number" min="0" value="${s.expToNext}" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500">目标等级<input id="single-training-target-level" type="number" min="2" max="70" value="${s.targetLevel}" class="mt-1 w-full rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500">经验曲线<select id="single-training-exp-factor" class="mt-1 w-full rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-xs font-black">${TRAINING_EXP_FACTORS.map(v=>`<option value="${v}" ${v===s.expFactor?'selected':''}>×${v}${v===1?' 普通':v===1.5?' 准神':v===1.8?' 传说':' 幻'}</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">EXP性格<select id="single-training-nature" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black"><option value="normal" ${s.natureMode==='normal'?'selected':''}>无修正</option><option value="up" ${s.natureMode==='up'?'selected':''}>EXP＋18%</option><option value="down" ${s.natureMode==='down'?'selected':''}>EXP－18%</option></select></label><label class="text-[9px] font-black text-slate-500">睡眠EXP奖励<select id="single-training-sleep-bonus" class="mt-1 w-full rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs font-black">${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${n===s.sleepExpBonusCount?'selected':''}>${n}个生效词条</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">午睡岛基础EXP/日<input id="single-training-nap-exp" type="number" min="1" value="${s.napBaseExpPerDay}" class="mt-1 w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-xs font-black"></label><div class="flex flex-wrap items-end gap-1">${[30,50,60,70].map(l=>`<button onclick="setSingleTrainingTarget(${l})" class="rounded-lg bg-slate-100 px-2 py-2 text-[9px] font-black text-slate-600">Lv.${l}</button>`).join('')}</div></div></section>
+    <section class="mt-4 grid gap-3 md:grid-cols-2"><div class="rounded-2xl border border-amber-100 bg-amber-50/70 p-4"><h3 class="text-xs font-black text-amber-900"><i class="fa-solid fa-candy-cane"></i> 当前糖果库存</h3><div class="mt-3 grid grid-cols-2 gap-2">${[['本系糖','single-training-species-candy',s.speciesCandy,'amber'],['万能糖S','single-training-universal-s',s.universalCandyS,'violet'],['万能糖M','single-training-universal-m',s.universalCandyM,'violet'],['万能糖L','single-training-universal-l',s.universalCandyL,'violet']].map(([a,b,c,d])=>`<label class="text-[9px] font-black text-${d}-800">${a}<input id="${b}" type="number" min="0" value="${c}" class="mt-1 w-full rounded-xl border border-${d}-200 bg-white px-3 py-2 text-xs font-black"></label>`).join('')}</div></div><div class="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-4"><h3 class="text-xs font-black text-fuchsia-900"><i class="fa-solid fa-bolt"></i> 糖果增强</h3><div class="mt-3 grid grid-cols-3 gap-2">${[['增强糖数量','single-training-boost-candy',s.boostCandy,0],['经验倍率','single-training-boost-exp',s.boostExpMultiplier,0.1],['梦碎倍率','single-training-boost-shard',s.boostShardMultiplier,0.1]].map(([a,b,c,d])=>`<label class="text-[9px] font-black text-fuchsia-800">${a}<input id="${b}" type="number" min="${d?1:0}" ${d?`step="${d}"`:''} value="${c}" class="mt-1 w-full rounded-xl border border-fuchsia-200 bg-white px-3 py-2 text-xs font-black"></label>`).join('')}</div><p class="mt-2 text-[8px] font-bold text-fuchsia-500">普通增强默认EXP×2、梦碎×4。</p></div></section>
+    <button onclick="calculateSingleTrainingCalculator()" class="mt-4 w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-black text-white"><i class="fa-solid fa-calculator"></i> 计算培养资源</button><div id="single-training-results" class="mt-4"></div><details class="mt-4 rounded-2xl border border-slate-200 bg-white"><summary class="cursor-pointer list-none px-4 py-3 text-[10px] font-black text-slate-500"><i class="fa-solid fa-box-archive mr-1"></i> 旧版多人联合培养（已雪藏）</summary><div class="border-t border-slate-100 p-4 text-[9px] font-bold text-slate-500">旧方案与已有设置仍保留。<button onclick="closeSingleTrainingCalculatorModal();openTrainingPlannerModal()" class="ml-2 rounded-xl bg-slate-100 px-3 py-2 font-black">打开旧功能</button></div></details></div></div>`;
+    document.body.appendChild(modal);calculateSingleTrainingCalculator();
+}
+
 function openTrainingProgressModal(id) {
     normalizeGraduationDex();
     const item = graduationDex.find(x => String(x.id) === String(id));
@@ -20859,7 +21099,8 @@ function openGraduationDexBoxDetail(id) {
                         <div class="flex flex-wrap gap-1.5">${capSkillChips}</div>
                     </div>
                 </details>
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+                    <button onclick='closeGraduationDexBoxDetail();openSingleTrainingCalculatorModal(${JSON.stringify(item.id)})' class="px-3 py-2.5 rounded-xl bg-violet-600 text-white text-[10px] font-black"><i class="fa-solid fa-candy-cane"></i> 培养计算</button>
                     <button onclick='closeGraduationDexBoxDetail();openTrainingProgressModal(${JSON.stringify(item.id)})' class="px-3 py-2.5 rounded-xl bg-indigo-600 text-white text-[10px] font-black"><i class="fa-solid fa-arrow-trend-up"></i> 等级经验</button>
                     <button onclick='closeGraduationDexBoxDetail();openEditGraduationDexModal(${JSON.stringify(item.id)}, "current")' class="px-3 py-2.5 rounded-xl bg-amber-100 text-amber-800 text-[10px] font-black"><i class="fa-solid fa-pen"></i> 编辑当前</button>
                     <button onclick='closeGraduationDexBoxDetail();openEditGraduationDexModal(${JSON.stringify(item.id)}, "capture")' class="px-3 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-[10px] font-black"><i class="fa-solid fa-clock-rotate-left"></i> 捕捉时</button>
@@ -20895,8 +21136,8 @@ function renderGraduationDexModalShell() {
             </div>
 
             <div class="flex flex-wrap gap-2">
-                <button onclick="openTrainingPlannerModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
-                    <i class="fa-solid fa-chart-line"></i> 联合培养计算
+                <button onclick="openSingleTrainingCalculatorModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
+                    <i class="fa-solid fa-candy-cane"></i> 培养计算器
                 </button>
                 <button onclick="openWorkerBackfillModal()" class="bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs px-4 py-2 rounded-xl shadow-sm flex items-center gap-1.5">
                     <i class="fa-solid fa-helmet-safety"></i> 补录打工
@@ -21252,6 +21493,7 @@ function openGraduationBackfillModal(prefill = null) {
     if (!modal) return;
 
     modal.dataset.mode = 'graduationBackfill';
+    hideQuickDailyCheckInResultActions();
 
     const title = modal.querySelector('h3');
     if (title) {
@@ -21582,6 +21824,7 @@ function openEditGraduationDexModal(id, mode = 'current') {
 
     modal.dataset.editGraduationDexId = String(id);
     modal.dataset.editGraduationDexMode = mode;
+    hideQuickDailyCheckInResultActions();
 
     const title = modal.querySelector('h3');
     if (title) {
@@ -23002,6 +23245,7 @@ function openEditHistoryLogModal(logId) {
     if (!modal) return;
 
     modal.dataset.editHistoryId = String(logId);
+    hideQuickDailyCheckInResultActions();
 
     const title = modal.querySelector('h3');
     if (title) {
@@ -23289,9 +23533,167 @@ function getSubskillMeta(key) {
     };
 }
 
-function selectSubskillSlot(slotId) {
+const SUBSKILL_PICKER_ROWS = [
+    { title: '金色副技能', keys: ['bfs', 'hb', 'sexp', 'rexp', 'erec', 'dshard'] },
+    { title: '技能等级提升', keys: ['slm', 'sls'] },
+    { title: '技能几率提升', keys: ['stm', 'sts'] },
+    { title: '帮忙速度', keys: ['hsm', 'hss'] },
+    { title: '食材几率提升', keys: ['ifm', 'ifs'] },
+    { title: '持有上限提升', keys: ['invl', 'invm', 'invs'] }
+];
+const SUBSKILL_SLOT_LABELS = { sub1: 'Lv.10', sub2: 'Lv.25', sub3: 'Lv.50', sub4: 'Lv.70', sub5: 'Lv.80' };
+window.subskillPickerUiContext = null;
+
+function getSubskillToneClasses(key, selected = false, muted = false) {
+    const meta = getSubskillMeta(key);
+    if (muted) return 'border-slate-100 bg-slate-50 text-slate-300 opacity-55';
+    if (meta.tier === 'gold') return selected
+        ? 'border-amber-600 bg-amber-500 text-slate-950 ring-2 ring-amber-200 shadow-sm'
+        : 'border-amber-300 bg-gradient-to-b from-amber-100 to-amber-200 text-amber-950 hover:border-amber-500';
+    if (meta.tier === 'blue') return selected
+        ? 'border-indigo-700 bg-indigo-600 text-white ring-2 ring-indigo-200 shadow-sm'
+        : 'border-sky-300 bg-gradient-to-b from-sky-50 to-sky-100 text-sky-900 hover:border-indigo-400';
+    if (meta.tier === 'white') return selected
+        ? 'border-slate-800 bg-slate-800 text-white ring-2 ring-slate-200 shadow-sm'
+        : 'border-slate-300 bg-white text-slate-700 hover:border-slate-500';
+    return selected
+        ? 'border-indigo-500 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-100'
+        : 'border-slate-200 bg-white text-slate-400';
+}
+
+function renderScreenshotReviewSubskillSlot(key, index, recognizedLevel = null) {
+    const meta = getSubskillMeta(key);
+    // 槽位等级由游戏规则固定，识别结果只负责技能名称，避免 OCR 把 Lv.70 / Lv.80 标错。
+    const level = [10, 25, 50, 70, 80][index];
+    return `<button type="button" onclick="openScreenshotSubskillPicker(${index})" class="min-w-[104px] rounded-2xl border p-2.5 text-left transition sm:min-w-0 ${getSubskillToneClasses(key)}">
+        <span class="block text-[8px] font-black opacity-65">Lv.${level}</span>
+        <span class="mt-1 block min-h-[28px] text-[10px] font-black leading-tight">${escapeHtml(meta.name)}</span>
+        <span class="mt-1 block text-[8px] font-bold opacity-55">点击修改</span>
+    </button>`;
+}
+
+function refreshScreenshotReviewSubskillSlots() {
+    const wrapper = document.getElementById('pokemon-screenshot-subskill-slots');
+    if (!wrapper) return;
+    const levels = window.pendingPokemonScreenshotRecognition?.subskillLevels || [];
+    wrapper.innerHTML = [0, 1, 2, 3, 4].map(index => {
+        const key = document.getElementById(`pokemon-screenshot-sub${index + 1}`)?.value || 'none';
+        return renderScreenshotReviewSubskillSlot(key, index, levels[index]);
+    }).join('');
+}
+
+function openScreenshotSubskillPicker(index) {
+    window.subskillPickerUiContext = { kind: 'screenshot', index: Math.max(0, Math.min(4, Number(index) || 0)) };
+    openSubskillPickerDialog();
+}
+
+function selectSubskillSlot(slotId, openPicker = true) {
     window.activeSubskillSlot = slotId;
     refreshSubskillSlotsUI();
+    if (openPicker) {
+        window.subskillPickerUiContext = { kind: 'checkin' };
+        openSubskillPickerDialog();
+    }
+}
+
+function closeSubskillPickerDialog() {
+    document.getElementById('subskill-picker-dialog')?.remove();
+    window.subskillPickerUiContext = null;
+}
+
+function openSubskillPickerDialog() {
+    document.getElementById('subskill-picker-dialog')?.remove();
+    const dialog = document.createElement('div');
+    dialog.id = 'subskill-picker-dialog';
+    dialog.className = 'fixed inset-0 z-[160] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4';
+    dialog.onclick = event => { if (event.target === dialog) closeSubskillPickerDialog(); };
+    dialog.innerHTML = `<div class="flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-t-[2rem] bg-white shadow-2xl sm:rounded-[2rem]" onclick="event.stopPropagation()">
+        <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+            <div><h3 class="text-base font-black text-slate-900">选择副技能</h3><p id="subskill-picker-subtitle" class="mt-1 text-[9px] font-bold text-slate-400"></p></div>
+            <button type="button" onclick="closeSubskillPickerDialog()" class="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-500"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div id="subskill-picker-dialog-content" class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"></div>
+        <div class="grid grid-cols-2 gap-2 border-t border-slate-100 bg-white px-4 py-3 sm:px-5"><button type="button" onclick="clearActiveSubskillPickerSlot()" class="rounded-xl border border-slate-200 bg-white py-2.5 text-xs font-black text-slate-500"><i class="fa-solid fa-eraser"></i> 清空当前格</button><button type="button" onclick="closeSubskillPickerDialog()" class="rounded-xl bg-slate-900 py-2.5 text-xs font-black text-white">完成</button></div>
+    </div>`;
+    document.body.appendChild(dialog);
+    renderSubskillPickerDialogContent();
+}
+
+function getSubskillPickerContextState() {
+    const context = window.subskillPickerUiContext || { kind: 'checkin' };
+    if (context.kind === 'screenshot') {
+        const index = Math.max(0, Math.min(4, Number(context.index) || 0));
+        return { context, slot: `sub${index + 1}`, index, value: document.getElementById(`pokemon-screenshot-sub${index + 1}`)?.value || 'none' };
+    }
+    const slot = window.activeSubskillSlot || 'sub1';
+    return { context, slot, index: Math.max(0, ['sub1','sub2','sub3','sub4','sub5'].indexOf(slot)), value: window.checkinSubskills?.[slot] || 'none' };
+}
+
+function renderSubskillPickerDialogContent() {
+    const wrapper = document.getElementById('subskill-picker-dialog-content');
+    if (!wrapper) return;
+    const state = getSubskillPickerContextState();
+    const subtitle = document.getElementById('subskill-picker-subtitle');
+    if (subtitle) subtitle.textContent = `${SUBSKILL_SLOT_LABELS[state.slot]} · 当前：${getSubskillMeta(state.value).name} · 选中后自动前往下一格`;
+    const isCheckin = state.context.kind !== 'screenshot';
+    const occupiedValues = isCheckin ? Object.values(window.checkinSubskills || {}).filter(value => value !== 'none') : [];
+    const currentEditContext = isCheckin ? getCurrentGraduationEditContext() : null;
+    const slotButtons = ['sub1','sub2','sub3','sub4','sub5'].map((slot, index) => {
+        const key = isCheckin ? (window.checkinSubskills?.[slot] || 'none') : (document.getElementById(`pokemon-screenshot-sub${index + 1}`)?.value || 'none');
+        const focused = index === state.index;
+        return `<button type="button" onclick="switchSubskillPickerSlot(${index})" class="min-w-[92px] rounded-xl border p-2 text-left ${getSubskillToneClasses(key, focused)}">
+            <span class="block text-[8px] font-black opacity-60">${SUBSKILL_SLOT_LABELS[slot]}</span><span class="mt-0.5 block truncate text-[9px] font-black">${escapeHtml(getSubskillMeta(key).name)}</span>
+        </button>`;
+    }).join('');
+    const rows = SUBSKILL_PICKER_ROWS.map(row => {
+        const buttons = row.keys.map(key => {
+            const meta = getSubskillMeta(key);
+            const selected = state.value === key;
+            const occupiedElsewhere = isCheckin && occupiedValues.includes(key) && !selected;
+            const illegal = !!(currentEditContext && !occupiedElsewhere && !isLegalCurrentSubskillValue(currentEditContext.capture?.subskills || {}, state.slot, key));
+            const muted = occupiedElsewhere || illegal;
+            return `<button type="button" onclick="chooseSubskillFromDialog('${key}')" title="${escapeHtmlAttr(illegal ? `${meta.name}（当前状态不可改成该技能）` : meta.name)}" class="min-h-[46px] rounded-xl border px-2 py-2 text-[11px] font-black leading-tight transition active:scale-[0.98] ${getSubskillToneClasses(key, selected, muted)} ${occupiedElsewhere ? 'line-through' : ''}">${escapeHtml(meta.name)}</button>`;
+        }).join('');
+        return `<div class="grid grid-cols-[104px_1fr] items-center gap-2 border-b border-slate-100 py-2.5 last:border-0"><div class="text-[10px] font-black text-slate-600">${row.title}</div><div class="grid grid-cols-2 gap-2 sm:grid-cols-3">${buttons}</div></div>`;
+    }).join('');
+    wrapper.innerHTML = `<div class="mb-3 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-5 sm:overflow-visible">${slotButtons}</div><div class="rounded-2xl border border-slate-200 bg-slate-50/60 px-3">${rows}</div><p class="mt-3 text-[9px] font-bold leading-relaxed text-slate-400">颜色仅表示技能稀有度。已有技能、自动评分、保存格式与合法升级规则均保持不变。</p>`;
+}
+
+function switchSubskillPickerSlot(index) {
+    const state = getSubskillPickerContextState();
+    const nextIndex = Math.max(0, Math.min(4, Number(index) || 0));
+    if (state.context.kind === 'screenshot') window.subskillPickerUiContext = { kind: 'screenshot', index: nextIndex };
+    else window.activeSubskillSlot = `sub${nextIndex + 1}`;
+    refreshSubskillSlotsUI();
+    renderSubskillPickerDialogContent();
+}
+
+function chooseSubskillFromDialog(skillKey) {
+    const state = getSubskillPickerContextState();
+    if (state.context.kind === 'screenshot') {
+        const input = document.getElementById(`pokemon-screenshot-sub${state.index + 1}`);
+        if (input) input.value = skillKey;
+        refreshScreenshotReviewSubskillSlots();
+        window.subskillPickerUiContext = { kind: 'screenshot', index: Math.min(4, state.index + 1) };
+        renderSubskillPickerDialogContent();
+        return;
+    }
+    handleGridSkillSelect(skillKey);
+    renderSubskillPickerDialogContent();
+}
+
+function clearActiveSubskillPickerSlot() {
+    const state = getSubskillPickerContextState();
+    if (state.context.kind === 'screenshot') {
+        const input = document.getElementById(`pokemon-screenshot-sub${state.index + 1}`);
+        if (input) input.value = 'none';
+        refreshScreenshotReviewSubskillSlots();
+        renderSubskillPickerDialogContent();
+        return;
+    }
+    if (state.value === 'none') return;
+    handleGridSkillSelect(state.value);
+    renderSubskillPickerDialogContent();
 }
 
 function getCurrentGraduationEditContext() {
@@ -23433,7 +23835,7 @@ function refreshSubskillSlotsUI() {
     const pickerWrapper = document.getElementById('subskill-grid-picker');
     if (!headerWrapper || !pickerWrapper) return;
 
-    let slotLabels = { sub1: 'Lv.10', sub2: 'Lv.25', sub3: 'Lv.50', sub4: 'Lv.75', sub5: 'Lv.100' };
+    let slotLabels = SUBSKILL_SLOT_LABELS;
     let slotOrder = ['sub1', 'sub2', 'sub3', 'sub4', 'sub5'];
 
     headerWrapper.innerHTML = slotOrder.map(slot => {
@@ -23466,61 +23868,28 @@ function refreshSubskillSlotsUI() {
             : 'hover:shadow-sm';
 
         return `
-        <button onclick="selectSubskillSlot('${slot}')" class="p-1 rounded-xl flex flex-col items-center justify-center transition duration-150 group h-14 border ${toneCls} ${focusCls}">
-            <span class="text-[8px] font-bold block scale-90 ${isFocused ? 'text-indigo-700' : levelCls}">${slotLabels[slot]}</span>
-            <span class="text-[10px] font-black mt-0.5 tracking-tight leading-tight line-clamp-2 ${meta.tier === 'none' ? 'font-normal' : ''}">${displayName}</span>
+        <button type="button" onclick="selectSubskillSlot('${slot}')" class="min-w-[104px] p-2.5 rounded-2xl flex flex-col items-start justify-center transition duration-150 group h-[72px] border text-left sm:min-w-0 ${toneCls} ${focusCls}">
+            <span class="text-[8px] font-bold block ${isFocused ? 'text-indigo-700' : levelCls}">${slotLabels[slot]}</span>
+            <span class="text-[10px] font-black mt-1 tracking-tight leading-tight line-clamp-2 ${meta.tier === 'none' ? 'font-normal' : ''}">${displayName}</span>
+            <span class="mt-1 text-[8px] font-bold opacity-50">点击选择</span>
         </button>`;
     }).join('');
 
-    let occupiedValues = Object.values(window.checkinSubskills).filter(v => v !== 'none');
-    let gridHTML = "";
-
-    for (let cat in ALL_AVAILABLE_SUBSKILLS) {
-        let block = ALL_AVAILABLE_SUBSKILLS[cat];
-        let chipsHTML = block.skills.map(sk => {
-            let isCurrentSelected = window.checkinSubskills[window.activeSubskillSlot] === sk.key;
-            let isOccupiedElsewhere = occupiedValues.includes(sk.key) && !isCurrentSelected;
-            const currentEditContext = getCurrentGraduationEditContext();
-            let isIllegalCurrentEditChoice = false;
-            if (currentEditContext && !isOccupiedElsewhere) {
-                isIllegalCurrentEditChoice = !isLegalCurrentSubskillValue(currentEditContext.capture?.subskills || {}, window.activeSubskillSlot, sk.key);
-            }
-
-            let btnClass = sk.color;
-            if (isCurrentSelected) {
-                if (sk.tier === 'gold') {
-                    btnClass = 'bg-amber-600 text-white border-amber-700 shadow-inner ring-2 ring-amber-400/30 font-black';
-                } else if (sk.tier === 'blue') {
-                    btnClass = 'bg-indigo-600 text-white border-indigo-700 shadow-inner ring-2 ring-indigo-400/30 font-black';
-                } else {
-                    btnClass = 'bg-slate-900 text-white border-slate-950 shadow-inner ring-2 ring-slate-300/40 font-black';
-                }
-            } else if (isOccupiedElsewhere) {
-                btnClass = 'bg-slate-50 text-slate-300 border-slate-100 opacity-45 line-through font-normal';
-            } else if (isIllegalCurrentEditChoice) {
-                btnClass = 'bg-rose-50 text-rose-300 border-rose-100 opacity-55 line-through font-normal';
-            }
-
-            const titleText = isIllegalCurrentEditChoice
-                ? sk.name + '（当前状态不可改成这个副技能）'
-                : sk.name;
-
-            return `
-            <button onclick="handleGridSkillSelect('${sk.key}')" class="px-1.5 py-1.5 min-h-[38px] rounded-xl border text-[10px] leading-tight whitespace-normal break-keep transition duration-150 hover:scale-[1.02] active:scale-95 text-center flex items-center justify-center ${btnClass}" title="${titleText}">
-                ${sk.name}
-            </button>`;
-        }).join('');
-
-        gridHTML += `
-        <div class="space-y-1">
-            <span class="block text-[8px] font-black text-slate-400 tracking-wider">${block.title}</span>
-            <div class="grid grid-cols-4 gap-1.5">
-                ${chipsHTML}
-            </div>
-        </div>`;
-    }
-
-    pickerWrapper.innerHTML = gridHTML;
+    const activeSlot = window.activeSubskillSlot || 'sub1';
+    const activeMeta = getSubskillMeta(window.checkinSubskills[activeSlot]);
+    const activeTone = getSubskillToneClasses(activeMeta.key);
+    pickerWrapper.innerHTML = `
+        <button type="button"
+                onclick="window.subskillPickerUiContext={kind:'checkin'};openSubskillPickerDialog()"
+                class="w-full min-h-[54px] rounded-2xl border px-4 py-3 text-left transition hover:shadow-md active:scale-[0.995] ${activeTone}">
+            <span class="flex items-center justify-between gap-3">
+                <span class="min-w-0">
+                    <span class="block text-[9px] font-black tracking-wider opacity-60">正在设置 ${slotLabels[activeSlot]}</span>
+                    <span class="mt-1 block truncate text-sm font-black">${escapeHtml(activeMeta.name)}</span>
+                </span>
+                <span class="shrink-0 rounded-xl bg-white/70 px-3 py-2 text-[10px] font-black shadow-sm">打开副技能面板 ›</span>
+            </span>
+        </button>`;
 }
 
 
@@ -30129,7 +30498,7 @@ function openSleepSplitPlannerModal() {
         { id: 'drySpell', group: 'luck', label: '毕业断档分析', desc: '查看距离上次毕业数据', icon: 'fa-cloud-rain', tone: 'bg-rose-50 text-rose-700', action: 'openGraduationDrySpellModal' },
         { id: 'calibration', group: 'luck', label: '总捕捉数校准', desc: '调整老玩家捕捉补正', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', custom: 'calibration' },
 
-        { id: 'training', group: 'pokemon', label: '联合培养计算', desc: '经验、糖果与午睡岛规划', icon: 'fa-chart-line', tone: 'bg-indigo-50 text-indigo-700', action: 'openTrainingPlannerModal' },
+        { id: 'training', group: 'pokemon', label: '培养计算器', desc: '糖果、梦碎与午睡岛时间', icon: 'fa-candy-cane', tone: 'bg-indigo-50 text-indigo-700', action: 'openSingleTrainingCalculatorModal' },
         { id: 'worker', group: 'pokemon', label: '补录打工个体', desc: '收录临时培养宝可梦', icon: 'fa-helmet-safety', tone: 'bg-sky-50 text-sky-700', action: 'openWorkerBackfillModal' },
         { id: 'future', group: 'pokemon', label: '补录未来可期', desc: '收录高等级潜力个体', icon: 'fa-seedling', tone: 'bg-fuchsia-50 text-fuchsia-700', action: 'openFuturePotentialBackfillModal' },
         { id: 'graduationBackfill', group: 'pokemon', label: '补录出货个体', desc: '手动补充毕业档案', icon: 'fa-plus', tone: 'bg-amber-50 text-amber-700', action: 'openGraduationBackfillModal' },
@@ -30145,7 +30514,8 @@ function openSleepSplitPlannerModal() {
         { id: 'dailyReward', group: 'sleep', label: '每日奖励打卡', desc: '小日历查漏与快速补录', icon: 'fa-gift', tone: 'bg-amber-50 text-amber-800', action: 'openDailyRewardQuickModal' },
         { id: 'ballPlanner', group: 'sleep', label: '精灵球与每日奖励', desc: '库存、奖励和商店规划', icon: 'fa-baseball', tone: 'bg-sky-50 text-sky-700', action: 'openBallPlannerModal' },
 
-        { id: 'weeklyCookingLegacy', group: 'legacy', label: '旧周料理随机仿真', desc: '兼容旧方案，不再推荐', icon: 'fa-calendar-week', tone: 'bg-slate-100 text-slate-500', action: 'openWeeklyCookingSimulatorModal' }
+        { id: 'weeklyCookingLegacy', group: 'legacy', label: '旧周料理随机仿真', desc: '兼容旧方案，不再推荐', icon: 'fa-calendar-week', tone: 'bg-slate-100 text-slate-500', action: 'openWeeklyCookingSimulatorModal' },
+        { id: 'trainingLegacy', group: 'legacy', label: '旧联合培养计算', desc: '旧多人联合方案与既有设置', icon: 'fa-chart-line', tone: 'bg-slate-100 text-slate-500', action: 'openTrainingPlannerModal' }
     ];
     const TOOL_MAP = new Map(TOOLS.map(tool => [tool.id, tool]));
     let view = 'common';
