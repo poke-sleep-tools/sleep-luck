@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.08.31.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.05.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -5411,6 +5411,7 @@ async function retryHistoryCloudSyncFromUi() {
 let graduationDex = [];
 let graduationDexDeleted = {};
 let graduationBackfillSubmitting = false;
+let graduationCloudSaveQueue = Promise.resolve();
 
 function getGraduationDexStorageKey() {
     return currentCloudUser ? 'sleep_graduation_dex_' + currentCloudUser.id : 'sleep_graduation_dex_guest';
@@ -5523,6 +5524,9 @@ function buildGraduationDexEntry(payload = {}) {
         source: payload.source || 'manual',
         sourceId: payload.sourceId || null,
         createdAt: payload.createdAt || new Date().toISOString(),
+        // 捕捉档案与当前养成状态分别计时。否则另一台设备只编辑了当前等级，
+        // 也可能把较旧的捕捉名称/评价整条覆盖回来，造成大仓重新提示待补录。
+        captureUpdatedAt: payload.captureUpdatedAt || payload.createdAt || new Date().toISOString(),
         excludeFromLuck: !!payload.excludeFromLuck,
         // 打工 / 未来可期档案均保持 result=none，不进入任何和解/毕业/断档统计。
         isWorker: !!payload.isWorker,
@@ -5568,6 +5572,7 @@ function normalizeGraduationDexEntry(item) {
             source: item.source || 'manual',
             sourceId: item.sourceId || null,
             createdAt: item.createdAt || new Date().toISOString(),
+            captureUpdatedAt: item.captureUpdatedAt || item.createdAt || '',
             excludeFromLuck: !!item.excludeFromLuck,
             isWorker: !!item.isWorker,
             isFuturePotential: !!item.isFuturePotential,
@@ -5585,6 +5590,7 @@ function normalizeGraduationDexEntry(item) {
         source: item.source || 'manual',
         sourceId: item.sourceId || null,
         createdAt: item.createdAt,
+        captureUpdatedAt: item.captureUpdatedAt || item.updatedAt || item.createdAt,
         nickname: item.nickname || item.nickName || item.currentNickname || item.currentName || item.name || '',
         capture: {
             date: item.date,
@@ -5677,13 +5683,44 @@ function mergeGraduationDex(cloudDex = [], localDex = [], localDeleted = {}) {
     const mergedMap = new Map();
     const deletedMap = new Map();
 
+    const getTime = value => Date.parse(value || '') || 0;
+    const getCaptureQuality = item => {
+        const cap = item?.capture || {};
+        let score = 0;
+        if (String(cap.name || '').trim()) score += 4;
+        if (isGraduationResult(cap.result) || cap.result === 'none') score += 2;
+        if (cap.date) score += 1;
+        if (cap.nature && cap.nature !== 'blank') score += 1;
+        if (cap.subskills && Object.values(cap.subskills).some(value => value && value !== 'none')) score += 1;
+        return score;
+    };
+
     const chooseNewer = (existing, candidate) => {
         if (!existing) return candidate;
-        const existingTime = Date.parse(existing.current?.updatedAt || existing.updatedAt || existing.createdAt || '') || 0;
-        const candidateTime = Date.parse(candidate.current?.updatedAt || candidate.updatedAt || candidate.createdAt || '') || 0;
-        if (candidateTime > existingTime) return candidate;
-        if (candidateTime < existingTime) return existing;
-        return candidate;
+        const existingCurrentTime = getTime(existing.current?.updatedAt || existing.updatedAt || existing.createdAt);
+        const candidateCurrentTime = getTime(candidate.current?.updatedAt || candidate.updatedAt || candidate.createdAt);
+        const newerCurrent = candidateCurrentTime >= existingCurrentTime ? candidate : existing;
+
+        const existingCaptureTime = getTime(existing.captureUpdatedAt || existing.createdAt);
+        const candidateCaptureTime = getTime(candidate.captureUpdatedAt || candidate.createdAt);
+        let newerCapture = existing;
+        if (candidateCaptureTime > existingCaptureTime) {
+            newerCapture = candidate;
+        } else if (candidateCaptureTime === existingCaptureTime && getCaptureQuality(candidate) >= getCaptureQuality(existing)) {
+            // 旧版档案没有独立的 captureUpdatedAt；时间相同时优先保留字段更完整的一份。
+            // cloud 先、local 后进入，因此质量相同时仍保留本机版本，方便自动修复旧云端档案。
+            newerCapture = candidate;
+        }
+
+        return Object.assign({}, newerCurrent, {
+            id: newerCurrent.id || existing.id || candidate.id,
+            source: newerCurrent.source || existing.source || candidate.source || 'manual',
+            sourceId: newerCurrent.sourceId || existing.sourceId || candidate.sourceId || null,
+            createdAt: existing.createdAt || candidate.createdAt || newerCurrent.createdAt,
+            captureUpdatedAt: newerCapture.captureUpdatedAt || newerCapture.createdAt || '',
+            capture: newerCapture.capture,
+            current: newerCurrent.current
+        });
     };
 
     const acceptTombstone = item => {
@@ -5703,7 +5740,7 @@ function mergeGraduationDex(cloudDex = [], localDex = [], localDeleted = {}) {
         if (normalized) mergedMap.set(String(normalized.id), chooseNewer(mergedMap.get(String(normalized.id)), normalized));
     });
 
-    // 同 ID 按当前档案 updatedAt 判断，兼顾本机未同步编辑与另一台设备的新进度。
+    // 同 ID 分别合并捕捉档案与当前养成状态，避免编辑等级时带回旧捕捉档案。
     localDex.forEach(item => {
         const normalized = normalizeGraduationDexEntry(item);
         if (normalized) mergedMap.set(String(normalized.id), chooseNewer(mergedMap.get(String(normalized.id)), normalized));
@@ -5779,23 +5816,59 @@ async function loadGraduationDexFromCloud() {
 
 async function saveGraduationDexToCloudNow() {
     if (!currentCloudUser) return;
+    const userId = currentCloudUser.id;
 
-    normalizeGraduationDex();
+    const task = graduationCloudSaveQueue.catch(() => null).then(async () => {
+        if (!currentCloudUser || currentCloudUser.id !== userId) return { ok: false, skipped: true };
 
-    const { error } = await supabaseClient
-        .from('player_boxes')
-        .upsert({
-            user_id: currentCloudUser.id,
-            graduation_dex: getGraduationDexCloudPayload(),
-            updated_at: new Date().toISOString()
-        }, {
-            onConflict: 'user_id'
-        });
+        normalizeGraduationDex();
 
-    if (error) {
-        console.error(error);
-        showToast('毕业库云端保存失败，请确认 Supabase 已添加 graduation_dex 列');
-    }
+        // graduation_dex 是整包 JSON。上传前必须吸收云端最新内容，否则手机和电脑
+        // 先后保存时，后保存的一端会用自己的旧快照覆盖另一端已经存在的档案。
+        const { data: remoteRow, error: readError } = await supabaseClient
+            .from('player_boxes')
+            .select('graduation_dex')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (readError) {
+            console.error(readError);
+            showToast('毕业库云端读取失败，本机档案已保留，稍后请重试同步');
+            return { ok: false, error: readError };
+        }
+        if (!currentCloudUser || currentCloudUser.id !== userId) return { ok: false, skipped: true };
+
+        const merged = mergeGraduationDex(
+            remoteRow && Array.isArray(remoteRow.graduation_dex) ? remoteRow.graduation_dex : [],
+            graduationDex,
+            graduationDexDeleted
+        );
+        graduationDex = merged.entries;
+        graduationDexDeleted = merged.deleted;
+
+        const { error } = await supabaseClient
+            .from('player_boxes')
+            .upsert({
+                user_id: userId,
+                graduation_dex: getGraduationDexCloudPayload(),
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'user_id'
+            });
+
+        if (error) {
+            console.error(error);
+            showToast('毕业库云端保存失败，本机档案已保留，稍后请重试同步');
+            return { ok: false, error };
+        }
+
+        localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
+        localStorage.setItem(getGraduationDexDeletedStorageKey(), JSON.stringify(graduationDexDeleted || {}));
+        return { ok: true };
+    });
+
+    graduationCloudSaveQueue = task;
+    return task;
 }
 
 function scheduleSaveGraduationDexToCloud() {
@@ -5858,6 +5931,10 @@ function getSubskillDisplayName(key) {
     return key;
 }
 
+function getGraduationAuditSpeciesKey(name) {
+    const raw = String(name || '').trim();
+    return pokemonDictionary?.[raw]?.standard || raw;
+}
 
 function getBoxGraduationDexAudit(p) {
     const expected = {
@@ -5871,11 +5948,12 @@ function getBoxGraduationDexAudit(p) {
 
     const recorded = { grad: 0, bigGrad: 0, goldGrad: 0 };
     let recordedShiny = 0;
+    const boxSpeciesKey = getGraduationAuditSpeciesKey(p.name);
     normalizeGraduationDex();
 
     graduationDex.forEach(item => {
         const cap = getGraduationCapture(item);
-        if (!cap || cap.name !== p.name) return;
+        if (!cap || getGraduationAuditSpeciesKey(cap.name) !== boxSpeciesKey) return;
         if (!isGraduationResult(cap.result)) return;
         if (recorded[cap.result] !== undefined) recorded[cap.result] += 1;
         if (cap.isShiny) recordedShiny += 1;
@@ -6018,7 +6096,9 @@ function syncGraduationDexFromHistoryRecord(item) {
         });
 
         if (existing) {
+            const captureChanged = JSON.stringify(existing.capture || {}) !== JSON.stringify(captureState);
             existing.capture = captureState;
+            if (captureChanged) existing.captureUpdatedAt = new Date().toISOString();
             // current 是玩家养成后的展示档案，历史被精修时默认不覆盖 current
             if (!existing.current) {
                 existing.current = Object.assign(cloneGraduationPanelState(captureState), {
@@ -21683,17 +21763,19 @@ function ensureBoxCountCoversOutputs(p) {
 
 function countGraduationDexByNameAndResult(name, result) {
     normalizeGraduationDex();
+    const speciesKey = getGraduationAuditSpeciesKey(name);
     return graduationDex.filter(item => {
         const cap = getGraduationCapture(item);
-        return cap && cap.name === name && cap.result === result;
+        return cap && getGraduationAuditSpeciesKey(cap.name) === speciesKey && cap.result === result;
     }).length;
 }
 
 function countGraduationDexShinyUsefulByName(name) {
     normalizeGraduationDex();
+    const speciesKey = getGraduationAuditSpeciesKey(name);
     return graduationDex.filter(item => {
         const cap = getGraduationCapture(item);
-        return cap && cap.name === name && isGraduationResult(cap.result) && !!cap.isShiny;
+        return cap && getGraduationAuditSpeciesKey(cap.name) === speciesKey && isGraduationResult(cap.result) && !!cap.isShiny;
     }).length;
 }
 
@@ -22036,6 +22118,7 @@ function submitEditGraduationDexEntry(id, mode = 'current') {
         if (!ok) return;
 
         item.capture = cloneGraduationPanelState(state);
+        item.captureUpdatedAt = new Date().toISOString();
         item.current = reconcileCurrentStateWithCapture(item.capture, item.current || state);
         setGraduationDexNickname(item, state.nickname || item.nickname || item.current.name || state.name);
     } else {
@@ -24979,6 +25062,9 @@ async function saveCaptureStateBundleToCloudV42() {
     if (!currentCloudUser) return { ok: true, guest: true };
     clearCaptureCloudTimersV42();
     const userId = currentCloudUser.id;
+    // 避免每日录入整包保存与出货库独立保存同时写 graduation_dex。
+    await graduationCloudSaveQueue.catch(() => null);
+    if (!currentCloudUser || currentCloudUser.id !== userId) return { ok: false, skipped: true };
     normalizePlayerBox();
     normalizeGraduationDex();
     let useDedicatedHistory = historyDedicatedCloudSupport !== false;
