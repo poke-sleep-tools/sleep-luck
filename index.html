@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.05.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.10.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -20088,7 +20088,7 @@ function getDefaultSingleTrainingCalculatorState() {
     return { source:'box', selectedId:'', virtualName:'虚拟宝可梦', currentLevel:1, expToNext:54,
         targetLevel:30, expFactor:1, natureMode:'normal', speciesCandy:0, universalCandyS:0,
         universalCandyM:0, universalCandyL:0, boostCandy:0, boostExpMultiplier:2,
-        boostShardMultiplier:4, sleepExpBonusCount:0, napBaseExpPerDay:150 };
+        boostShardMultiplier:4, sleepExpBonusCount:0, napBaseExpPerDay:150, mixedNapMode:'7' };
 }
 function normalizeSingleTrainingCalculatorState(raw={}) {
     const base=Object.assign(getDefaultSingleTrainingCalculatorState(),raw||{});
@@ -20106,7 +20106,8 @@ function normalizeSingleTrainingCalculatorState(raw={}) {
         boostCandy:Math.max(0,Math.floor(Number(base.boostCandy)||0)), boostExpMultiplier:Math.max(1,Math.min(5,Number(base.boostExpMultiplier)||2)),
         boostShardMultiplier:Math.max(1,Math.min(10,Number(base.boostShardMultiplier)||4)),
         sleepExpBonusCount:Math.max(0,Math.min(5,Math.floor(Number(base.sleepExpBonusCount)||0))),
-        napBaseExpPerDay:Math.max(1,Math.min(9999,Math.floor(Number(base.napBaseExpPerDay)||150)))
+        napBaseExpPerDay:Math.max(1,Math.min(9999,Math.floor(Number(base.napBaseExpPerDay)||150))),
+        mixedNapMode:['off','7','14'].includes(String(base.mixedNapMode))?String(base.mixedNapMode):'7'
     };
 }
 function loadSingleTrainingCalculatorState() {
@@ -20120,6 +20121,56 @@ function estimateSingleTrainingShardCost(startTotalExp,expFactor,boostedCandy,bo
     let totalExp=Math.max(0,Number(startTotalExp)||0),shards=0;
     const apply=(count,exp,multiplier)=>{for(let i=0;i<count;i++){shards+=getTrainingShardCostPerCandy(totalExp,expFactor)*multiplier;totalExp+=exp;}};
     apply(boostedCandy,boostedExp,boostShardMultiplier);apply(normalCandy,normalExp,1);return Math.round(shards);
+}
+function simulateSingleTrainingMixedNap(state,currentTotalExp,missingExp,natureKey){
+    const mode=String(state.mixedNapMode||'off');
+    if(mode==='off')return null;
+    const cycleDays=mode==='14'?14:7,cycleWeeks=cycleDays/7;
+    const targetTotalExp=Math.max(0,currentTotalExp+missingExp);
+    const normalCandyExp=getTrainingCandyExp(natureKey,false);
+    const boostedCandyExp=Math.max(normalCandyExp,Math.round(normalCandyExp*state.boostExpMultiplier));
+    const universalEquivalent=state.universalCandyS*3+state.universalCandyM*20+state.universalCandyL*100;
+    let totalExp=Math.max(0,currentTotalExp),inventory=Math.max(0,state.speciesCandy+universalEquivalent);
+    let initialCandyUsed=0,initialBoostedUsed=0,giftCandyUsed=0,candyExpUsed=0,napExpUsed=0;
+    let shardCost=0,giftCandyExpected=0,giftShardsExpected=0,cycles=0;
+    const applyCandy=(exp,multiplier,source)=>{
+        if(totalExp>=targetTotalExp)return false;
+        shardCost+=getTrainingShardCostPerCandy(totalExp,state.expFactor)*multiplier;
+        const useful=Math.min(exp,targetTotalExp-totalExp);
+        totalExp+=exp;candyExpUsed+=useful;
+        if(source==='gift')giftCandyUsed+=1;else initialCandyUsed+=1;
+        return true;
+    };
+    while(inventory>0&&totalExp<targetTotalExp){
+        const boosted=initialBoostedUsed<state.boostCandy;
+        if(!applyCandy(boosted?boostedCandyExp:normalCandyExp,boosted?state.boostShardMultiplier:1,'initial'))break;
+        if(boosted)initialBoostedUsed+=1;
+        inventory-=1;
+    }
+    const natureRate=state.natureMode==='up'?1.18:(state.natureMode==='down'?0.82:1);
+    const napExpPerDay=Math.round(state.napBaseExpPerDay*natureRate);
+    while(totalExp<targetTotalExp&&cycles<520){
+        cycles+=1;
+        const cycleNapExp=napExpPerDay*cycleDays;
+        const usefulNap=Math.min(cycleNapExp,targetTotalExp-totalExp);
+        totalExp+=cycleNapExp;napExpUsed+=usefulNap;
+        giftCandyExpected+=TRAINING_NAP_GIFT_TOTAL_CANDY_PER_WEEK*cycleWeeks;
+        giftShardsExpected+=TRAINING_NAP_GIFT_SHARDS_PER_WEEK*cycleWeeks;
+        if(totalExp>=targetTotalExp)continue;
+        let cycleGiftCandy=TRAINING_NAP_GIFT_TOTAL_CANDY_PER_WEEK*cycleWeeks;
+        while(cycleGiftCandy>0&&totalExp<targetTotalExp){
+            if(!applyCandy(normalCandyExp,1,'gift'))break;
+            cycleGiftCandy-=1;
+        }
+    }
+    return {
+        cycleDays,cycles,days:cycles*cycleDays,napExpPerDay,napExpUsed,candyExpUsed,
+        initialCandyUsed,initialBoostedUsed,giftCandyUsed,giftCandyExpected,
+        shardCost:Math.round(shardCost),giftShardsExpected:Math.round(giftShardsExpected),
+        netShards:Math.max(0,Math.round(shardCost-giftShardsExpected)),
+        shardSurplus:Math.max(0,Math.round(giftShardsExpected-shardCost)),
+        completed:totalExp>=targetTotalExp
+    };
 }
 function applySingleTrainingBoxPokemon(id,rerender=true){
     normalizeGraduationDex();const item=graduationDex.find(entry=>String(entry.id)===String(id));if(!item)return;
@@ -20143,7 +20194,7 @@ function readSingleTrainingCalculatorForm(){
         universalCandyM:get('single-training-universal-m')?.value,universalCandyL:get('single-training-universal-l')?.value,
         boostCandy:get('single-training-boost-candy')?.value,boostExpMultiplier:get('single-training-boost-exp')?.value,
         boostShardMultiplier:get('single-training-boost-shard')?.value,sleepExpBonusCount:get('single-training-sleep-bonus')?.value,
-        napBaseExpPerDay:get('single-training-nap-exp')?.value
+        napBaseExpPerDay:get('single-training-nap-exp')?.value,mixedNapMode:get('single-training-mixed-nap-mode')?.value
     }));saveSingleTrainingCalculatorState();return singleTrainingCalculatorState;
 }
 function calculateSingleTrainingCalculator(){
@@ -20164,11 +20215,13 @@ function calculateSingleTrainingCalculator(){
     const sleepExpPerDay=getTrainingSleepExp(natureKey,state.sleepExpBonusCount),natureRate=state.natureMode==='up'?1.18:(state.natureMode==='down'?0.82:1);
     const napExpPerDay=Math.round(state.napBaseExpPerDay*natureRate),shardCost=estimateSingleTrainingShardCost(currentTotalExp,state.expFactor,boostedCandy,boostedCandyExp,normalCandy,normalCandyExp,state.boostShardMultiplier);
     const fullSleepDays=Math.ceil(missingExp/sleepExpPerDay),fullNapDays=Math.ceil(missingExp/napExpPerDay),remainingSleepDays=Math.ceil(remainingAfterInventory/sleepExpPerDay),remainingNapDays=Math.ceil(remainingAfterInventory/napExpPerDay);
+    const mixedNap=simulateSingleTrainingMixedNap(state,currentTotalExp,missingExp,natureKey);
+    const mixedNapHtml=mixedNap?`<div class="mt-3 rounded-2xl border border-teal-200 bg-gradient-to-br from-teal-50 to-cyan-50 p-3 text-[10px] font-bold leading-5 text-slate-600"><div class="flex flex-wrap items-center justify-between gap-2"><div class="font-black text-teal-800"><i class="fa-solid fa-arrows-rotate"></i> 午睡岛＋糖果混合培养</div><span class="rounded-full bg-white px-2.5 py-1 text-[9px] font-black text-teal-700 shadow-sm">每${mixedNap.cycleDays}天领回并喂糖</span></div>${mixedNap.days===0?`<div class="mt-2 text-emerald-700">现有糖果已经足够达到目标，不需要进入午睡岛。</div>`:`<div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">${[['期望完成',`${formatTrainingNumber(mixedNap.days)}天`],['领回次数',`${formatTrainingNumber(mixedNap.cycles)}次`],['岛上EXP',`${formatTrainingNumber(mixedNap.napExpUsed)} EXP`],['礼物糖使用',`${formatTrainingNumber(mixedNap.giftCandyUsed)}颗`]].map(([a,b])=>`<div class="rounded-xl bg-white/90 p-2.5"><div class="text-[8px] text-slate-400">${a}</div><div class="mt-0.5 text-xs font-black text-teal-800">${b}</div></div>`).join('')}</div><div class="mt-2 rounded-xl bg-white/80 px-3 py-2"><div>出发前使用现有糖 <strong>${formatTrainingNumber(mixedNap.initialCandyUsed)}</strong> 颗${mixedNap.initialBoostedUsed?`（其中增强糖 ${formatTrainingNumber(mixedNap.initialBoostedUsed)} 颗）`:''}；期间预计获得等价糖 <strong>${formatTrainingNumber(mixedNap.giftCandyExpected)}</strong> 颗，实际用于培养 ${formatTrainingNumber(mixedNap.giftCandyUsed)} 颗。</div><div>喂糖梦碎预计约 <strong>${formatTrainingNumber(mixedNap.shardCost)}</strong>；同期拾取梦碎期望 ${formatTrainingNumber(mixedNap.giftShardsExpected)}，${mixedNap.netShards?`扣除后仍需自备约 <strong>${formatTrainingNumber(mixedNap.netShards)}</strong>`:`期望可覆盖喂糖支出${mixedNap.shardSurplus?`并结余约 <strong>${formatTrainingNumber(mixedNap.shardSurplus)}</strong>`:''}`}。</div></div>`}<div class="mt-2 text-[8px] leading-4 text-teal-700/75">按每天2次拾取、7种奖励等概率的社区期望模型：每周约32颗等价糖＋12,000梦碎。岛上EXP及礼物在领回时结算；后续礼物糖按普通糖喂养，不假设正好遇到糖果增强。随机收益并非保底，天数与梦碎仅供参考。</div></div>`:'';
     const sourceName=state.source==='box'?(()=>{const item=graduationDex.find(entry=>String(entry.id)===state.selectedId);return item?getGraduationDexNickname(item):'出货库个体';})():state.virtualName;
     result.innerHTML=`<div class="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-teal-50 p-4"><div class="flex flex-wrap items-center justify-between gap-2"><div><h4 class="text-sm font-black text-slate-800">${escapeHtml(sourceName)} · Lv.${state.currentLevel} → Lv.${state.targetLevel}</h4><p class="mt-1 text-[9px] font-bold text-slate-400">经验曲线×${state.expFactor} · ${getTrainingNatureLabel(natureKey)} · 普通糖${normalCandyExp} EXP${boostedCandy?` · 增强糖${boostedCandyExp} EXP`:''}</p></div><span class="rounded-full bg-white px-3 py-1 text-[9px] font-black text-indigo-600 shadow-sm">距下级 ${formatTrainingNumber(state.expToNext)} EXP</span></div>
     <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">${[['总经验缺口',`${formatTrainingNumber(missingExp)} EXP`,'text-indigo-700'],['所需糖果',`${formatTrainingNumber(totalCandyNeeded)} 颗`,'text-amber-700'],['预计梦碎',formatTrainingNumber(shardCost),'text-violet-700'],['午睡岛（不用糖）',`${formatTrainingNumber(fullNapDays)} 天`,'text-teal-700']].map(([a,b,c])=>`<div class="rounded-xl border border-white bg-white/85 p-3 shadow-sm"><div class="text-[8px] font-black text-slate-400">${a}</div><div class="mt-1 text-sm font-black ${c}">${b}</div></div>`).join('')}</div>
     <div class="mt-3 grid gap-2 md:grid-cols-2"><div class="rounded-xl bg-white p-3 text-[10px] font-bold leading-5 text-slate-600"><div class="font-black text-amber-700"><i class="fa-solid fa-candy-cane"></i> 糖果方案</div><div>增强糖 <strong>${formatTrainingNumber(boostedCandy)}</strong> 颗＋普通糖 <strong>${formatTrainingNumber(normalCandy)}</strong> 颗。</div><div>本系糖与万能糖共折 <strong>${formatTrainingNumber(availableCandy)}</strong> 颗。${candyGap?`<span class="text-rose-600">仍缺 ${formatTrainingNumber(candyGap)} 颗。</span>`:`<span class="text-emerald-600">资源足够${candySurplus?`，总库存折算后余 ${formatTrainingNumber(candySurplus)} 颗`:''}。</span>`}</div>${universalCandyPlanText}<div class="text-[8px] text-slate-400">万能糖S/M/L按3/20/100折算；推荐组合先最小化兑换溢出，同溢出时按S＞M＞L优先使用；梦碎按跨级过程逐颗估算。</div></div>
-    <div class="rounded-xl bg-white p-3 text-[10px] font-bold leading-5 text-slate-600"><div class="font-black text-teal-700"><i class="fa-solid fa-umbrella-beach"></i> 时间方案</div><div>完全靠正常睡眠：<strong>${formatTrainingNumber(fullSleepDays)}</strong> 天（${formatTrainingNumber(sleepExpPerDay)} EXP/天）。</div><div>完全靠午睡岛：<strong>${formatTrainingNumber(fullNapDays)}</strong> 天／${formatTrainingNumber(Math.ceil(fullNapDays/7))} 周（${formatTrainingNumber(napExpPerDay)} EXP/天）。</div><div>先用现有糖后：还需睡眠 <strong>${formatTrainingNumber(remainingSleepDays)}</strong> 天，或午睡岛 <strong>${formatTrainingNumber(remainingNapDays)}</strong> 天。</div><div class="text-[8px] text-slate-400">午睡岛受EXP性格影响，不受睡眠EXP奖励影响。</div></div></div></div>`;
+    <div class="rounded-xl bg-white p-3 text-[10px] font-bold leading-5 text-slate-600"><div class="font-black text-teal-700"><i class="fa-solid fa-umbrella-beach"></i> 时间方案</div><div>完全靠正常睡眠：<strong>${formatTrainingNumber(fullSleepDays)}</strong> 天（${formatTrainingNumber(sleepExpPerDay)} EXP/天）。</div><div>完全靠午睡岛：<strong>${formatTrainingNumber(fullNapDays)}</strong> 天／${formatTrainingNumber(Math.ceil(fullNapDays/7))} 周（${formatTrainingNumber(napExpPerDay)} EXP/天）。</div><div>先用现有糖后：还需睡眠 <strong>${formatTrainingNumber(remainingSleepDays)}</strong> 天，或午睡岛 <strong>${formatTrainingNumber(remainingNapDays)}</strong> 天。</div><div class="text-[8px] text-slate-400">午睡岛受EXP性格影响，不受睡眠EXP奖励影响。</div></div></div>${mixedNapHtml}</div>`;
 }
 function setSingleTrainingCalculatorSource(source){singleTrainingCalculatorState=normalizeSingleTrainingCalculatorState(Object.assign({},loadSingleTrainingCalculatorState(),{source}));saveSingleTrainingCalculatorState();renderSingleTrainingCalculatorModal();}
 function setSingleTrainingTarget(level){const input=document.getElementById('single-training-target-level');if(input)input.value=String(level);calculateSingleTrainingCalculator();}
@@ -20187,6 +20240,7 @@ function renderSingleTrainingCalculatorModal(){
     <section class="mt-4 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm">${s.source==='box'?`<label class="block text-[10px] font-black text-slate-500">选择出货库个体<select onchange="applySingleTrainingBoxPokemon(this.value)" class="mt-1 w-full rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-3 text-xs font-black">${eligible.map(item=>`<option value="${escapeHtmlAttr(item.id)}" ${String(item.id)===s.selectedId?'selected':''}>${escapeHtml(getGraduationDexNickname(item))} · Lv.${Number(getGraduationCurrent(item).trainingLevel)||'未录'}</option>`).join('')}</select></label>`:`<label class="block text-[10px] font-black text-slate-500">虚拟宝可梦名称<input id="single-training-name" value="${escapeHtmlAttr(s.virtualName)}" class="mt-1 w-full rounded-xl border border-violet-100 bg-violet-50 px-3 py-3 text-xs font-black"></label>`}
     <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><label class="text-[9px] font-black text-slate-500">当前等级<input id="single-training-current-level" type="number" min="1" max="69" value="${s.currentLevel}" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500">距离下一级EXP<input id="single-training-exp-to-next" type="number" min="0" value="${s.expToNext}" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500">目标等级<input id="single-training-target-level" type="number" min="2" max="70" value="${s.targetLevel}" class="mt-1 w-full rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-black"></label><label class="text-[9px] font-black text-slate-500">经验曲线<select id="single-training-exp-factor" class="mt-1 w-full rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-xs font-black">${TRAINING_EXP_FACTORS.map(v=>`<option value="${v}" ${v===s.expFactor?'selected':''}>×${v}${v===1?' 普通':v===1.5?' 准神':v===1.8?' 传说':' 幻'}</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">EXP性格<select id="single-training-nature" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black"><option value="normal" ${s.natureMode==='normal'?'selected':''}>无修正</option><option value="up" ${s.natureMode==='up'?'selected':''}>EXP＋18%</option><option value="down" ${s.natureMode==='down'?'selected':''}>EXP－18%</option></select></label><label class="text-[9px] font-black text-slate-500">睡眠EXP奖励<select id="single-training-sleep-bonus" class="mt-1 w-full rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs font-black">${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${n===s.sleepExpBonusCount?'selected':''}>${n}个生效词条</option>`).join('')}</select></label><label class="text-[9px] font-black text-slate-500">午睡岛基础EXP/日<input id="single-training-nap-exp" type="number" min="1" value="${s.napBaseExpPerDay}" class="mt-1 w-full rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-xs font-black"></label><div class="flex flex-wrap items-end gap-1">${[30,50,60,70].map(l=>`<button onclick="setSingleTrainingTarget(${l})" class="rounded-lg bg-slate-100 px-2 py-2 text-[9px] font-black text-slate-600">Lv.${l}</button>`).join('')}</div></div></section>
     <section class="mt-4 grid gap-3 md:grid-cols-2"><div class="rounded-2xl border border-amber-100 bg-amber-50/70 p-4"><h3 class="text-xs font-black text-amber-900"><i class="fa-solid fa-candy-cane"></i> 当前糖果库存</h3><div class="mt-3 grid grid-cols-2 gap-2">${[['本系糖','single-training-species-candy',s.speciesCandy,'amber'],['万能糖S','single-training-universal-s',s.universalCandyS,'violet'],['万能糖M','single-training-universal-m',s.universalCandyM,'violet'],['万能糖L','single-training-universal-l',s.universalCandyL,'violet']].map(([a,b,c,d])=>`<label class="text-[9px] font-black text-${d}-800">${a}<input id="${b}" type="number" min="0" value="${c}" class="mt-1 w-full rounded-xl border border-${d}-200 bg-white px-3 py-2 text-xs font-black"></label>`).join('')}</div></div><div class="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-4"><h3 class="text-xs font-black text-fuchsia-900"><i class="fa-solid fa-bolt"></i> 糖果增强</h3><div class="mt-3 grid grid-cols-3 gap-2">${[['增强糖数量','single-training-boost-candy',s.boostCandy,0],['经验倍率','single-training-boost-exp',s.boostExpMultiplier,0.1],['梦碎倍率','single-training-boost-shard',s.boostShardMultiplier,0.1]].map(([a,b,c,d])=>`<label class="text-[9px] font-black text-fuchsia-800">${a}<input id="${b}" type="number" min="${d?1:0}" ${d?`step="${d}"`:''} value="${c}" class="mt-1 w-full rounded-xl border border-fuchsia-200 bg-white px-3 py-2 text-xs font-black"></label>`).join('')}</div><p class="mt-2 text-[8px] font-bold text-fuchsia-500">普通增强默认EXP×2、梦碎×4。</p></div></section>
+    <section class="mt-4 rounded-2xl border border-teal-200 bg-gradient-to-r from-teal-50 to-cyan-50 p-4"><div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="text-xs font-black text-teal-900"><i class="fa-solid fa-arrows-rotate"></i> 额外计算：午睡岛混合培养</h3><p class="mt-1 text-[8px] font-bold leading-4 text-teal-700/75">先使用现有糖，再驻岛获取EXP与随机礼物；只有领回时才能结算并继续喂糖。</p></div><select id="single-training-mixed-nap-mode" onchange="calculateSingleTrainingCalculator()" class="min-w-[190px] rounded-xl border border-teal-200 bg-white px-3 py-2.5 text-xs font-black text-teal-800"><option value="off" ${s.mixedNapMode==='off'?'selected':''}>不计算混合方案</option><option value="7" ${s.mixedNapMode==='7'?'selected':''}>每7天领回并喂糖</option><option value="14" ${s.mixedNapMode==='14'?'selected':''}>每14天领回并喂糖</option></select></div><div class="mt-2 text-[8px] font-bold text-teal-700/70">礼物暂按社区期望：每天2次拾取，平均每周32颗等价糖＋12,000梦碎；实际结果会随机波动。</div></section>
     <button onclick="calculateSingleTrainingCalculator()" class="mt-4 w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-black text-white"><i class="fa-solid fa-calculator"></i> 计算培养资源</button><div id="single-training-results" class="mt-4"></div><details class="mt-4 rounded-2xl border border-slate-200 bg-white"><summary class="cursor-pointer list-none px-4 py-3 text-[10px] font-black text-slate-500"><i class="fa-solid fa-box-archive mr-1"></i> 旧版多人联合培养（已雪藏）</summary><div class="border-t border-slate-100 p-4 text-[9px] font-bold text-slate-500">旧方案与已有设置仍保留。<button onclick="closeSingleTrainingCalculatorModal();openTrainingPlannerModal()" class="ml-2 rounded-xl bg-slate-100 px-3 py-2 font-black">打开旧功能</button></div></details></div></div>`;
     document.body.appendChild(modal);
     modal.addEventListener('change',event=>{
