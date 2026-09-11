@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.10.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.11.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -5641,6 +5641,18 @@ function loadGraduationDexFromLocal() {
     }
 }
 
+// 大仓卡片包含“出货库是否已补录”的实时对账结果。账号初始化时 Box 会先于
+// 出货库返回；若出货库读完后不重绘，关闭评分计算的用户会一直看到旧的待补录提示。
+// 此刷新明确不上传 Box，也不会触发已关闭的概率评分。
+function refreshBoxGraduationAuditAfterDexLoad() {
+    if (!document.getElementById('box-container') || typeof updateBoxUI !== 'function') return;
+    try {
+        updateBoxUI(false);
+    } catch (error) {
+        console.warn('出货库读取完成后刷新大仓对账失败：', error);
+    }
+}
+
 function saveGraduationDexToLocal(options = {}) {
     normalizeGraduationDex();
     localStorage.setItem(getGraduationDexStorageKey(), JSON.stringify(graduationDex));
@@ -5776,7 +5788,10 @@ function mergeGraduationDex(cloudDex = [], localDex = [], localDeleted = {}) {
 async function loadGraduationDexFromCloud() {
     loadGraduationDexFromLocal();
 
-    if (!currentCloudUser) return;
+    if (!currentCloudUser) {
+        refreshBoxGraduationAuditAfterDexLoad();
+        return;
+    }
 
     const localSnapshot = Array.isArray(graduationDex) ? [...graduationDex] : [];
     const localDeletedSnapshot = Object.assign({}, graduationDexDeleted || {});
@@ -5790,6 +5805,8 @@ async function loadGraduationDexFromCloud() {
     if (error) {
         console.error(error);
         showToast('读取云端毕业库失败，请确认 player_boxes 已添加 graduation_dex 列');
+        // 云端失败时仍用已经读到的本地出货库刷新对账，不能继续显示空库快照。
+        refreshBoxGraduationAuditAfterDexLoad();
         return;
     }
 
@@ -5804,6 +5821,7 @@ async function loadGraduationDexFromCloud() {
             await saveGraduationDexToCloudNow();
         }
         // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
+        refreshBoxGraduationAuditAfterDexLoad();
         return;
     }
 
@@ -5812,6 +5830,7 @@ async function loadGraduationDexFromCloud() {
     normalizeGraduationDex();
     // 出货库不再自动改写大仓；仅在大仓卡片中做对账提示。
     await saveGraduationDexToCloudNow();
+    refreshBoxGraduationAuditAfterDexLoad();
 }
 
 async function saveGraduationDexToCloudNow() {
@@ -10097,11 +10116,11 @@ async function signOutUser() {
 
     loadBoxFromLocal();
     normalizePlayerBox();
+    loadGraduationDexFromLocal();
     updateAddPanelWeights();
     updateBoxUI(false);
 
     loadHistoryFromLocal();
-    loadGraduationDexFromLocal();
     loadTodayCheckInsFromLocal();
     renderTodayReportUI();
 
@@ -12283,10 +12302,11 @@ function convertRateToObjectiveScore(rate) {
             } else {
                 loadBoxFromLocal();
                 normalizePlayerBox();
+                // 先准备出货库，再首次绘制大仓，避免卡片拿空数组做补录对账。
+                loadGraduationDexFromLocal();
                 updateAddPanelWeights();
                 updateBoxUI(false);
                 loadHistoryFromLocal();
-                loadGraduationDexFromLocal();
             }
             loadNightCapPikachuState();
 
