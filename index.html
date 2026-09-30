@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.14.2</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.09.30.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -2021,6 +2021,10 @@ function updateBallUsageTrayUI(context) {
     }
     const quickNone = document.getElementById(`${context}-ball-tray-quick-none`);
     if (quickNone) quickNone.classList.toggle('hidden', confirmed);
+    const quickDefault = document.getElementById(`${context}-ball-tray-quick-default`);
+    const bonusInput = document.getElementById(`${context}-ball-bonus`);
+    const isDefaultBonusOnly = !bonusInput?.disabled && Number(usage.bonus) === 1 && BALL_KEYS.every(key => Number(usage[key]) === 0);
+    if (quickDefault) quickDefault.classList.toggle('hidden', confirmed || !isDefaultBonusOnly);
     const noBallButton = document.getElementById(`${context}-ball-confirm-none`);
     if (noBallButton) {
         const active = recordStatus === 'none';
@@ -2134,6 +2138,15 @@ function selectBallUsageTrayBall(context, key) {
     updateBallUsageTrayUI(context);
 }
 
+function confirmCurrentBallUsage(context) {
+    const hasUsedBall = Object.keys(BALL_TRAY_META).some(key => getBallTrayInputValue(context, key) > 0);
+    if (!hasUsedBall) {
+        confirmNoBallUsage(context);
+        return;
+    }
+    markBallUsageTrayStatus(context, 'recorded');
+}
+
 function syncBallUsageTraySelectedValue(context) {
     const tray = document.getElementById(`${context}-ball-tray`);
     const sharedInput = document.getElementById(`${context}-ball-tray-shared`);
@@ -2209,6 +2222,7 @@ function renderBallUsageEditorHtml(context, session, usage = null) {
                 <span id="${context}-ball-tray-summary" class="block truncate text-[10px] text-sky-700 font-bold">${initialStatus === 'unconfirmed' ? '尚未确认 · 点此填写或确认没用球' : escapeHtml(initialStatus === 'skipped' ? '本次不记录用球' : getBallTraySummaryFromUsage(u))}</span>
             </span>
             <span id="${context}-ball-tray-status" class="shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${initialStatus === 'unconfirmed' ? 'bg-amber-100 text-amber-800 animate-pulse' : (initialStatus === 'skipped' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700')}">${initialStatus === 'unconfirmed' ? '待确认' : (initialStatus === 'skipped' ? '已跳过' : '已确认')}</span>
+            <span id="${context}-ball-tray-quick-default" role="button" tabindex="0" onclick="event.stopPropagation();confirmCurrentBallUsage('${context}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();confirmCurrentBallUsage('${context}')}" style="touch-action:manipulation" class="${initialStatus === 'unconfirmed' && !bonusDisabled && Number(u.bonus) === 1 && BALL_KEYS.every(key => Number(u[key]) === 0) ? '' : 'hidden '}shrink-0 rounded-xl border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[9px] font-black text-indigo-700 active:bg-indigo-100">确认奖励×1</span>
             <span id="${context}-ball-tray-quick-none" role="button" tabindex="0" onclick="event.stopPropagation();confirmNoBallUsage('${context}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();confirmNoBallUsage('${context}')}" style="touch-action:manipulation" class="${initialStatus === 'unconfirmed' ? '' : 'hidden '}shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[9px] font-black text-emerald-700 active:bg-emerald-100">没用球</span>
             <i id="${context}-ball-tray-chevron" class="fa-solid fa-chevron-down text-[10px] text-sky-600"></i>
         </button>
@@ -10962,7 +10976,7 @@ function getActiveFoodTrackProbabilityRows(p) {
         const SPECIAL_STANDARD_DOWNGRADE = ["咚咚鼠", "雷公", "炎帝", "水君", "克雷色利亚"];
         // 目前伊布家族、拉帝欧斯/拉帝亚斯已拆出专用或普通技能型口径，不再整体排除评分。
         const SPECIAL_SKILL_LUCK_EXCLUDED = [];
-        const LEGENDARY_FIRST_FIXED_BAD_NAMES = ["雷公", "炎帝", "水君", "克雷色利亚", "拉帝欧斯", "拉帝亚斯"];
+        const LEGENDARY_FIRST_FIXED_BAD_NAMES = ["雷公", "炎帝", "水君", "克雷色利亚", "拉帝欧斯", "拉帝亚斯", "超梦"];
         const LATIOS_CUSTOM_NAME = "拉帝欧斯";
         const LATIAS_CUSTOM_NAME = "拉帝亚斯";
         const EEVEE_BASE_NAME = "伊布";
