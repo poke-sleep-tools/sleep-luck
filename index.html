@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.05.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.21.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1012,7 +1012,7 @@
                     <button onclick="openLiveCookingPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-900 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="记录本周已经吃过的料理，并根据当前食材与暴击率重新规划后续餐位">
                         <i class="fa-solid fa-calendar-check text-amber-600"></i> 🍽️ 实时料理规划
                     </button>
-                    <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="记录最近30次浅浅、安然、深深比例，并规划下一觉适合争取的睡眠类型">
+                    <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="批量录入浅浅、安然、深深比例，查看最近30觉平均值">
                         <i class="fa-solid fa-chart-line text-violet-600"></i> 🌙 睡眠类型规划
                     </button>
                     <button onclick="openSleepSplitPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-blue-100 text-blue-800 shadow-sm flex items-center gap-1 hover:bg-blue-200" title="根据岛屿、当前能量与活动倍率计算两觉拆分，并反推各种 x+y 所需的最低能量">
@@ -17857,6 +17857,7 @@ function renderSleepTypeFuturePlanHtml(plan, state = sleepTypePlannerState) {
 }
 
 function renderSleepTypeResearchFieldsHtml(prefix, record = null) {
+    if (prefix === 'planner-edit') return renderSleepNotebookEditFields(prefix, record);
     const current = record ? normalizeSleepTypeRecord(record) : null;
     const result = current?.result || 'unknown';
     const measurementMode = current?.measurementMode || 'normal';
@@ -18069,83 +18070,311 @@ function renderSleepTypeRecommendationHtml(result) {
     </div>`;
 }
 
+// 睡眠类型记录本：独立界面，沿用原有睡眠比例记录与账号同步。
+let sleepNotebookDraft = null;
+let sleepNotebookDraftOwner = '';
+let sleepNotebookHistoryLimit = 60;
+
+function sleepNotebookStorageKey() {
+    return `sleep_type_notebook_draft_v1_${currentCloudUser?.id || 'guest'}`;
+}
+function sleepNotebookRow(raw = {}) {
+    return {
+        date: String(raw.date || getTodayLocalDateString()),
+        session: raw.session === '二觉' ? '二觉' : '一觉',
+        dozing: String(raw.dozing ?? ''), snoozing: String(raw.snoozing ?? ''),
+        slumbering: String(raw.slumbering ?? ''), result: normalizeSleepTypeResult(raw.result), error: ''
+    };
+}
+function sleepNotebookLoadDraft() {
+    const key = sleepNotebookStorageKey();
+    if (sleepNotebookDraft && sleepNotebookDraftOwner === key) return;
+    sleepNotebookDraftOwner = key;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) {}
+    sleepNotebookDraft = {
+        mode: saved?.mode === 'single' ? 'single' : 'batch',
+        start: typeof saved?.start === 'string' ? saved.start : sleepNotebookShiftDate(getTodayLocalDateString(), -6),
+        sessions: saved?.sessions === 'two' ? 'two' : 'one',
+        rows: Array.isArray(saved?.rows) ? saved.rows.slice(0, 150).map(sleepNotebookRow) : [],
+        single: sleepNotebookRow(saved?.single || {}), paste: String(saved?.paste || '').slice(0, 50000)
+    };
+}
+function sleepNotebookSaveDraft() {
+    try {
+        localStorage.setItem(sleepNotebookStorageKey(), JSON.stringify(sleepNotebookDraft));
+        const status = document.getElementById('sleep-notebook-draft-status');
+        if (status) status.textContent = '草稿已暂存本机（未正式保存）';
+    } catch (_) {
+        const status = document.getElementById('sleep-notebook-draft-status');
+        if (status) status.textContent = '本机空间不足，草稿未能暂存，请及时保存';
+    }
+}
+function sleepNotebookShiftDate(date, delta) {
+    const d = new Date(`${date}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return getTodayLocalDateString();
+    d.setDate(d.getDate() + delta);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function sleepNotebookValidDate(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+    const d = new Date(`${date}T12:00:00`);
+    return !Number.isNaN(d.getTime()) && sleepNotebookShiftDate(date, 0) === date;
+}
+function sleepNotebookComplete(row) {
+    const filled = SLEEP_TYPE_KEYS.filter(key => String(row[key]).trim() !== '');
+    if (filled.length !== 2) return;
+    const values = filled.map(key => Number(row[key]));
+    if (!values.every(n => Number.isFinite(n) && n >= 0 && n <= 100)) return;
+    const remainder = 100 - values.reduce((a,b) => a+b, 0);
+    if (remainder >= 0 && remainder <= 100) row[SLEEP_TYPE_KEYS.find(key => !filled.includes(key))] = String(Number(remainder.toFixed(3)));
+}
+function sleepNotebookValidate(row) {
+    if (!sleepNotebookValidDate(row.date)) return '请填写有效日期';
+    if (row.date > getTodayLocalDateString()) return '不能录入未来日期';
+    const values = SLEEP_TYPE_KEYS.map(key => String(row[key]).trim());
+    if (values.some(value => value === '')) return '请填写三种比例（填两项后离开输入框可补齐）';
+    const numbers = values.map(Number);
+    if (!numbers.every(n => Number.isFinite(n) && n >= 0 && n <= 100)) return '比例必须为0–100之间的数字';
+    const sum = numbers.reduce((a,b) => a+b, 0);
+    if (Math.abs(sum - 100) > 0.25) return `比例合计${Number(sum.toFixed(3))}%，应为100%`;
+    return '';
+}
+function sleepNotebookRows() {
+    return sleepNotebookDraft.mode === 'single' ? [sleepNotebookDraft.single] : sleepNotebookDraft.rows;
+}
+function sleepNotebookStats(records) {
+    const window = records.slice(0, 30);
+    const complete = window.filter(record => SLEEP_TYPE_KEYS.every(key => record.percentages?.[key] != null) && hasCompleteSleepTypePercentages(record));
+    return {
+        window, complete, missing: window.length - complete.length,
+        averages: Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key, complete.length ? complete.reduce((sum,row) => sum+Number(row.percentages[key]),0)/complete.length : null]))
+    };
+}
+function sleepNotebookResultOptions(value) {
+    return Object.entries(SLEEP_TYPE_RESULT_META).map(([key,label]) => `<option value="${key}" ${key === value ? 'selected' : ''}>${label}</option>`).join('');
+}
+function sleepNotebookRenderRows() {
+    const zone = document.getElementById('sleep-notebook-rows');
+    if (!zone) return;
+    const rows = sleepNotebookRows();
+    zone.innerHTML = rows.length ? rows.map((row,index) => `<div class="sn-row ${row.error ? 'sn-error' : ''}">
+        <div class="sn-date"><span class="sn-number">${index+1}</span><input aria-label="第${index+1}行日期" type="date" value="${escapeHtmlAttr(row.date)}" max="${getTodayLocalDateString()}" oninput="sleepNotebookUpdate(${index},'date',this.value)"><select aria-label="第${index+1}行觉次" onchange="sleepNotebookUpdate(${index},'session',this.value)"><option ${row.session === '一觉' ? 'selected' : ''}>一觉</option><option ${row.session === '二觉' ? 'selected' : ''}>二觉</option></select></div>
+        ${SLEEP_TYPE_KEYS.map(key => `<label class="sn-percent"><span>${SLEEP_TYPE_META[key].label}%</span><input aria-label="第${index+1}行${SLEEP_TYPE_META[key].label}比例" data-sn-row="${index}" data-sn-key="${key}" inputmode="decimal" type="number" min="0" max="100" step="0.1" value="${escapeHtmlAttr(row[key])}" oninput="sleepNotebookUpdate(${index},'${key}',this.value)" onblur="sleepNotebookBlur(${index})" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();sleepNotebookFocusNext(${index},'${key}')}" onpaste="sleepNotebookPasteGrid(event,${index},'${key}')" placeholder="%"></label>`).join('')}
+        <label class="sn-result"><span>最终判定（选填）</span><select aria-label="第${index+1}行最终判定" onchange="sleepNotebookUpdate(${index},'result',this.value)">${sleepNotebookResultOptions(row.result)}</select></label>
+        <button type="button" aria-label="移除第${index+1}行草稿" class="sn-remove" onclick="sleepNotebookRemoveRow(${index})">×</button>
+        <div class="sn-row-note">${row.error ? escapeHtml(row.error) : '未保存草稿'}</div>
+    </div>`).join('') : '<p class="sn-empty">选择起始日期，生成空行开始录入；也可以粘贴Excel数据。</p>';
+}
+function sleepNotebookUpdate(index,key,value) {
+    const row = sleepNotebookRows()[index];
+    if (!row) return;
+    row[key] = value;
+    row.error = '';
+    sleepNotebookSaveDraft();
+}
+function sleepNotebookBlur(index) {
+    const row = sleepNotebookRows()[index];
+    if (!row) return;
+    sleepNotebookComplete(row);
+    for (const key of SLEEP_TYPE_KEYS) {
+        const input = document.querySelector(`[data-sn-row="${index}"][data-sn-key="${key}"]`);
+        if (input && input.value !== row[key]) input.value = row[key];
+    }
+    sleepNotebookSaveDraft();
+}
+function sleepNotebookFocusNext(index,key) {
+    const position = SLEEP_TYPE_KEYS.indexOf(key);
+    const next = document.querySelector(`[data-sn-row="${position === 2 ? index+1 : index}"][data-sn-key="${SLEEP_TYPE_KEYS[(position+1)%3]}"]`);
+    next?.focus(); next?.select();
+}
+function sleepNotebookMode(mode) {
+    sleepNotebookDraft.mode = mode;
+    sleepNotebookSaveDraft(); renderSleepTypePlannerModal();
+}
+function sleepNotebookRemoveRow(index) {
+    if (sleepNotebookDraft.mode === 'single') sleepNotebookDraft.single = sleepNotebookRow();
+    else sleepNotebookDraft.rows.splice(index,1);
+    sleepNotebookSaveDraft(); sleepNotebookRenderRows();
+}
+function sleepNotebookGenerate(count) {
+    const start = document.getElementById('sleep-notebook-start').value;
+    const sessions = document.getElementById('sleep-notebook-sessions').value;
+    if (!sleepNotebookValidDate(start)) { alert('请先填写有效起始日期'); return; }
+    const rows = sleepNotebookDraft.rows;
+    if (rows.length+count > 150) { alert('每批最多150行，请先保存当前批次'); return; }
+    sleepNotebookDraft.start = start; sleepNotebookDraft.sessions = sessions;
+    const sequence = sessions === 'two' ? ['一觉','二觉'] : ['一觉'];
+    const last = rows[rows.length-1];
+    let date = last ? last.date : start;
+    let position = last ? sequence.indexOf(last.session)+1 : 0;
+    if (position >= sequence.length) { date = sleepNotebookShiftDate(date,1); position = 0; }
+    for (let i=0;i<count;i++) {
+        rows.push(sleepNotebookRow({date,session:sequence[position]}));
+        position++;
+        if (position >= sequence.length) { date = sleepNotebookShiftDate(date,1); position = 0; }
+    }
+    sleepNotebookSaveDraft(); sleepNotebookRenderRows();
+}
+function sleepNotebookParsePaste(text,start,sessions) {
+    const resultAliases = { '浅浅':'dozing','浅浅入梦':'dozing','安然':'snoozing','安然入睡':'snoozing','深深':'slumbering','深深入眠':'slumbering','无特征':'balanced','未填写':'unknown','':'unknown' };
+    const lines = String(text).replace(/^\uFEFF/,'').trim().split(/\r?\n/).filter(line => line.trim());
+    if (lines.length && /浅浅|日期/.test(lines[0]) && !/\d/.test(lines[0])) lines.shift();
+    if (!lines.length) throw new Error('没有可导入的数据');
+    if (lines.length > 150) throw new Error('每批最多150行');
+    return lines.map((line,index) => {
+        const cells = line.split(line.includes('\t') ? '\t' : /[,，]/).map(cell => cell.trim());
+        let row;
+        if (cells.length === 3) {
+            row = sleepNotebookRow({date:sleepNotebookShiftDate(start,sessions === 'two' ? Math.floor(index/2) : index),session:sessions === 'two' && index%2 ? '二觉' : '一觉'});
+            SLEEP_TYPE_KEYS.forEach((key,i) => row[key] = cells[i].replace(/[%％]$/,''));
+        } else if (cells.length === 5 || cells.length === 6) {
+            const match = cells[0].match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+            const date = match ? `${match[1]}-${match[2].padStart(2,'0')}-${match[3].padStart(2,'0')}` : cells[0];
+            if (!['一觉','二觉','1','2'].includes(cells[1])) throw new Error(`第${index+1}行觉次须为一觉或二觉`);
+            const result = cells[5] || '';
+            if (!(result in resultAliases) && !Object.hasOwn(SLEEP_TYPE_RESULT_META,result)) throw new Error(`第${index+1}行最终判定无法识别`);
+            row = sleepNotebookRow({date,session:['二觉','2'].includes(cells[1]) ? '二觉' : '一觉',result:resultAliases[result] || result});
+            SLEEP_TYPE_KEYS.forEach((key,i) => row[key] = cells[i+2].replace(/[%％]$/,''));
+        } else throw new Error(`第${index+1}行列数不正确，请粘贴3列比例或完整5/6列`);
+        sleepNotebookComplete(row);
+        row.error = sleepNotebookValidate(row);
+        return row;
+    });
+}
+function sleepNotebookImportPaste() {
+    const text = document.getElementById('sleep-notebook-paste').value;
+    try {
+        const start = document.getElementById('sleep-notebook-start').value;
+        const sessions = document.getElementById('sleep-notebook-sessions').value;
+        if (!sleepNotebookValidDate(start)) throw new Error('请先填写有效起始日期');
+        const rows = sleepNotebookParsePaste(text,start,sessions);
+        if (rows.length+sleepNotebookDraft.rows.length > 150) throw new Error('合计超过150行，请先保存当前批次');
+        sleepNotebookDraft.rows.push(...rows); sleepNotebookDraft.paste = '';
+        sleepNotebookSaveDraft(); renderSleepTypePlannerModal();
+    } catch (error) { alert(error.message); }
+}
+function sleepNotebookPasteGrid(event,index,key) {
+    const text = event.clipboardData?.getData('text/plain') || '';
+    if (!/[\t\r\n]/.test(text)) return;
+    event.preventDefault();
+    const lines = text.trim().split(/\r?\n/);
+    const startColumn = SLEEP_TYPE_KEYS.indexOf(key);
+    const grid = lines.map(line => line.split('\t'));
+    if (grid.some(cells => cells.length+startColumn > 3)) { alert('比例格子只接收浅浅、安然、深深三列。完整记录请使用下方Excel粘贴区。'); return; }
+    if (sleepNotebookDraft.mode === 'single' && grid.length > 1) { alert('多行粘贴请先切换到批量录入'); return; }
+    const rows = sleepNotebookRows();
+    if (index+grid.length > rows.length) { alert('空行不足，请先添加足够的行再粘贴'); return; }
+    grid.forEach((cells,offset) => {
+        cells.forEach((value,column) => rows[index+offset][SLEEP_TYPE_KEYS[startColumn+column]] = value.trim().replace(/[%％]$/,''));
+        sleepNotebookComplete(rows[index+offset]);
+        rows[index+offset].error = '';
+    });
+    sleepNotebookSaveDraft(); sleepNotebookRenderRows();
+}
+function sleepNotebookClearDraft() {
+    if (!confirm('清空本次批量录入草稿？已保存的睡眠记录不会删除。')) return;
+    sleepNotebookDraft.rows = []; sleepNotebookDraft.paste = '';
+    sleepNotebookSaveDraft(); renderSleepTypePlannerModal();
+}
+function sleepNotebookSaveRows() {
+    const rows = sleepNotebookRows();
+    const active = rows.filter(row => SLEEP_TYPE_KEYS.some(key => row[key].trim() !== '') || row.result !== 'unknown');
+    if (!active.length) { alert('请先填写睡眠比例'); return; }
+    const seen = new Set();
+    for (const row of active) {
+        sleepNotebookComplete(row); row.error = sleepNotebookValidate(row);
+        const key = getSleepTypeRecordKey(row.date,row.session);
+        if (seen.has(key)) row.error = '本批日期与觉次重复，请保留一条';
+        seen.add(key);
+    }
+    if (active.some(row => row.error)) {
+        sleepNotebookRenderRows();
+        document.querySelector('#sleep-notebook-rows .sn-error')?.scrollIntoView({block:'center',behavior:'smooth'});
+        alert('标红行需要调整，本批尚未保存，已填内容都保留着'); return;
+    }
+    const existing = getVisibleSleepTypeRecords();
+    const existingMap = new Map(existing.map(row => [getSleepTypeRecordKey(row.date,row.session),row]));
+    const conflicts = active.filter(row => existingMap.has(getSleepTypeRecordKey(row.date,row.session)));
+    if (conflicts.length && !confirm(`其中${conflicts.length}行已有同日期、同觉次记录。确认用本次内容更新这些睡眠比例？\n睡眠研究与捕捉记录不会修改。`)) return;
+    const now = new Date().toISOString();
+    const next = active.map(row => {
+        const old = existingMap.get(getSleepTypeRecordKey(row.date,row.session));
+        return normalizeSleepTypeRecord({
+            id:old?.id, date:row.date, session:row.session,
+            percentages:Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key,Number(row[key])])),
+            result:row.result, measurementMode:'normal', source:'planner', createdAt:old?.createdAt || now, updatedAt:now
+        });
+    });
+    const keys = new Set(next.map(row => getSleepTypeRecordKey(row.date,row.session)));
+    historyLogs = mergeHistoryLogs([], [...historyLogs.filter(log => !(isSleepTypeRecordLog(log) && keys.has(getSleepTypeRecordKey(log.date,log.session)))),...next]);
+    saveHistoryToLocal();
+    if (sleepNotebookDraft.mode === 'single') {
+        const last = active[0];
+        const nextDate = last.session === '一觉' ? last.date : sleepNotebookShiftDate(last.date,1);
+        sleepNotebookDraft.single = sleepNotebookRow({date:nextDate > getTodayLocalDateString() ? getTodayLocalDateString() : nextDate,session:last.session === '一觉' ? '二觉' : '一觉'});
+    } else sleepNotebookDraft.rows = rows.filter(row => !active.includes(row));
+    sleepNotebookSaveDraft(); renderSleepTypePlannerModal();
+    showToast(`已保存${next.length}觉睡眠比例${currentCloudUser ? '，已加入账号同步队列' : ''}`);
+}
+
 function renderSleepTypePlannerModal() {
     const modal = document.getElementById('sleep-type-planner-modal');
     if (!modal) return;
-    loadSleepTypePlannerState();
+    sleepNotebookLoadDraft();
     const records = getVisibleSleepTypeRecords();
-    const baseRecommendation = buildSleepTypeRecommendation(sleepTypePlannerState, records);
-    const backtest = backtestSleepTypeHistory(records);
-    const futurePlan = buildSleepTypeFuturePlan(sleepTypePlannerState, records, backtest);
-    const recommendation = alignSleepTypeRecommendationWithFuturePlan(baseRecommendation, futurePlan, sleepTypePlannerState);
-    sleepTypeUnifiedRecommendation = recommendation;
-    const simulationProfile = sleepTypeSimulationProfile || recommendation.candidateProfile;
-    const simulationPrediction = buildSleepTypeClassificationPrediction(simulationProfile, records, backtest);
-    const resultCounts = { dozing: 0, snoozing: 0, slumbering: 0, balanced: 0, unknown: 0 };
-    records.slice(0, 30).forEach(record => { resultCounts[normalizeSleepTypeResult(record.result)] += 1; });
-    const today = getTodayLocalDateString();
-    const formRecord = findSleepTypeRecord(today, '一觉');
-    const historyRows = records.length ? records.slice(0, 60).map(record => {
-        const dateAttr = escapeHtmlAttr(record.date);
-        const sessionAttr = escapeHtmlAttr(record.session);
-        const percentageText = hasCompleteSleepTypePercentages(record)
-            ? SLEEP_TYPE_KEYS.map(type => `${SLEEP_TYPE_META[type].label}${formatSleepTypePercent(record.percentages[type])}`).join(' · ')
-            : '未填写三种比例';
-        const auditRow = backtest.byKey.get(getSleepTypeRecordKey(record.date, record.session));
-        return `<div class="rounded-2xl border border-slate-200 bg-white p-3 flex items-center justify-between gap-2">
-            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="min-w-0 flex-1 text-left"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-black text-slate-800">${escapeHtml(record.date)} · ${escapeHtml(record.session)}</span>${getSleepTypeResultBadge(record.result)}${getSleepTypeBacktestBadge(auditRow)}<span class="text-[8px] font-black text-slate-400">${record.source === 'research' ? '由睡眠研究同步' : '独立录入'}</span></div><div class="text-[9px] font-bold text-slate-500 mt-1">${percentageText}${auditRow?.testable ? ` · 基础预测${SLEEP_TYPE_RESULT_META[auditRow.basicType]} · 实际${SLEEP_TYPE_RESULT_META[auditRow.actual]}` : ''}</div></button>
-            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="editSleepTypeRecordInPlanner(this.dataset.date, this.dataset.session)" class="shrink-0 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 h-8 text-[9px] font-black"><i class="fa-solid fa-pen"></i> 修改</button>
-            <button type="button" data-date="${dateAttr}" data-session="${sessionAttr}" onclick="deleteSleepTypeRecord(this.dataset.date, this.dataset.session, event)" class="shrink-0 w-8 h-8 rounded-xl bg-rose-50 text-rose-600 border border-rose-100"><i class="fa-solid fa-trash-can"></i></button>
-        </div>`;
-    }).join('') : '<div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs font-bold text-slate-400">还没有睡眠比例记录。可以在下方集中补录，也可以在睡眠研究里选填。</div>';
+    const stats = sleepNotebookStats(records);
+    const batch = sleepNotebookDraft.mode === 'batch';
+    modal.innerHTML = `<style>
+        #sleep-type-planner-modal .sn-shell{background:#fff;border-radius:24px;width:100%;max-width:1100px;max-height:94vh;display:flex;flex-direction:column;overflow:hidden;color:#334155;box-shadow:0 24px 80px #0003}
+        #sleep-type-planner-modal .sn-body{padding:20px;overflow:auto}#sleep-type-planner-modal .sn-top{padding:18px 22px;background:linear-gradient(110deg,#6d28d9,#2563eb);color:white;display:flex;justify-content:space-between;align-items:center}
+        #sleep-type-planner-modal h3{font-weight:900;font-size:20px}#sleep-type-planner-modal h4{font-weight:800;font-size:16px}#sleep-type-planner-modal .sn-muted{font-size:12px;color:#64748b;line-height:1.7}
+        #sleep-type-planner-modal .sn-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:12px 0}#sleep-type-planner-modal .sn-stat{border-radius:16px;padding:15px;background:#f5f3ff}#sleep-type-planner-modal .sn-stat strong{display:block;font-size:28px;font-weight:900}
+        #sleep-type-planner-modal .sn-panel{border:1px solid #e2e8f0;border-radius:18px;padding:16px;margin-top:18px}#sleep-type-planner-modal button{cursor:pointer}#sleep-type-planner-modal .sn-button{padding:8px 13px;border:1px solid #ddd6fe;border-radius:10px;font-size:13px;font-weight:700;background:white;color:#6d28d9}#sleep-type-planner-modal .sn-primary{background:#6d28d9;color:white;border-color:#6d28d9}
+        #sleep-type-planner-modal .sn-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}#sleep-type-planner-modal input,#sleep-type-planner-modal select,#sleep-type-planner-modal textarea{min-width:0;border:1px solid #cbd5e1;border-radius:8px;background:white;padding:8px;font-size:14px;color:#334155}#sleep-type-planner-modal input:focus,#sleep-type-planner-modal select:focus,#sleep-type-planner-modal textarea:focus{outline:2px solid #a78bfa;outline-offset:1px}
+        #sleep-type-planner-modal .sn-row{display:grid;grid-template-columns:minmax(230px,1.65fr) repeat(3,minmax(75px,.6fr)) minmax(115px,.9fr) 24px;gap:8px;align-items:end;border-top:1px solid #e2e8f0;padding:12px 0}#sleep-type-planner-modal .sn-row label span{display:block;font-size:12px;font-weight:700;margin-bottom:4px}#sleep-type-planner-modal .sn-row label input,#sleep-type-planner-modal .sn-row label select{width:100%}
+        #sleep-type-planner-modal .sn-date{display:flex;gap:5px;align-items:center}#sleep-type-planner-modal .sn-date input{width:145px;flex:1}#sleep-type-planner-modal .sn-date select{width:68px;padding:8px 3px}#sleep-type-planner-modal .sn-number{font-size:11px;color:#94a3b8;width:18px}#sleep-type-planner-modal .sn-remove{color:#94a3b8;font-size:23px;padding-bottom:4px}#sleep-type-planner-modal .sn-row-note{grid-column:1/-1;font-size:11px;color:#94a3b8}#sleep-type-planner-modal .sn-error{background:#fff1f2}#sleep-type-planner-modal .sn-error .sn-row-note{color:#be123c;font-weight:700}
+        #sleep-type-planner-modal .sn-empty{padding:25px 0;text-align:center;color:#94a3b8;font-size:13px}#sleep-type-planner-modal .sn-history{width:100%;border-collapse:collapse;font-size:13px}#sleep-type-planner-modal .sn-history td,#sleep-type-planner-modal .sn-history th{padding:10px 6px;text-align:left;border-bottom:1px solid #f1f5f9;white-space:nowrap}#sleep-type-planner-modal .sn-history th{font-size:12px;color:#64748b}
+        @media(max-width:700px){#sleep-type-planner-modal .sn-body{padding:12px}#sleep-type-planner-modal .sn-stats{gap:6px}#sleep-type-planner-modal .sn-stat{padding:10px}#sleep-type-planner-modal .sn-stat strong{font-size:23px}#sleep-type-planner-modal .sn-row{grid-template-columns:repeat(3,minmax(0,1fr)) 24px;gap:8px}#sleep-type-planner-modal .sn-date{grid-column:1/4;grid-row:1}#sleep-type-planner-modal .sn-remove{grid-column:4;grid-row:1}#sleep-type-planner-modal .sn-percent{grid-row:2}#sleep-type-planner-modal .sn-result{grid-column:1/4}#sleep-type-planner-modal .sn-row input,#sleep-type-planner-modal .sn-row select,#sleep-type-planner-modal .sn-tools input,#sleep-type-planner-modal .sn-tools select,#sleep-type-planner-modal textarea{font-size:16px}#sleep-type-planner-modal .sn-panel{padding:12px}}
+    </style><div class="sn-shell">
+        <div class="sn-top"><div><h3>睡眠类型记录</h3><p style="font-size:12px;opacity:.85;margin-top:4px">记录比例，查看最近30觉的个人平均</p></div><button type="button" aria-label="关闭睡眠类型记录" style="font-size:25px;padding:5px 10px" onclick="document.getElementById('sleep-type-planner-modal')?.remove()">×</button></div>
+        <div class="sn-body">
+            <h4>${stats.missing ? '最近30条中的已知比例均值' : '最近30觉平均比例'}</h4>
+            <p class="sn-muted">已录入${stats.window.length}/30觉 · ${stats.complete.length}觉有完整比例 · 一觉、二觉分别计次，每觉等权</p>
+            <div class="sn-stats">${SLEEP_TYPE_KEYS.map((key,i) => `<div class="sn-stat" style="background:${['#fffbeb','#f0f9ff','#eef2ff'][i]};color:${['#b45309','#0369a1','#4338ca'][i]}"><span style="font-size:13px;font-weight:700">${SLEEP_TYPE_META[key].label}</span><strong>${stats.averages[key] == null ? '—' : stats.averages[key].toFixed(1)+'%'}</strong></div>`).join('')}</div>
+            <p class="sn-muted">按睡眠日期与觉次取最近30条，不按录入顺序；不足30条按现有完整记录计算。最终判定不影响均值。漏录时，此处不等于游戏真实的最近30觉基准。</p>
+            ${stats.missing ? `<p style="color:#b45309;font-size:12px;margin-top:6px">最近${stats.window.length}条中有${stats.missing}条缺少比例，目前仅按${stats.complete.length}条完整数据计算，不会用更早记录凑满30条。请在下方补齐。</p>` : ''}
+            ${stats.window.some(row => row.measurementMode === 'fake') ? '<p class="sn-muted">含旧版标记为“假睡”的记录：按原来保存的比例纳入，不依据最终判定推算比例；可在历史记录中核对修改。</p>' : ''}
+            <section class="sn-panel">
+                <div class="sn-tools" style="margin-top:0"><button type="button" class="sn-button ${batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('batch')">批量表格录入</button><button type="button" class="sn-button ${!batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('single')">单次快速录入</button></div>
+                ${batch ? `<div class="sn-tools"><label class="sn-muted">起始日期 <input id="sleep-notebook-start" type="date" value="${escapeHtmlAttr(sleepNotebookDraft.start)}" onchange="sleepNotebookDraft.start=this.value;sleepNotebookSaveDraft()"></label><select id="sleep-notebook-sessions" aria-label="自动排日期方式" onchange="sleepNotebookDraft.sessions=this.value;sleepNotebookSaveDraft()"><option value="one" ${sleepNotebookDraft.sessions === 'one' ? 'selected' : ''}>每天一觉</option><option value="two" ${sleepNotebookDraft.sessions === 'two' ? 'selected' : ''}>每天两觉</option></select>${[1,7,14,30].map(count => `<button type="button" class="sn-button" onclick="sleepNotebookGenerate(${count})">+${count}行</button>`).join('')}<button type="button" class="sn-button" onclick="sleepNotebookClearDraft()">清空草稿</button></div><p class="sn-muted">首批从起始日期排；继续加行会接着最后一行排。可跳过空白行，未来日期有内容时不能保存。</p>` : ''}
+                <p class="sn-muted">填两项后，离开输入框才补第三项；已有数值不覆盖。Tab连续填写，回车跳至下一比例格。</p>
+                <div id="sleep-notebook-rows"></div>
+                ${batch ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:#6d28d9;font-weight:700;font-size:13px">从Excel粘贴多行数据</summary><p class="sn-muted" style="margin:8px 0">支持：日期｜一觉/二觉｜浅浅%｜安然%｜深深%｜最终判定（最后一列可省略）。也可只粘贴三列比例，按上方起始日期排。导入会追加到草稿，尚未保存。三列比例也可直接粘贴到表格的比例格中。</p><textarea id="sleep-notebook-paste" rows="4" style="width:100%" placeholder="2026-10-20&#9;一觉&#9;10&#9;40&#9;50&#9;深深" oninput="sleepNotebookDraft.paste=this.value;sleepNotebookSaveDraft()">${escapeHtml(sleepNotebookDraft.paste)}</textarea><button type="button" class="sn-button" style="margin-top:8px" onclick="sleepNotebookImportPaste()">导入到草稿表格</button></details>` : ''}
+                <div class="sn-tools" style="justify-content:space-between;margin-bottom:0"><span id="sleep-notebook-draft-status" class="sn-muted">未保存内容仅为本机草稿，不影响统计</span><button type="button" class="sn-button sn-primary" onclick="sleepNotebookSaveRows()">${batch ? '检查并保存本批' : '保存并继续下一觉'}</button></div>
+            </section>
+            <section class="sn-panel"><h4>已保存的睡眠记录 <span class="sn-muted">共${records.length}条</span></h4><p class="sn-muted">最近30条参与当前窗口；更早记录保留。修改或删除这里只影响睡眠比例记录。</p>
+                <div style="overflow:auto"><table class="sn-history"><thead><tr><th>日期 · 觉次</th><th>浅浅</th><th>安然</th><th>深深</th><th>最终判定</th><th>操作</th></tr></thead><tbody>${records.slice(0,sleepNotebookHistoryLimit).map((row,index) => `<tr><td>${escapeHtml(row.date)} · ${escapeHtml(row.session)}${index < 30 ? '<span style="display:block;font-size:10px;color:#7c3aed">当前窗口</span>' : ''}</td>${SLEEP_TYPE_KEYS.map(key => `<td>${row.percentages?.[key] == null ? '—' : formatSleepTypePercent(row.percentages[key])}</td>`).join('')}<td>${getSleepTypeResultBadge(row.result)}</td><td><button type="button" data-date="${escapeHtmlAttr(row.date)}" data-session="${escapeHtmlAttr(row.session)}" onclick="editSleepTypeRecordInPlanner(this.dataset.date,this.dataset.session)" style="color:#6d28d9;margin-right:10px">修改</button><button type="button" data-date="${escapeHtmlAttr(row.date)}" data-session="${escapeHtmlAttr(row.session)}" onclick="deleteSleepTypeRecord(this.dataset.date,this.dataset.session,event)" style="color:#94a3b8">删除</button></td></tr>`).join('') || '<tr><td colspan="6" class="sn-empty">还没有记录，可以先录入最近几觉。</td></tr>'}</tbody></table></div>
+                ${records.length > sleepNotebookHistoryLimit ? '<button type="button" class="sn-button" style="margin-top:10px" onclick="sleepNotebookHistoryLimit+=60;renderSleepTypePlannerModal()">加载更早记录</button>' : ''}
+            </section>
+        </div></div>`;
+    sleepNotebookRenderRows();
+}
 
-    modal.innerHTML = `<div class="bg-white rounded-3xl border border-slate-200 max-w-6xl w-full max-h-[94vh] shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">
-        <div class="px-5 py-4 bg-gradient-to-r from-violet-700 via-indigo-600 to-sky-500 text-white flex items-start justify-between gap-3"><div><h3 class="text-lg font-black"><i class="fa-solid fa-moon"></i> 睡眠类型规划</h3><p class="text-[10px] text-white/80 font-bold mt-1">最近30觉比例用于个人基准；一觉优先第一志愿，二觉优先第二志愿，实际异常后再滚动调整。</p></div><button type="button" onclick="document.getElementById('sleep-type-planner-modal')?.remove()" class="text-white/80 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button></div>
-        <div class="overflow-y-auto p-4 md:p-5 space-y-4">
-            <section class="grid grid-cols-1 lg:grid-cols-[1fr_240px] gap-3">
-                <div class="rounded-2xl border border-violet-100 bg-violet-50/50 p-3"><div class="text-xs font-black text-violet-900">你的类型倾向：${escapeHtml(getSleepTypePreferenceLabel(sleepTypePlannerState))}</div><div class="grid grid-cols-3 gap-2 mt-2">${SLEEP_TYPE_KEYS.map(type => `<label class="text-[9px] font-black text-slate-500">${SLEEP_TYPE_META[type].label}<select onchange="updateSleepTypePreference('${type}', this.value)" class="mt-1 w-full bg-white border border-violet-100 rounded-lg px-2 py-2 text-[10px] font-black"><option value="1" ${sleepTypePlannerState.preferenceRanks[type] === 1 ? 'selected' : ''}>第1倾向</option><option value="2" ${sleepTypePlannerState.preferenceRanks[type] === 2 ? 'selected' : ''}>第2倾向</option><option value="3" ${sleepTypePlannerState.preferenceRanks[type] === 3 ? 'selected' : ''}>第3倾向</option></select></label>`).join('')}</div><div class="text-[8px] font-bold text-violet-600 mt-2">允许并列：把两种类型设成相同倾向即可。</div></div>
-                <label class="rounded-2xl border border-sky-100 bg-sky-50 p-3 text-[10px] font-black text-sky-900">下一觉是哪一觉？<select onchange="updateSleepTypeNextSession(this.value)" class="mt-2 w-full bg-white border border-sky-100 rounded-xl px-3 py-2 text-xs font-black"><option value="一觉" ${sleepTypePlannerState.nextSession === '一觉' ? 'selected' : ''}>一觉：优先第一志愿</option><option value="二觉" ${sleepTypePlannerState.nextSession === '二觉' ? 'selected' : ''}>二觉：优先第二志愿</option></select></label>
-            </section>
-            ${renderSleepTypeRecommendationHtml(recommendation)}
-            <section class="rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-violet-50 p-4">
-                <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3 mb-3">
-                    <div><h4 class="text-sm font-black text-indigo-950"><i class="fa-solid fa-route text-indigo-600"></i> 连续多觉滚动排程</h4><p class="text-[9px] font-bold text-indigo-600 mt-0.5">按最近30觉的比例偏差逐觉重算；不再预设三类判定次数必须相等。</p></div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 text-[9px] font-black">
-                        <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600"><input type="checkbox" onchange="updateSleepTypePlanSetting('includeSecondSleep', this.checked)" ${sleepTypePlannerState.includeSecondSleep ? 'checked' : ''}> 计划中包含二觉</label>
-                        <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600"><input type="checkbox" onchange="updateSleepTypePlanSetting('allowFakeSleepPlanning', this.checked)" ${sleepTypePlannerState.allowFakeSleepPlanning ? 'checked' : ''}> 允许规划假睡</label>
-                        <label class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-slate-600">排程长度<select onchange="updateSleepTypePlanSetting('planningSessions', this.value)" class="ml-1 bg-white font-black"><option value="0" ${sleepTypePlannerState.planningSessions === 0 ? 'selected' : ''}>历史自动</option>${[6,9,12,15,18].map(value => `<option value="${value}" ${sleepTypePlannerState.planningSessions === value ? 'selected' : ''}>${value}觉</option>`).join('')}</select></label>
-                        <span class="rounded-xl bg-white border border-emerald-100 px-3 py-2 text-emerald-700"><i class="fa-solid fa-rotate"></i> 每录入一觉实际结果后自动重排</span>
-                    </div>
-                </div>
-                ${renderSleepTypeFuturePlanHtml(futurePlan, sleepTypePlannerState)}
-            </section>
-            <section class="rounded-3xl border border-indigo-200 bg-indigo-50/40 p-4">
-                <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                    <div><h4 class="text-sm font-black text-indigo-950"><i class="fa-solid fa-compass text-indigo-600"></i> 下一觉判定推演</h4><p class="text-[9px] font-bold text-indigo-600 mt-0.5">输入预计比例后计算最近30觉基础结果、第二候选与历史异常风险。</p></div>
-                    <button type="button" onclick="applyRecommendedSleepTypeSimulationProfile()" class="rounded-xl bg-white border border-indigo-100 px-3 py-2 text-[9px] font-black text-indigo-700">套用当前推荐结构</button>
-                </div>
-                <div class="grid grid-cols-3 gap-2 mt-3">
-                    ${SLEEP_TYPE_KEYS.map(type => `<label class="text-[9px] font-black text-slate-500">${SLEEP_TYPE_META[type].label}%<input id="simulation-sleep-type-${type}" type="number" min="0" max="100" step="0.1" value="${Number(simulationProfile[type] || 0).toFixed(1)}" oninput="handleSleepTypePercentageInput('simulation','${type}')" class="mt-1 w-full rounded-xl border border-indigo-100 bg-white px-3 py-2 text-sm font-black font-mono"></label>`).join('')}
-                </div>
-                <button type="button" onclick="runSleepTypeSimulationFromInputs()" class="mt-2 w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 text-xs font-black"><i class="fa-solid fa-play"></i> 按这组比例推演</button>
-                <div id="sleep-type-simulation-output" class="mt-3">${renderSleepTypePredictionHtml(simulationPrediction)}</div>
-            </section>
-            <section class="rounded-3xl border border-slate-200 bg-slate-50/60 p-4">
-                <div class="flex items-start justify-between gap-2 mb-3"><div><h4 class="text-sm font-black text-slate-900"><i class="fa-solid fa-flask-vial text-violet-600"></i> 历史逐觉回测</h4><p class="text-[9px] font-bold text-slate-500 mt-0.5">反查基础公式是否命中，并统计第二候选、无特征与尚未解释的实际改判。</p></div><span class="rounded-xl bg-white border border-slate-200 px-3 py-2 text-[9px] font-black text-slate-500">${backtest.total}觉可回测</span></div>
-                ${renderSleepTypeBacktestSummaryHtml(backtest)}
-            </section>
-            <section class="rounded-2xl border border-slate-200 p-3"><div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-chart-column text-violet-500"></i> 最近记录概况</h4><p class="text-[9px] font-bold text-slate-400 mt-0.5">普通睡眠比例基准使用最近30觉且每觉等权；假睡固定无特征，并默认不写入普通基准。</p></div><div class="flex flex-wrap gap-1">${['dozing','snoozing','slumbering','balanced','unknown'].map(type => `<span class="rounded-lg bg-slate-50 border border-slate-200 px-2 py-1 text-[9px] font-black text-slate-600">${SLEEP_TYPE_RESULT_META[type]} ${resultCounts[type]}</span>`).join('')}</div></div></section>
-            <section class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-3">
-                <div class="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3 self-start"><div class="flex items-center justify-between gap-2"><div><h4 class="text-xs font-black text-indigo-900"><i class="fa-solid fa-pen-to-square"></i> 独立补录或修改</h4><p class="text-[8px] font-bold text-indigo-600 mt-0.5">同一日期＋同一觉只保留一条，研究端填写后也会显示在这里。</p></div><button type="button" onclick="clearSleepTypePlannerForm()" class="rounded-lg bg-white border border-indigo-100 px-2 py-1 text-[9px] font-black text-indigo-700">清空</button></div>
-                    <div class="grid grid-cols-2 gap-2 mt-3"><label class="text-[9px] font-black text-slate-500">日期<input id="planner-sleep-type-date" type="date" max="${today}" value="${today}" onchange="loadSleepTypePlannerFormRecord()" class="mt-1 w-full bg-white border border-indigo-100 rounded-lg px-2 py-2 text-[10px] font-mono font-black"></label><label class="text-[9px] font-black text-slate-500">批次<select id="planner-sleep-type-session" onchange="loadSleepTypePlannerFormRecord()" class="mt-1 w-full bg-white border border-indigo-100 rounded-lg px-2 py-2 text-[10px] font-black"><option value="一觉">一觉</option><option value="二觉">二觉</option></select></label></div>
-                    <div class="grid grid-cols-3 gap-1.5 mt-2"><button type="button" onclick="moveSleepTypePlannerFormDate(-1)" class="rounded-lg bg-white border border-indigo-100 py-1.5 text-[9px] font-black text-indigo-700"><i class="fa-solid fa-chevron-left"></i> 前一天</button><button type="button" onclick="toggleSleepTypePlannerFormSession()" class="rounded-lg bg-white border border-indigo-100 py-1.5 text-[9px] font-black text-indigo-700">切换一觉/二觉</button><button type="button" onclick="moveSleepTypePlannerFormDate(1)" class="rounded-lg bg-white border border-indigo-100 py-1.5 text-[9px] font-black text-indigo-700">后一天 <i class="fa-solid fa-chevron-right"></i></button></div>
-                    <div class="mt-2">${renderSleepTypeResearchFieldsHtml('planner', formRecord)}</div>
-                    <button id="planner-sleep-type-save-button" type="button" onclick="saveSleepTypeRecordFromPlanner()" class="w-full mt-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 text-xs font-black"><i class="fa-solid fa-floppy-disk"></i> ${sleepTypePlannerEditingRecordId ? '保存对这条记录的修改' : '保存这觉的睡眠比例'}</button>
-                </div>
-                <div><div class="flex items-center justify-between gap-2 mb-2"><h4 class="text-xs font-black text-slate-800"><i class="fa-solid fa-clock-rotate-left text-violet-500"></i> 已录入记录</h4><span class="text-[9px] font-black text-slate-400">显示最近60条</span></div><div id="sleep-type-record-list" class="space-y-2 max-h-[520px] overflow-y-auto pr-1">${historyRows}</div></div>
-            </section>
-        </div>
-    </div>`;
+function renderSleepNotebookEditFields(prefix, record) {
+    return `<div class="rounded-2xl bg-violet-50 p-3"><div class="grid grid-cols-3 gap-2">${SLEEP_TYPE_KEYS.map(key => `<label class="text-xs font-bold text-slate-600">${SLEEP_TYPE_META[key].label}%<input id="${prefix}-sleep-type-${key}" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="${record?.percentages?.[key] ?? ''}" onblur="sleepNotebookCompleteEdit('${prefix}')" class="mt-1 w-full rounded-lg border border-violet-200 p-2 text-base"></label>`).join('')}</div><label class="block mt-3 text-xs font-bold text-slate-600">最终判定（选填）<select id="${prefix}-sleep-type-result" class="mt-1 w-full rounded-lg border border-violet-200 p-2 text-base">${sleepNotebookResultOptions(record?.result || 'unknown')}</select></label><p class="mt-2 text-xs text-slate-400">填两项后离开输入框，补齐尚未填写的第三项。不改变其他已有数值。</p></div>`;
+}
+function sleepNotebookCompleteEdit(prefix) {
+    const row = Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key,document.getElementById(`${prefix}-sleep-type-${key}`).value]));
+    sleepNotebookComplete(row);
+    SLEEP_TYPE_KEYS.forEach(key => document.getElementById(`${prefix}-sleep-type-${key}`).value = row[key]);
+}
+function sleepNotebookReadEdit(prefix,date,session) {
+    sleepNotebookCompleteEdit(prefix);
+    const row = sleepNotebookRow({date,session,...Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key,document.getElementById(`${prefix}-sleep-type-${key}`).value])),result:document.getElementById(`${prefix}-sleep-type-result`).value});
+    const error = sleepNotebookValidate(row);
+    if (error) { alert(error); return null; }
+    return {empty:false,measurementMode:'normal',result:row.result,percentages:Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key,Number(row[key])]))};
 }
 
 function runSleepTypeSimulationFromInputs() {
@@ -18574,7 +18803,7 @@ function saveSleepTypeRecordFromEditDialog() {
         alert('不能把睡眠信息修改到未来日期。');
         return;
     }
-    const data = readSleepTypeFields('planner-edit');
+    const data = sleepNotebookReadEdit('planner-edit', date, session);
     if (!data || data.empty) {
         if (data?.empty) alert('请至少填写最终睡眠类型，或者填写三种睡眠比例。');
         return;
