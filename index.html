@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.21.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.26.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -7238,7 +7238,7 @@ function normalizePlayerBox() {
 
         // 🥕 具体食材资料快照（RaenonX Pokédex，2026-08-14）
         // 旧记录的 foodCombo（AAA/AAB/ABC…）继续作为评分主键；新版只补充具体食材。
-        const POKEMON_INGREDIENT_DATA_VERSION = '2026-10-05';
+        const POKEMON_INGREDIENT_DATA_VERSION = '2026-10-26';
         const POKEMON_SLEEP_INGREDIENTS = {
             1:{name:'粗枝大葱',short:'大葱',traditional:'粗枝大蔥',emoji:'🥬'},2:{name:'品鲜蘑菇',short:'蘑菇',traditional:'品鮮蘑菇',emoji:'🍄'},3:{name:'特选蛋',short:'蛋',traditional:'特選蛋',emoji:'🥚'},
             4:{name:'窝心土豆',short:'土豆',traditional:'窩心洋芋',emoji:'🥔'},5:{name:'特选苹果',short:'苹果',traditional:'特選蘋果',emoji:'🍎'},6:{name:'火辣香草',short:'香草',traditional:'火辣香草',emoji:'🌿'},
@@ -7262,6 +7262,9 @@ function normalizePlayerBox() {
         // RaenonX 2026-10-05：哎呀球菇进化链；蘑菇 / 蛋 / 番茄。
         POKEMON_INGREDIENT_ROWS.push(["590",590,590,"哎呀球菇","哎呀球菇","Foongus","ingredient",[2,2,5,7],[3,7,10],[12,11]]);
         POKEMON_INGREDIENT_ROWS.push(["591",591,590,"败露球菇","敗露球菇","Amoonguss","ingredient",[2,2,5,7],[3,7,10],[12,11]]);
+        // RaenonX 2026-10-26：梦妖进化链，技能专长；土豆 / 咖啡豆 / 番茄。
+        POKEMON_INGREDIENT_ROWS.push(["200",200,200,"梦妖","夢妖","Misdreavus","skill",[4,1,2,4],[17,2,3],[12,4]]);
+        POKEMON_INGREDIENT_ROWS.push(["429",429,200,"梦妖魔","夢妖魔","Mismagius","skill",[4,1,2,4],[17,2,3],[12,4]]);
         const POKEMON_INGREDIENT_DEX=POKEMON_INGREDIENT_ROWS.map(row=>({id:String(row[0]),pokedexId:Number(row[1]),evoLineId:Number(row[2]),name:row[3],traditionalName:row[4],englishName:row[5],specialty:row[6],slots:{
             1:[{code:'A',ingredientId:row[7][0],qty:row[7][1]}],
             30:[{code:'A',ingredientId:row[7][0],qty:row[7][2]},...(row[8]?[{code:'B',ingredientId:row[8][0],qty:row[8][1]}]:[])],
@@ -7488,6 +7491,8 @@ function normalizePlayerBox() {
 // 权重设计目标是反映常见捕捉习惯：初始型最多，进化型较少，后段进化/活动/传说更少。
 // ==========================================
 const EVOLUTION_STAGE_META = {
+    "梦妖": { "line": "梦妖", "stage": 0, "familySize": 2 },
+    "梦妖魔": { "line": "梦妖", "stage": 1, "familySize": 2 },
     "绿毛虫": {
         "line": "绿毛虫",
         "stage": 0,
@@ -13161,6 +13166,18 @@ function getPokemonScreenshotNameCandidates(text) {
         });
         if (score) candidates.push({ name: entry.name, score });
     });
+    // 截图里的名字常只有“乌波”，AI也可能输出“帕底亚乌波”等非图鉴全称。
+    // 两种形态都加入复核候选，地区信息明确时优先地区形态。
+    if (/乌波|烏波|wooper/.test(compactText)) {
+        const regional = /帕底亚|帕底亞|paldea|毒系|毒属性|毒屬性/.test(compactText);
+        for (const [lookup, score] of [['乌波',1040],['乌波（帕底亚的样子）',regional ? 2200 : 900]]) {
+            const entry = getPokemonIngredientDexEntry(lookup);
+            if (!entry) continue;
+            const found = candidates.find(item => item.name === entry.name);
+            if (found) found.score = Math.max(found.score,score);
+            else candidates.push({name:entry.name,score});
+        }
+    }
     return candidates.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'zh-CN')).slice(0, 8);
 }
 
@@ -13908,6 +13925,28 @@ function getPokemonScreenshotIngredientCode(name, level, ingredientName) {
     return match?.code || null;
 }
 
+function resolvePokemonScreenshotWooperForm(rawName, candidates, ingredientRows) {
+    const text = normalizePokemonScreenshotOcrText(rawName);
+    const initial = candidates[0]?.name || '';
+    if (!/乌波|烏波|wooper/.test(text)) return {name:initial,note:'',requiresFormConfirmation:false};
+    const normal = getPokemonIngredientDexEntry('乌波');
+    const paldean = getPokemonIngredientDexEntry('乌波（帕底亚的样子）');
+    if (!normal || !paldean) return {name:initial,note:'',requiresFormConfirmation:false};
+    if (/帕底亚|帕底亞|paldea|毒系|毒属性|毒屬性/.test(text)) {
+        return {name:paldean.name,note:'已根据名称中的地区信息选择帕底亚乌波，请核对。',requiresFormConfirmation:false};
+    }
+    if (/普通|原种|原種|城都|johto/.test(text)) return {name:normal.name,note:'',requiresFormConfirmation:false};
+    // 只用高置信度、已识别且处于有效等级槽位的食材作交叉核验；不看颜色猜形态。
+    const evidence = ingredientRows.filter(row => row?.confidence === 'high' && [30,60].includes(Number(row.unlockLevel)))
+        .map(row => ({level:Number(row.unlockLevel),id:getPokemonScreenshotIngredientIdByName(row.name)})).filter(row => row.id != null);
+    const compatible = [normal,paldean].filter(entry => evidence.length && evidence.every(row =>
+        (entry.slots[row.level] || []).some(option => Number(option.ingredientId) === row.id)));
+    if (compatible.length === 1) {
+        return {name:compatible[0].name,note:'名称仅识别为乌波，已根据高置信度食材槽位区分形态；请核对预览。',requiresFormConfirmation:false};
+    }
+    return {name:'',note:'截图名字未区分乌波形态，且食材线索不足或冲突。请在上方选择普通乌波或帕底亚乌波（毒系），再确认食材。',requiresFormConfirmation:true};
+}
+
 function normalizePokemonScreenshotApiResult(payload) {
     const ai = payload?.result || {};
     const rawName = String(ai?.pokemon?.name || '').trim();
@@ -13916,9 +13955,11 @@ function normalizePokemonScreenshotApiResult(payload) {
     if (directEntry && !nameCandidates.some(item => item.name === directEntry.name)) {
         nameCandidates.unshift({ name: directEntry.name, score: 2000 });
     }
-    const name = nameCandidates[0]?.name || directEntry?.name || '';
+    let name = nameCandidates[0]?.name || directEntry?.name || '';
 
     const ingredientRows = Array.isArray(ai.ingredients) ? ai.ingredients : [];
+    const form = resolvePokemonScreenshotWooperForm(rawName,nameCandidates,ingredientRows);
+    if (/乌波|烏波|wooper/i.test(rawName)) name = form.name;
     const ingredientAt = level => ingredientRows.find(item => Number(item?.unlockLevel) === level) || {};
     const ingredient30 = ingredientAt(30);
     const ingredient60 = ingredientAt(60);
@@ -13939,6 +13980,7 @@ function normalizePokemonScreenshotApiResult(payload) {
     while (subskills.length < 5) subskills.push('none');
 
     const warnings = Array.isArray(ai.warnings) ? ai.warnings.filter(Boolean).map(String) : [];
+    if (form.note) warnings.push(form.note);
     if (name && ingredient30.name && ingredient30.name !== '未识别' && !code30) warnings.push(`Lv.30「${ingredient30.name}」不在该宝可梦的资料库候选中，已留待人工确认`);
     if (name && ingredient60.name && ingredient60.name !== '未识别' && !code60) warnings.push(`Lv.60「${ingredient60.name}」不在该宝可梦的资料库候选中，已留待人工确认`);
     const recognizedIngredientNames = [ingredient30.name, ingredient60.name].filter(value => value && value !== '未识别');
@@ -13951,6 +13993,8 @@ function normalizePokemonScreenshotApiResult(payload) {
     return {
         name,
         nameCandidates,
+        requiresFormConfirmation: form.requiresFormConfirmation,
+        recognizedIngredients: ingredientRows,
         level: Math.max(0, Math.min(100, Number(ai?.pokemon?.level) || 0)),
         foodCombo: `A${code30 || 'B'}${code60 || 'B'}`,
         ingredientRecognized: 1 + Number(!!code30) + Number(!!code60),
@@ -13982,7 +14026,7 @@ function renderPokemonScreenshotReview(result) {
     const applyBtn = document.getElementById('pokemon-screenshot-apply');
     if (!box) return;
     const candidateNames = result.nameCandidates.length ? result.nameCandidates.map(item => item.name) : POKEMON_INGREDIENT_DEX.slice(0, 1).map(item => item.name);
-    const nameOptions = candidateNames.map(name => `<option value="${escapeHtmlAttr(name)}" ${name === result.name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('');
+    const nameOptions = (result.requiresFormConfirmation ? '<option value="" selected>请选择乌波的形态</option>' : '') + candidateNames.map(name => `<option value="${escapeHtmlAttr(name)}" ${name === result.name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('');
     const combo = String(result.foodCombo || 'ABB').padEnd(3, 'B');
     const natureOptions = Object.entries(ALL_AUDIT_NATURES).map(([key, item]) => `<option value="${key}" ${key === result.nature ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('');
     const subskills = Array.from({ length: 5 }, (_, index) => result.subskills[index] || 'none');
@@ -14019,10 +14063,13 @@ function renderPokemonScreenshotReview(result) {
 
 function updatePokemonScreenshotIngredientReviewForName() {
     const name = document.getElementById('pokemon-screenshot-name')?.value || '';
+    const applyBtn = document.getElementById('pokemon-screenshot-apply');
+    if (applyBtn) applyBtn.disabled = !name;
     [1, 30, 60].forEach((level, index) => {
         const select = document.getElementById(`pokemon-screenshot-slot${index + 1}`);
         if (!select) return;
-        const oldCode = select.value || (index === 0 ? 'A' : 'B');
+        const recognized = window.pendingPokemonScreenshotRecognition?.recognizedIngredients?.find(item => Number(item.unlockLevel) === level);
+        const oldCode = (recognized && getPokemonScreenshotIngredientCode(name,level,recognized.name)) || select.value || (index === 0 ? 'A' : 'B');
         select.innerHTML = getPokemonScreenshotIngredientOptions(name, level, oldCode);
         if ([...select.options].some(option => option.value === oldCode)) select.value = oldCode;
     });
@@ -14213,7 +14260,9 @@ async function handlePokemonScreenshotFileLocalLegacy(input) {
         window.pendingPokemonScreenshotRecognition = result;
         if (progress) progress.style.width = '100%';
         const finalSkillCount = result.subskills.filter(key => key !== 'none').length;
-        if (status) status.innerHTML = result.name
+        if (status) status.innerHTML = result.requiresFormConfirmation
+            ? '<i class="fa-solid fa-circle-question text-amber-500 mr-1"></i> 已识别到乌波，请先在下方选择普通形态或帕底亚形态（毒系），再确认填入。'
+            : result.name
             ? `<i class="fa-solid fa-circle-check text-emerald-500 mr-1"></i> 已完成分区识别：副技能 ${finalSkillCount}/5，食材槽 ${result.ingredientRecognized}/3，性格${result.nature === 'blank' ? '未识别' : '已识别'}。请核对后再填入。`
             : '<i class="fa-solid fa-triangle-exclamation text-amber-500 mr-1"></i> 没有稳定识别出名字，请换一张更完整清晰的截图。';
         renderPokemonScreenshotReview(result);
@@ -25955,6 +26004,7 @@ function getWeeklyCookingMainSkillInfo(name) {
     const species = normalizeWeeklyCookingSpeciesName(name);
     const fixed = typeof window.getCookingPokemonFixedData === 'function' ? window.getCookingPokemonFixedData(species) : null;
     const mainSkillId = Number(fixed?.mainSkillId) || 0;
+    if (mainSkillId === 41) return { key: 'pot', label: '魔法火焰（料理跃进S）', icon: 'fa-fire-flame-curved', color: 'violet', extraTasty: true };
     // 主技能属于物种固定资料。优先读取页面内置的资料站快照，旧的名称清单只作兼容兜底。
     if ([11, 25].includes(mainSkillId)) return { key: 'pot', label: mainSkillId === 25 ? 'Minus（料理强化S）' : '料理强化S', icon: 'fa-fire-burner', color: 'orange' };
     if (mainSkillId === 13) return { key: 'tasty', label: '料理成功S', icon: 'fa-star', color: 'fuchsia' };
@@ -25974,8 +26024,13 @@ function getWeeklyCookingMainSkillInfo(name) {
     return { key: 'other', label: '固定主技能资料暂不参与料理角色计算', icon: 'fa-circle-info', color: 'slate' };
 }
 
-function getWeeklyCookingSkillValue(skillKey, level) {
+function getWeeklyCookingSkillValue(skillKey, level, mainSkillId = 0) {
     const lv = Math.max(1, Math.floor(Number(level) || 1));
+    // 两种效果同时触发，不能套用普通扩锅或普通料理成功的等级表。
+    if (Number(mainSkillId) === 41) {
+        const values = skillKey === 'pot' ? [7,10,12,17,22,27,31] : skillKey === 'tasty' ? [1,2,2,3,3,4,5] : [];
+        return values[Math.min(values.length, lv)-1] || 0;
+    }
     const table = skillKey === 'pot' ? WEEKLY_COOKING_POT_VALUES
         : skillKey === 'tasty' ? WEEKLY_COOKING_TASTY_VALUES
         : skillKey === 'dream' ? WEEKLY_COOKING_DREAM_VALUES
@@ -26203,6 +26258,7 @@ function getWeeklyCookingSelectedRoster(state = weeklyCookingState) {
         const rawDailyTriggers = Number(estimate?.dailySkillTriggers) || 0;
         return {
             id: String(item.id), item, cap, cur, species, skill, mainSkillLevel,
+            mainSkillId: Number(estimate?.mainSkillId) || 0,
             nickname: getGraduationDexNickname(item),
             specialty: dexEntry?.specialty || pokemonDictionary?.[species]?.type || 'unknown',
             rawDailyTriggers,
@@ -26334,8 +26390,14 @@ function getWeeklyCookingProductionFactor(state, roster) {
 
 function getWeeklyCookingSkillSummary(roster) {
     return roster.reduce((sum, row) => {
-        const value = getWeeklyCookingSkillValue(row.skill.key, row.mainSkillLevel);
+        const value = getWeeklyCookingSkillValue(row.skill.key,row.mainSkillLevel,row.mainSkillId);
         if (row.skill.key === 'pot') sum.potPerDay += row.dailyTriggers * value;
+        if (Number(row.mainSkillId) === 41) {
+            const tasty = getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,41);
+            sum.tastyPerDay += row.dailyTriggers * tasty;
+            sum.tastyTriggerRate += row.dailyTriggers;
+            sum.tastyWeightedIncrement += row.dailyTriggers * tasty;
+        }
         if (row.skill.key === 'tasty') sum.tastyPerDay += row.dailyTriggers * value;
         if (row.skill.key === 'dream') sum.dreamPerDay += row.dailyTriggers * value;
         if (row.skill.key === 'healer') sum.healPerDay += row.dailyTriggers * value;
@@ -26551,7 +26613,7 @@ function simulateWeeklyCookingScenario(type, state, recipesByType, roster, optio
             const canonical = typeof window.canonicalCookingIngredientName === 'function' ? window.canonicalCookingIngredientName(name) : name;
             ingredientsPerDay[canonical] = Number(value || 0) * row.rotationScale * productionFactor.total;
         });
-        const skillValue = getWeeklyCookingSkillValue(row.skill.key, row.mainSkillLevel);
+        const skillValue = getWeeklyCookingSkillValue(row.skill.key,row.mainSkillLevel,row.mainSkillId);
         const skillAmount = row.dailyTriggers * skillValue;
         let morningEnergy = 100;
         const days = Array.from({ length:7 }, (_, day) => {
@@ -26816,9 +26878,13 @@ function chooseWeeklyCookingDynamicTeam(type, state, recipes, candidates, stock,
             }
         });
         const expectedTriggers = (Number(row.rawDailyTriggers) || 0) / WEEKLY_COOKING_FULL_ENERGY_HELP_MULTIPLIER * energyFactor * blockScale * getWeeklyCookingCollectionFactor(state) * campHelpFactor;
-        const skillValue = getWeeklyCookingSkillValue(row.skill.key, row.mainSkillLevel);
+        const skillValue = getWeeklyCookingSkillValue(row.skill.key,row.mainSkillLevel,row.mainSkillId);
         let skillScore = 0;
         if (row.skill.key === 'pot' && target?.potGap > 0) skillScore = Math.min(target.potGap, expectedTriggers * skillValue) / Math.max(1,target.potGap) * target.objectiveValue * 0.8;
+        if (Number(row.mainSkillId) === 41 && critStack < desiredCritStack) {
+            const added = Math.min(desiredCritStack-critStack, expectedTriggers*getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,41));
+            skillScore += getWeeklyCookingObjectiveEnergyGain(state,added/100*(day===6?2:1)*(target?.stat.strength||0),context.absoluteHour,context.cumulative,context.island,context.sleepEvents);
+        }
         if (['tasty','assist'].includes(row.skill.key) && critStack < desiredCritStack) {
             const critValue = row.skill.key === 'assist' ? (WEEKLY_COOKING_ASSIST_TASTY_VALUES[Math.min(WEEKLY_COOKING_ASSIST_TASTY_VALUES.length,row.mainSkillLevel)-1] || 0) : skillValue;
             const needed = Math.max(0, desiredCritStack - critStack);
@@ -26946,6 +27012,7 @@ function runWeeklyCookingDynamicScenario(type, state, recipesByType, candidates,
             const potBeforeSkill=potCarry,stackBeforeSkill=critStack,shardsBeforeSkill=skillShards;
             detail.skillTriggers+=triggers;
             if(choice.row.skill.key==='pot'){const amount=triggers*choice.skillValue;potCarry+=amount;detail.skillAmount+=amount;}
+            if(Number(choice.row.mainSkillId)===41){critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+triggers*getWeeklyCookingSkillValue('tasty',choice.row.mainSkillLevel,41));}
             else if(choice.row.skill.key==='tasty'){const amount=triggers*choice.skillValue;critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+amount);detail.skillAmount+=amount;}
             else if(choice.row.skill.key==='assist'){const value=WEEKLY_COOKING_ASSIST_TASTY_VALUES[Math.min(WEEKLY_COOKING_ASSIST_TASTY_VALUES.length,choice.row.mainSkillLevel)-1]||0;const amount=triggers*value;critStack=Math.min(WEEKLY_COOKING_TASTY_STACK_CAP,critStack+amount);detail.skillAmount+=amount;}
             else if(choice.row.skill.key==='healer'){const amount=triggers*choice.skillValue;collectedHealing+=amount;detail.skillAmount+=amount;}
@@ -27237,7 +27304,7 @@ function formatWeeklyCookingNumber(value) {
 
 function describeWeeklyCookingSkillWork(row) {
     const amount = Number(row.skillAmount) || 0;
-    if (row.skill.key === 'pot') return `累计扩锅约 ${amount.toFixed(1)} 格/日`;
+    if (row.skill.key === 'pot') return `累计扩锅约 ${amount.toFixed(1)} 格/日${row.species === '梦妖魔' ? `，同时增加漂亮成功率约 ${(amount*getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,41)/Math.max(1,getWeeklyCookingSkillValue('pot',row.mainSkillLevel,41))).toFixed(1)} 个百分点/日（未扣封顶）` : ''}`;
     if (row.skill.key === 'tasty') return `累计增加料理暴击率约 ${amount.toFixed(1)}%/日`;
     if (row.skill.key === 'assist') return `料理助手贡献约 ${amount.toFixed(1)} 点/日`;
     if (row.skill.key === 'healer') return `全队回复约 ${amount.toFixed(1)} 活力/日`;
@@ -27675,6 +27742,8 @@ async function calculateAndRenderWeeklyCooking() {
     EMBEDDED_PRODUCTION_ROWS.push([150,2300,0.16,2.9,40,"skill"]);
     EMBEDDED_PRODUCTION_ROWS.push([590,5700,0.174,3.5,1,"ingredient"]);
     EMBEDDED_PRODUCTION_ROWS.push([591,3500,0.204,4.7,1,"ingredient"]);
+    EMBEDDED_PRODUCTION_ROWS.push([200,2800,0.15,4.7,11,"skill"]);
+    EMBEDDED_PRODUCTION_ROWS.push([429,2400,0.142,3.6,41,"skill"]);
     const EMBEDDED_RECIPE_LEVEL_ROWS = [[1,0],[2,0.02],[3,0.04],[4,0.06],[5,0.08],[6,0.09],[7,0.11],[8,0.13],[9,0.16],[10,0.18],[11,0.19],[12,0.21],[13,0.23],[14,0.24],[15,0.26],[16,0.28],[17,0.3],[18,0.31],[19,0.33],[20,0.35],[21,0.37],[22,0.4],[23,0.42],[24,0.45],[25,0.47],[26,0.5],[27,0.52],[28,0.55],[29,0.58],[30,0.61],[31,0.64],[32,0.67],[33,0.7],[34,0.74],[35,0.77],[36,0.81],[37,0.84],[38,0.88],[39,0.92],[40,0.96],[41,1],[42,1.04],[43,1.08],[44,1.13],[45,1.17],[46,1.22],[47,1.27],[48,1.32],[49,1.37],[50,1.42],[51,1.48],[52,1.53],[53,1.59],[54,1.65],[55,1.71],[56,1.77],[57,1.83],[58,1.9],[59,1.97],[60,2.03],[61,2.09],[62,2.15],[63,2.21],[64,2.27],[65,2.34],[66,2.39],[67,2.43],[68,2.48],[69,2.52],[70,2.58]];
 
     let cookingMaster = null;
@@ -28628,7 +28697,7 @@ async function calculateAndRenderWeeklyCooking() {
         const relevant=new Set(Object.keys(demand));
         const potSize=(Number(state.basePot)||0)*(state.goodCamp?1.5:1);
         const shortage=Math.max(0,Object.values(demand).reduce((a,b)=>a+b,0)-potSize);
-        const potValue=potter && typeof getWeeklyCookingSkillValue==='function' ? getWeeklyCookingSkillValue('pot',potter.mainSkillLevel) : 0;
+        const potValue=potter && typeof getWeeklyCookingSkillValue==='function' ? getWeeklyCookingSkillValue('pot',potter.mainSkillLevel,potter.mainSkillId) : 0;
         if(shortage>0 && (!potter || !potValue || !potter.triggersPerHour)) return null;
         const potTriggers=shortage>0?Math.ceil(shortage/potValue):0;
         // 初值只用于启动联立迭代。后续会把所有“兼顾型”食材宝在备菜期间
@@ -28636,7 +28705,7 @@ async function calculateAndRenderWeeklyCooking() {
         let potHours=potTriggers?(potTriggers/potter.triggersPerHour):0;
         // “档位1～7”表示希望叠出的画面暴击率 +10%～+70%，并非盲目把每次技能都当作+10%。
         // 咚咚鼠、巨沼怪等同类技能按各自当前主技能等级换算每小时实际叠加值。
-        const tastyBoostRate=dedenneRows.reduce((sum,row)=>sum+row.triggersPerHour*(typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel)||0):10),0);
+        const tastyBoostRate=dedenneRows.reduce((sum,row)=>sum+row.triggersPerHour*(typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,row.mainSkillId)||0):10),0);
         if(targetTriggers>0 && !tastyBoostRate) return null;
         let tastyHours=targetTriggers>0?(targetTriggers*10/tastyBoostRate):0;
         // 奶妈已经按整个墙钟时间持续站场，不能再重复分配额外食材工时；
@@ -28690,16 +28759,18 @@ async function calculateAndRenderWeeklyCooking() {
                 const hours=Number(specialistHours[row.id])||0;
                 if(!(hours>0))return;
                 if(row.skill.key==='pot'){
-                    const value=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('pot',row.mainSkillLevel)||0):0;
+                    const value=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('pot',row.mainSkillLevel,row.mainSkillId)||0):0;
                     incidentalPotCapacity+=hours*row.triggersPerHour*value;
                 }
                 if(row.skill.key==='tasty'){
-                    const value=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel)||0):10;
+                    const value=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,row.mainSkillId)||0):10;
                     incidentalTastyPoints+=hours*row.triggersPerHour*value;
                 }
+                if(Number(row.mainSkillId)===41)incidentalTastyPoints+=hours*row.triggersPerHour*getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,41);
             });
             const dedicatedPotRate=potter&&potValue?potter.triggersPerHour*potValue:0;
             const nextPotHours=shortage>0?Math.max(0,shortage-incidentalPotCapacity)/Math.max(0.000001,dedicatedPotRate):0;
+            if(Number(potter?.mainSkillId)===41)incidentalTastyPoints+=nextPotHours*potter.triggersPerHour*getWeeklyCookingSkillValue('tasty',potter.mainSkillLevel,41);
             const targetTastyPoints=Math.max(0,targetTriggers*10);
             const nextTastyHours=targetTastyPoints>incidentalTastyPoints
                 ?(targetTastyPoints-incidentalTastyPoints)/Math.max(0.000001,tastyBoostRate)
@@ -28784,12 +28855,12 @@ async function calculateAndRenderWeeklyCooking() {
         const allRows=roster();
         allRows.filter(row=>row.skill.key==='pot'&&(Number(result.jobHours?.[row.id])||0)>0).forEach(row=>{
             const hours=Number(result.jobHours[row.id])||0, foodHours=Number(result.specialistHours?.[row.id])||0;
-            const value=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('pot',row.mainSkillLevel)||0):0;
+            const value=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('pot',row.mainSkillLevel,row.mainSkillId)||0):0;
             details.push({role:foodHours>0?'食材／扩锅兼顾':'扩锅手',row,hours,skill:`总站场 ${fmt(hours,2)}h，其中食材任务 ${fmt(foodHours,2)}h；期间期望扩锅 ${fmt(hours*row.triggersPerHour*value,1)} 格`});
         });
         allRows.filter(row=>row.skill.key==='tasty'&&(Number(result.jobHours?.[row.id])||0)>0).forEach(row=>{
             const hours=Number(result.jobHours[row.id])||0, foodHours=Number(result.specialistHours?.[row.id])||0;
-            const boost=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel)||0):10;
+            const boost=typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,row.mainSkillId)||0):10;
             details.push({role:foodHours>0?'食材／爆锅兼顾':'爆锅手',row,hours,skill:`总站场 ${fmt(hours,2)}h，其中食材任务 ${fmt(foodHours,2)}h；期望发动 ${fmt(row.triggersPerHour*hours,2)} 次，每次+${boost}%`});
         });
         return details.map(item=>Object.assign(item,{outputs:functionalOutputText(item.row,item.hours,names)}));
@@ -29029,6 +29100,7 @@ async function calculateAndRenderWeeklyCooking() {
     const POKE_BERRY_ROWS=[[1,5,1],[2,5,1],[3,5,1],[4,2,1],[5,2,1],[6,2,1],[7,3,1],[8,3,1],[9,3,1],[10,12,2],[11,12,2],[12,12,2],[19,1,2],[20,1,2],[23,8,2],[24,8,2],[25,4,2],[26,4,2],[27,9,1],[28,9,1],[35,18,2],[36,18,2],[37,2,2],[38,2,2],[39,18,1],[40,18,1],[50,9,1],[51,9,1],[52,1,1],[53,1,1],[54,3,1],[55,3,1],[56,7,2],[57,7,2],[58,2,1],[59,2,1],[69,5,1],[70,5,1],[71,5,1],[74,13,1],[75,13,1],[76,13,1],[79,3,1],[80,3,1],[81,17,1],[82,17,1],[83,10,1],[84,10,2],[85,10,2],[92,14,1],[93,14,1],[94,14,1],[95,13,2],[104,9,2],[105,9,2],[113,1,1],[115,1,1],[122,11,1],[127,12,1],[132,1,1],[133,1,1],[134,3,1],[135,4,1],[136,2,1],[147,15,1],[148,15,1],[149,15,1],[151,11,2],[152,5,2],[153,5,2],[154,5,2],[155,2,2],[156,2,2],[157,2,2],[158,3,2],[159,3,2],[160,3,2],[172,4,2],[173,18,2],[174,18,1],[175,18,1],[176,18,1],[177,11,2],[178,11,2],[179,4,1],[180,4,1],[181,4,1],[185,13,1],[194,3,1],[195,3,1],[196,11,1],[197,16,1],[198,16,1],[199,3,1],[202,11,1],[208,17,2],[213,12,1],[214,12,1],[215,16,2],[225,10,1],[228,16,2],[229,16,2],[242,1,1],[243,4,1],[244,2,1],[245,3,1],[246,13,1],[247,13,1],[248,16,1],[252,5,1],[253,5,1],[254,5,1],[255,2,2],[256,7,2],[257,7,2],[258,3,2],[259,9,2],[260,9,2],[280,11,1],[281,11,1],[282,11,1],[287,1,2],[288,1,2],[289,1,2],[302,16,1],[303,17,1],[304,17,1],[305,17,1],[306,17,1],[311,4,1],[312,4,1],[316,8,1],[317,8,1],[328,9,1],[329,9,1],[330,9,1],[333,10,2],[334,15,2],[353,14,2],[354,14,2],[359,16,1],[360,11,1],[363,6,2],[364,6,2],[365,6,2],[371,15,2],[372,15,2],[373,15,2],[380,15,1],[381,15,1],[387,5,1],[388,5,1],[389,9,1],[390,2,1],[391,7,1],[392,7,1],[393,3,2],[394,3,2],[395,17,2],[403,4,1],[404,4,1],[405,4,1],[425,14,1],[426,14,1],[430,16,1],[438,13,1],[439,11,1],[440,1,1],[442,16,1],[447,7,1],[448,7,1],[453,8,1],[454,8,1],[459,6,1],[460,6,1],[461,16,2],[462,17,1],[468,18,1],[470,5,1],[471,6,1],[475,7,1],[488,11,1],[491,16,2],[517,11,2],[518,11,2],[557,12,1],[558,12,1],[627,10,1],[628,10,1],[696,13,2],[697,13,2],[700,18,1],[701,10,1],[702,4,1],[714,15,1],[715,15,1],[736,12,1],[737,12,1],[738,12,1],[742,18,1],[743,18,1],[759,7,1],[760,7,1],[764,18,1],[777,17,1],[778,14,1],[780,15,1],[845,10,1],[848,8,1],[849,8,1],[906,5,1],[907,5,1],[908,16,1],[909,2,1],[910,2,1],[911,14,1],[912,3,1],[913,3,1],[914,7,1],[921,4,1],[922,4,1],[923,4,1],[957,18,2],[958,18,2],[959,18,2],[974,6,1],[975,6,1],[980,8,1],[7006,6,2],[7007,6,2],[7054,8,1],[8001,8,1],[9002,4,1],[9004,1,2],[9005,1,1],[9006,6,1],[9007,4,2]];
     POKE_BERRY_ROWS.push([150,11,1]);
     POKE_BERRY_ROWS.push([590,8,1],[591,8,1]);
+    POKE_BERRY_ROWS.push([200,14,1],[429,14,1]);
     const POKE_BERRY=new Map(POKE_BERRY_ROWS.map(row=>[Number(row[0]),{berryId:Number(row[1]),baseCount:Number(row[2])}]));
     // 给实时料理规划复用同一份树果资料，避免另抄一套后逐渐产生差异。
     window.getCookingPokemonBerryMeta=function(pokedexId){
@@ -29193,7 +29265,7 @@ async function calculateAndRenderWeeklyCooking() {
     }
     function makeMealOptions(dayKind,analysis,rows,initialStock={}){
         const options=[],rejected=[];
-        const hasTasty=rows.some(row=>row.skill?.key==='tasty'&&row.triggersPerHour>0);
+        const hasTasty=rows.some(row=>(row.skill?.key==='tasty'||Number(row.mainSkillId)===41)&&row.triggersPerHour>0);
         const potSize=(Number(state.basePot)||0)*(state.goodCamp?1.5:1);
         analysis.results.forEach(result=>{
             const stockCovered=!!result?.excluded&&Array.isArray(result?.recipe?.ingredients)&&(result.missing||[]).every(name=>{const key=typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(name):name,need=result.recipe.ingredients.find(item=>(typeof canonicalizeMealPrepIngredientName==='function'?canonicalizeMealPrepIngredientName(item.name):item.name)===key)?.amount||0;return (Number(initialStock[key])||0)>=need;});
@@ -29212,8 +29284,8 @@ async function calculateAndRenderWeeklyCooking() {
         return {options,rejected};
     }
     function resourceRate(row,key){
-        if(key==='__pot')return row.skill?.key==='pot'?row.triggersPerHour*(typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('pot',row.mainSkillLevel)||0):0):0;
-        if(key==='__tasty')return row.skill?.key==='tasty'?row.triggersPerHour*(typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel)||0):10):0;
+        if(key==='__pot')return row.skill?.key==='pot'?row.triggersPerHour*(typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('pot',row.mainSkillLevel,row.mainSkillId)||0):0):0;
+        if(key==='__tasty')return (row.skill?.key==='tasty'||Number(row.mainSkillId)===41)?row.triggersPerHour*(typeof getWeeklyCookingSkillValue==='function'?(getWeeklyCookingSkillValue('tasty',row.mainSkillLevel,row.mainSkillId)||0):10):0;
         return Number(row.ingredientRates?.[key])||0;
     }
     function scheduleIdealMeals(plan){
@@ -29298,6 +29370,18 @@ async function calculateAndRenderWeeklyCooking() {
                 if(skillKey){supply[skillKey]=(supply[skillKey]||0)+effective;if(!skillContributionByRow[row.id])skillContributionByRow[row.id]={__pot:0,__tasty:0};skillContributionByRow[row.id][skillKey]+=effective;wastedSkillByRow[row.id]=(wastedSkillByRow[row.id]||0)+wasted;if(raw>0)effectiveFunctionHours[row.id]=(effectiveFunctionHours[row.id]||0)+step*(effective/raw);}
                 const segmentIngredients={};ingredientKeys.forEach(key=>{const amount=resourceRate(row,key)*step;if(amount>0)segmentIngredients[key]=amount;});
                 const existing=entries.find(item=>item.rowId===row.id&&item.reason===reason);if(existing){existing.hours+=step;existing.produced+=effective;existing.rawProduced+=raw;existing.wasted+=wasted;existing.directEnergy+=(Number(row.directEnergyPerHour)||0)*step;Object.entries(segmentIngredients).forEach(([key,value])=>existing.ingredients[key]=(existing.ingredients[key]||0)+value);}else entries.push({key:skillKey||'ingredients',rowId:row.id,nickname:row.nickname,species:row.species,hours:step,produced:effective,rawProduced:raw,wasted,reason,ingredients:segmentIngredients,directEnergy:(Number(row.directEnergyPerHour)||0)*step});
+                if(Number(row.mainSkillId)===41){
+                    const rawTasty=resourceRate(row,'__tasty')*step;
+                    const usefulTasty=Math.min(Math.max(0,Number(cycle.tastyDemand||0)-localTasty),rawTasty);
+                    localTasty+=usefulTasty;supply.__tasty+=usefulTasty;
+                    skillContributionByRow[row.id].__tasty+=usefulTasty;
+                    // 同一次站场同时产两种功能，不重复计工时与直接能量。
+                    const primaryFraction=raw>0?effective/raw:0,extraFraction=rawTasty>0?usefulTasty/rawTasty:0;
+                    effectiveFunctionHours[row.id]=(effectiveFunctionHours[row.id]||0)+step*Math.max(0,extraFraction-primaryFraction);
+                    const secondary=entries.find(item=>item.rowId===row.id&&item.key==='__tasty'&&item.reason===reason+' · 同次魔法火焰');
+                    if(secondary){secondary.produced+=usefulTasty;secondary.rawProduced+=rawTasty;secondary.wasted+=rawTasty-usefulTasty;}
+                    else entries.push({key:'__tasty',rowId:row.id,nickname:row.nickname,species:row.species,hours:0,produced:usefulTasty,rawProduced:rawTasty,wasted:rawTasty-usefulTasty,reason:reason+' · 同次魔法火焰',ingredients:{},directEnergy:0});
+                }
             };
             const currentDeficits=()=>Object.fromEntries(ingredientKeys.map(key=>[key,Math.max(0,Number(cycle.ingredients?.[key]||0)-(stock[key]||0))]));
             const remainingTotal=()=>{const future=futureIngredientNeed(cycleIndex),out={};ingredientKeys.forEach(key=>out[key]=Math.max(0,(future[key]||0)-(stock[key]||0)));return out;};
@@ -29575,7 +29659,7 @@ async function calculateAndRenderWeeklyCooking() {
             return audit;
         }finally{state=saved;}
     };
-    function rowAudit(row){return {id:row.id,nickname:row.nickname,species:row.species,level:row.level,pokedexId:row.pokedexId,specialty:row.specialty,mainSkillId:row.mainSkillId,baseMainSkillLevel:row.baseMainSkillLevel||row.mainSkillLevel,mainSkillLevel:row.mainSkillLevel,skillKey:row.skill?.key||'other',skillLabel:row.skill?.label||'',skillValue:typeof getWeeklyCookingSkillValue==='function'?getWeeklyCookingSkillValue(row.skill?.key,row.mainSkillLevel):0,berryId:row.berryId,berryType:BERRY_TYPE[row.berryId]||'未知',favorite:row.favorite,favoriteBerryMultiplier:row.favoriteBerryMultiplier||1,berryCount:row.berryCount,exRole:row.exRole||'normal',exSkillLevelBonus:row.exSkillLevelBonus||0,exInventoryBonus:row.exInventoryBonus||0,exWeeklyEffect:row.exWeeklyEffect||'none',weeklySkillMultiplier:row.weeklySkillMultiplier||1,exIntervalMultiplier:row.exIntervalMultiplier||1,exOutputMultiplier:row.exOutputMultiplier||1,helpsPerHour:row.helpsPerHour,ingredientRate:row.ingredientRate,regularBerryEnergyPerHour:row.regularBerryEnergyPerHour,directSkillEnergyPerHour:row.directSkillEnergyPerHour,directEnergyPerHour:row.directEnergyPerHour,triggersPerHour:row.triggersPerHour,berryZoneRatePerTrigger:row.berryZoneRatePerTrigger||0,berryZoneMax:row.berryZoneMax||0,ingredientRates:row.ingredientRates};}
+    function rowAudit(row){return {id:row.id,nickname:row.nickname,species:row.species,level:row.level,pokedexId:row.pokedexId,specialty:row.specialty,mainSkillId:row.mainSkillId,baseMainSkillLevel:row.baseMainSkillLevel||row.mainSkillLevel,mainSkillLevel:row.mainSkillLevel,skillKey:row.skill?.key||'other',skillLabel:row.skill?.label||'',skillValue:typeof getWeeklyCookingSkillValue==='function'?getWeeklyCookingSkillValue(row.skill?.key,row.mainSkillLevel,row.mainSkillId):0,berryId:row.berryId,berryType:BERRY_TYPE[row.berryId]||'未知',favorite:row.favorite,favoriteBerryMultiplier:row.favoriteBerryMultiplier||1,berryCount:row.berryCount,exRole:row.exRole||'normal',exSkillLevelBonus:row.exSkillLevelBonus||0,exInventoryBonus:row.exInventoryBonus||0,exWeeklyEffect:row.exWeeklyEffect||'none',weeklySkillMultiplier:row.weeklySkillMultiplier||1,exIntervalMultiplier:row.exIntervalMultiplier||1,exOutputMultiplier:row.exOutputMultiplier||1,helpsPerHour:row.helpsPerHour,ingredientRate:row.ingredientRate,regularBerryEnergyPerHour:row.regularBerryEnergyPerHour,directSkillEnergyPerHour:row.directSkillEnergyPerHour,directEnergyPerHour:row.directEnergyPerHour,triggersPerHour:row.triggersPerHour,berryZoneRatePerTrigger:row.berryZoneRatePerTrigger||0,berryZoneMax:row.berryZoneMax||0,ingredientRates:row.ingredientRates};}
     function favoriteSelect(index){
         const rule=getExRule(),selected=Number(state.favorite[index])||0,used=new Set(state.favorite.map(Number).filter(Boolean));
         let entries=Object.entries(BERRY_TYPE);
@@ -30151,7 +30235,7 @@ async function calculateAndRenderWeeklyCooking() {
             const result=typeof window.calculateCookingPokemonEstimate==='function'?window.calculateCookingPokemonEstimate(entry):null;if(!result?.ok)return;
             const species=result.species||'', skill=typeof getWeeklyCookingMainSkillInfo==='function'?getWeeklyCookingMainSkillInfo(species):null;if(skill?.key!=='pot')return;
             let level=1;try{level=Math.max(1,Math.min(8,Math.floor(Number(getGraduationCurrent(entry)?.mainSkillLevel)||1)));}catch(_){}
-            const perTrigger=typeof getWeeklyCookingSkillValue==='function'?Number(getWeeklyCookingSkillValue('pot',level))||0:0;
+            const perTrigger=typeof getWeeklyCookingSkillValue==='function'?Number(getWeeklyCookingSkillValue('pot',level,result.mainSkillId))||0:0;
             const interval=getLiveCookingExIntervalMultiplier(entry,result), daily=(Number(result.dailySkillTriggers)||0)/Math.max(.01,interval), rate=daily*perTrigger/24;
             if(rate>0)rows.push({species,level,perTrigger,daily,rate});
         });
@@ -30760,6 +30844,30 @@ function installSleepEncounterFoongusData(gameMap,sleepStyleModule,spoModule,pok
     });
 }
 function sleepEncounterEsc(v){return String(v??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));}
+function installSleepEncounterMisdreavusData(gameMap,sleepStyleModule,spoModule,pokedexModule,actModule){
+    const styles=sleepStyleModule?.SLEEP_STYLE,spoData=spoModule?.SPO_DATA,pokedex=pokedexModule?.pokedex;
+    if(!styles||!spoData||!pokedex)throw new Error('梦妖资料所需模块缺失');
+    // RaenonX sleepType=4是浅浅；此引擎用1表示浅浅（与妙蛙种子相同）。
+    const species=[
+        {id:200,friendship:16,maxcarry:13,helpSpeed:2800,foodPer:15,skillPer:4.7,skill:11,styles:[[948,21,277,391,7],[949,43,1558,2192,9],[950,57,3830,5385,12]],unlocks:{green:[[11,1],[15,2]],snow:[[6,1],[10,2],[16,3]],plant:[[4,1],[8,2],[14,3]],greenex:[[5,1],[11,2],[15,3]]}},
+        {id:429,friendship:20,maxcarry:17,helpSpeed:2400,foodPer:14.2,skillPer:3.6,skill:41,styles:[[951,45,1361,2444,8],[952,62,3892,6987,10],[953,80,10687,19189,13]],unlocks:{green:[[22,1],[26,2]],snow:[[17,1],[21,2],[27,3]],plant:[[15,1],[19,2],[25,3]],greenex:[[11,1],[17,2],[25,3]]}}
+    ];
+    species.forEach(p=>{
+        pokedex[p.id]={id:p.id,friendship:p.friendship,sleepType:1,skillType:p.skill,pokeType:3,berryType:8,maxcarry:p.maxcarry,helpSpeed:p.helpSpeed,foodPer:p.foodPer,skillPer:p.skillPer};
+        p.styles.forEach(([internalId,spo_n,exp,shards,candys],i)=>{
+            const star=i+1,id=`${p.id}-id-${star}`;
+            styles[id]={pokeId:p.id,id,star,exp,shards,candys,sleepNameId:internalId};
+            spoData[id]={id:internalId,spo_n};
+        });
+        (gameMap||[]).forEach(map=>(p.unlocks[map.id]||[]).forEach(([index,star])=>{
+            const list=map.levelList?.[index]?.sleepStyles,id=`${p.id}-id-${star}`;
+            if(!Array.isArray(list))throw new Error(`梦妖解锁等级缺失：${map.id}/${index}`);
+            if(!list.includes(id))list.push(id);
+        }));
+        const noLastList=actModule?.SLEEP_CALC_POKEMONS?.noLastList;
+        if(Array.isArray(noLastList)&&!noLastList.includes(p.id))noLastList.push(p.id);
+    });
+}
 function sleepEncounterNum(v,f=0){const n=Number(v);return Number.isFinite(n)?n:f;}
 function sleepEncounterFmt(v,d=0){return Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:d,minimumFractionDigits:d});}
 function sleepEncounterDexItem(id){return (typeof POKEMON_INGREDIENT_DEX!=='undefined'?POKEMON_INGREDIENT_DEX:[]).find(x=>Number(x.pokedexId)===Number(id))||null;}
@@ -30781,6 +30889,7 @@ async function sleepEncounterLoadModules(){
         const [game,sleep,sleepStyle,spo,pokedex,act]=await Promise.all([import(`${SLEEP_ENCOUNTER_CDN}/config/game.js`),import(`${SLEEP_ENCOUNTER_CDN}/utils/sleep.js`),import(`${SLEEP_ENCOUNTER_CDN}/config/sleepStyle.js`),import(`${SLEEP_ENCOUNTER_CDN}/config/spo.js`),import(`${SLEEP_ENCOUNTER_CDN}/config/pokedex.js`),import(`${SLEEP_ENCOUNTER_CDN}/config/act.js`)]);
         installSleepEncounterMewtwoData(game.gameMap,sleepStyle,spo,pokedex,act);
         installSleepEncounterFoongusData(game.gameMap,sleepStyle,spo,pokedex,act);
+        installSleepEncounterMisdreavusData(game.gameMap,sleepStyle,spo,pokedex,act);
         sleepEncounterModules={gameMap:game.gameMap,getRandomSleepStyle:sleep.getRandomSleepStyle,getLevelIndexByEnergy:sleep.getLevelIndexByEnergy};
         return sleepEncounterModules;
     }catch(error){throw new Error(`资料加载失败，请确认网络可访问 jsDelivr（${error?.message||error}）`);}
