@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.26.2</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.29.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1012,7 +1012,7 @@
                     <button onclick="openLiveCookingPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-900 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="记录本周已经吃过的料理，并根据当前食材与暴击率重新规划后续餐位">
                         <i class="fa-solid fa-calendar-check text-amber-600"></i> 🍽️ 实时料理规划
                     </button>
-                    <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="批量录入浅浅、安然、深深比例，查看最近30觉平均值">
+                    <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="记录最近30觉比例，管理睡眠方案并动态优化未来排程">
                         <i class="fa-solid fa-chart-line text-violet-600"></i> 🌙 睡眠类型规划
                     </button>
                     <button onclick="openSleepSplitPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-blue-100 text-blue-800 shadow-sm flex items-center gap-1 hover:bg-blue-200" title="根据岛屿、当前能量与活动倍率计算两觉拆分，并反推各种 x+y 所需的最低能量">
@@ -1809,7 +1809,7 @@ function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
-        !!(log && (log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
+        !!(log && (log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
 function isBallPlannerEnabled() {
@@ -18119,6 +18119,353 @@ function renderSleepTypeRecommendationHtml(result) {
     </div>`;
 }
 
+// 通用、无页面依赖的睡眠比例模型。可直接在 Worker 和单元测试中运行。
+function createSleepDynamicCore() {
+    const TYPES = ['dozing','snoozing','slumbering'], EPS = 1e-8;
+    const index = type => TYPES.indexOf(type);
+    function vector(raw) {
+        if (!raw || TYPES.some((key,i) => (Array.isArray(raw) ? raw[i] : raw[key]) == null || (Array.isArray(raw) ? raw[i] : raw[key]) === '')) return null;
+        const p = TYPES.map((key,i) => Number(Array.isArray(raw) ? raw[i] : raw[key]));
+        if (!p.every(n => Number.isFinite(n) && n >= 0 && n <= 100)) return null;
+        const sum = p.reduce((a,b) => a+b,0);
+        return sum > 0 && Math.abs(sum-100) <= .25 ? p.map(n => n/sum*100) : null;
+    }
+    function vertices(p, range) {
+        if (!range) return [p];
+        const low = range.min.map(Number), high = range.max.map(Number), out = [];
+        if (low.length !== 3 || high.length !== 3 || !low.every((n,i) => Number.isFinite(n) && n >= 0 && n <= p[i]+EPS && high[i] >= p[i]-EPS && high[i] <= 100 && n <= high[i])) throw new Error('波动范围须包含默认比例，各项下限不得高于上限');
+        for (let a=0;a<3;a++) for (let b=a+1;b<3;b++) for (const x of [low[a],high[a]]) for (const y of [low[b],high[b]]) {
+            const c=3-a-b, v=[0,0,0];v[a]=x;v[b]=y;v[c]=100-x-y;
+            if (v[c] >= low[c]-EPS && v[c] <= high[c]+EPS) out.push(v);
+        }
+        if (!out.length) throw new Error('波动范围内不存在合计100%的比例');
+        return out;
+    }
+    function profile(raw) {
+        const p = vector(raw.percentages || raw.p);
+        if (!p) throw new Error('方案三种比例须合计100%，且均为0–100');
+        const v = vertices(p,raw.range);
+        return {id:String(raw.id),name:String(raw.name || '未命名方案'),p,v,
+            low:p.map((_,i)=>Math.min(...v.map(x=>x[i]))), high:p.map((_,i)=>Math.max(...v.map(x=>x[i]))),
+            minDiff:p.map((_,i)=>p.map((_,j)=>Math.min(...v.map(x=>x[i]-x[j])))),
+            maxDiff:p.map((_,i)=>p.map((_,j)=>Math.max(...v.map(x=>x[i]-x[j])))),
+            key:JSON.stringify([String(raw.id),p,raw.range || null])};
+    }
+    function record(raw) {
+        let p = null;
+        const minutes = raw.stageMinutes || raw.minutes;
+        if (minutes && TYPES.every(key => minutes[key] != null && minutes[key] !== '' && Number.isFinite(Number(minutes[key])) && Number(minutes[key]) >= 0)) {
+            const sum=TYPES.reduce((n,key)=>n+Number(minutes[key]),0);
+            if (sum > 0) p=TYPES.map(key=>Number(minutes[key])/sum*100);
+        }
+        p ||= vector(raw.percentages);
+        return {date:String(raw.date || ''),session:raw.session==='二觉'?2:1,result:raw.result || 'unknown',p,
+            profile:p?profile({id:'actual:'+raw.date+':'+raw.session,p}):null,raw};
+    }
+    function history(records) {
+        const byKey=new Map();
+        for (const raw of records || []) {
+            const r=record(raw), key=r.date+'_'+r.session, old=byKey.get(key);
+            if (!old || (Date.parse(raw.updatedAt || raw.createdAt)||0) >= (Date.parse(old.raw.updatedAt || old.raw.createdAt)||0)) byKey.set(key,r);
+        }
+        return [...byKey.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.session-b.session);
+    }
+    function baseline(h) {
+        const avg=[0,0,0],low=[0,0,0],high=[0,0,0],maxDiff=Array.from({length:3},()=>[0,0,0]);
+        if (!h.length) return null;
+        for (const row of h) for (let i=0;i<3;i++) {
+            avg[i]+=row.p[i]/h.length;low[i]+=row.low[i]/h.length;high[i]+=row.high[i]/h.length;
+            for (let j=0;j<3;j++) maxDiff[i][j]+=row.maxDiff[i][j]/h.length;
+        }
+        return {avg,low,high,maxDiff,count:h.length};
+    }
+    function predict(base, p, objective) {
+        if (!base) return {type:'unknown',target:false,safe:false,delta:[null,null,null],increase:null,lead:null,worstIncrease:null,worstLead:null};
+        const delta=p.p.map((x,i)=>x-base.avg[i]),max=Math.max(...delta),winners=delta.map((x,i)=>Math.abs(x-max)<EPS?i:-1).filter(i=>i>=0);
+        const type=max>EPS && winners.length===1?TYPES[winners[0]]:'unknown';
+        const t=index(objective.targetType),increase=delta[t],lead=increase-Math.max(...delta.filter((_,i)=>i!==t));
+        const worstIncrease=p.low[t]-base.high[t];
+        const worstLead=Math.min(...TYPES.map((_,i)=>i).filter(i=>i!==t).map(j=>p.minDiff[t][j]-base.maxDiff[t][j]));
+        const target=type===objective.targetType;
+        return {type,delta,increase,lead,worstIncrease,worstLead,target,
+            safe:target && worstIncrease+EPS>=objective.minimumIncrease && worstLead+EPS>=objective.minimumLead,
+            uncertain:p.v.length>1 || base.high.some((x,i)=>x-base.low[i]>EPS)};
+    }
+    function dateShift(date,amount) {
+        const d=new Date(date+'T12:00:00'); d.setDate(d.getDate()+amount);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    function gameDate(now=new Date()) {const d=new Date(now);d.setHours(d.getHours()-4);return dateShift(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`,0);}
+    function slots(config,bufferDays=7) {
+        const out=[];
+        for(let day=0;day<config.days+bufferDays;day++) {
+            const date=dateShift(config.startDate,day);
+            for(let session=1;session<=2;session++) {
+                if(day===0 && session<config.nextSession) continue;
+                if(session===2 && (!config.secondSleep || config.skipSecondDates.includes(date))) continue;
+                out.push({date,session,buffer:day>=config.days,day});
+            }
+        }
+        return out;
+    }
+    function push(h,p) {return [...h,p].slice(-30);}
+    function step(state,p,slot,objective) {
+        const prediction=predict(state.base,p,objective),first=slot.session===objective.prioritySleep;
+        const child={h:push(state.h,p),primary:state.primary,targets:state.targets,firstTargets:state.firstTargets,firstTotal:state.firstTotal,
+            bufferSafe:state.bufferSafe,bufferTotal:state.bufferTotal,min:state.min,sum:state.sum,
+            parent:state,p,slot,prediction,root:state.root || p.id};
+        if(slot.buffer) {if(first){child.bufferTotal++;if(prediction.safe)child.bufferSafe++;}}
+        else {
+            if(prediction.target)child.targets++;
+            if(first){child.firstTotal++;if(prediction.target)child.firstTargets++;if(prediction.safe)child.primary++;
+                child.min=Math.min(child.min,prediction.worstIncrease ?? -100,prediction.worstLead ?? -100);child.sum+=(prediction.worstIncrease ?? -100)+(prediction.worstLead ?? -100);}
+        }
+        child.base=baseline(child.h);
+        return child;
+    }
+    function compare(a,b,final=false) {
+        const tail=s=>{const p=predict(s.base,s.firstProfile,s.objective);return Math.min(p.worstIncrease ?? -100,p.worstLead ?? -100);};
+        const va=[a.primary,a.bufferSafe,a.targets,a.firstTargets,a.min,a.sum,final?tail(a):0];
+        const vb=[b.primary,b.bufferSafe,b.targets,b.firstTargets,b.min,b.sum,final?tail(b):0];
+        for(let i=0;i<va.length;i++)if(Math.abs(va[i]-vb[i])>EPS)return vb[i]-va[i];
+        return 0;
+    }
+    function path(state) {const out=[];for(let node=state;node.parent;node=node.parent)out.push({slot:node.slot,planId:node.p.id,name:node.p.name,percentages:node.p.p,prediction:node.prediction,baseline:node.parent.base?.avg || null});return out.reverse();}
+    function summary(state) {return {firstSafe:state.primary,targets:state.targets,firstTargets:state.firstTargets,firstTotal:state.firstTotal,bufferSafe:state.bufferSafe,bufferTotal:state.bufferTotal,minSafety:Number.isFinite(state.min)?state.min:null};}
+    function prepare(records,plans,config) {
+        const all=history(records),recent=all.slice(-30),missing=recent.filter(r=>!r.profile).length;
+        if(missing)throw new Error(`最近30条中有${missing}条缺少有效比例，请先补齐；不能越过它们用更早记录代替`);
+        if(!recent.length)throw new Error('至少录入一觉完整比例后才能试算；建议先补齐最近30觉');
+        const profiles=plans.filter(p=>p.enabled!==false).map(profile);
+        if(!profiles.length)throw new Error('没有已启用的睡眠方案');
+        const first=profiles.find(p=>p.id===config.firstPlanId);
+        if(!first)throw new Error('第1觉固定方案已停用或删除，请重新指定；系统不会悄悄改用其他方案');
+        if(!TYPES.includes(config.targetType))throw new Error('目标类型无效');
+        if(config.nextSession===2 && (!config.secondSleep || config.skipSecondDates.includes(config.startDate)))throw new Error('起点指定为第2觉，但该日第2觉已停用或跳过；请改为自动推进或指定下一日第1觉');
+        const sequence=slots(config),last=all[all.length-1],next=sequence[0];
+        if(!next || next.date<last.date || (next.date===last.date && next.session<=last.session))throw new Error('下一觉的游戏日期或觉次与已有记录重叠，请调整起点');
+        const h=recent.map(row=>row.profile);
+        return {all,profiles,first,sequence,initial:{h,base:baseline(h),primary:0,targets:0,firstTargets:0,firstTotal:0,bufferSafe:0,bufferTotal:0,min:Infinity,sum:0,parent:null,root:'',firstProfile:first,objective:config}};
+    }
+    async function optimize(records,plans,config,onProgress=()=>{}) {
+        const {all,profiles,first,sequence,initial}=prepare(records,plans,config);
+        const beamWidth=Math.max(8,Math.min(config.beamWidth || 128,Math.floor(48000/(Math.max(1,sequence.length)*profiles.length))));
+        let beam=[initial],expanded=0;
+        for(let i=0;i<sequence.length;i++) {
+            const slot=sequence[i],choices=slot.session===config.prioritySleep?[first]:profiles;
+            const unique=new Map();
+            for(const state of beam) for(const p of choices) {
+                const child=step(state,p,slot,config);child.firstProfile=first;child.objective=config;
+                const key=child.root+'|'+child.h.map(row=>row.key).join('|');
+                const prior=unique.get(key);if(!prior || compare(child,prior)<0)unique.set(key,child);expanded++;
+            }
+            const ordered=[...unique.values()].sort((a,b)=>compare(a,b));
+            // 保留每种当前选择的一条分支，避免高收益前缀提前挤掉所有校准方案。
+            const roots=new Set(),keep=[];
+            for(const candidate of ordered)if(!roots.has(candidate.root)){roots.add(candidate.root);keep.push(candidate);}
+            const used=new Set(keep);for(const candidate of ordered){if(keep.length>=beamWidth)break;if(!used.has(candidate))keep.push(candidate);}
+            beam=keep;
+            onProgress({step:i+1,total:sequence.length,expanded,beamWidth});
+            await new Promise(resolve=>setTimeout(resolve,0));
+        }
+        // 将固定对照也作为完整候选核验，保证不会因剪枝而劣于这些可行对照。
+        const t=index(config.targetType),reset=[...profiles].sort((a,b)=>a.p[t]-b.p[t])[0];
+        for(const n of [9,14,29]){
+            let candidate=initial,count=0;
+            for(const slot of sequence){const p=slot.session===config.prioritySleep?first:((++count%(n+1)===0)?reset:first);candidate=step(candidate,p,slot,config);candidate.firstProfile=first;candidate.objective=config;}
+            beam.push(candidate);
+        }
+        beam.sort((a,b)=>compare(a,b,true));
+        const best=beam[0],alternatives=[];
+        for(const candidate of beam)if(!alternatives.some(x=>x.planId===candidate.root))alternatives.push({planId:candidate.root,summary:summary(candidate)});
+        // 缓冲期第1觉安全优先于额外第2觉收益，防止规划末端透支。
+        return {path:path(best),summary:summary(best),alternatives,historyCount:Math.min(30,all.length),beamWidth,expanded,bufferDays:7,approximate:true};
+    }
+    function fixedComparisons(records,plans,config) {
+        const {profiles,first,sequence,initial}=prepare(records,plans,config);
+        const t=index(config.targetType),reset=[...profiles].sort((a,b)=>a.p[t]-b.p[t])[0];
+        return [9,14,29].map(n=>{
+            let state=initial,count=0;
+            for(const slot of sequence){const p=slot.session===config.prioritySleep?first:((++count%(n+1)===0)?reset:first);state=step(state,p,slot,config);}
+            return {label:`第2觉 ${n}次固定方案＋1次最低目标比例方案`,summary:summary(state)};
+        });
+    }
+    function backtest(records,config) {
+        const all=history(records),rows=[];
+        for(let i=30;i<all.length;i++) {
+            const prior=all.slice(i-30,i),current=all[i];
+            if(!current.profile || current.result==='unknown' || prior.some(row=>!row.profile))continue;
+            const base=baseline(prior.map(row=>row.profile)),prediction=predict(base,current.profile,config);
+            rows.push({date:current.date,session:current.session,p:current.p,baseline:base.avg,prediction,actual:current.result,match:prediction.type===current.result});
+        }
+        const bins=[[-Infinity,0],[0,3],[3,6],[6,10],[10,Infinity]].map(([lo,hi])=>{
+            const group=rows.filter(row=>row.prediction.increase>=lo && row.prediction.increase<hi);
+            return {lo,hi,count:group.length,target:group.filter(row=>row.actual===config.targetType).length,balanced:group.filter(row=>row.actual==='balanced').length};
+        });
+        return {rows,bins,matches:rows.filter(row=>row.match).length,total:rows.length,insufficient:Math.min(30,all.length)};
+    }
+    return {TYPES,vector,profile,record,history,baseline,predict,push,slots,gameDate,dateShift,optimize,fixedComparisons,backtest,prepare};
+}
+
+// 只服务现有睡眠类型规划弹窗；配置与模拟结果不混入真实睡眠记录。
+var SleepTypeDynamics = (() => {
+    const core=createSleepDynamicCore(),TYPE='sleep_type_dynamic_config',ID='sleep_type_dynamic_config_v1';
+    const labels={dozing:'浅浅',snoozing:'安然',slumbering:'深深',balanced:'无特征',unknown:'无法确定／并列'};
+    const strategies=[{id:'maximize-dozing',name:'浅浅优先（第1觉浅浅优先）',targetType:'dozing',prioritySleep:1}];
+    let cfg=null,owner='',editId=null,cache=null,active=null,serial=0,mismatchOnly=false,viewRecords=[];
+    const esc=value=>String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const num=(value,digits=1)=>value==null || !Number.isFinite(value)?'—':Number(value).toFixed(digits);
+    const signed=value=>value==null?'—':(value>=0?'+':'')+num(value);
+    const key=()=>`${ID}_${currentCloudUser?.id || 'guest'}`;
+    function defaults(){return {version:1,strategy:'maximize-dozing',days:15,minimumIncrease:6,minimumLead:6,firstPlanId:'profile-high-dozing',secondSleep:true,skipSecondDates:[],autoStart:true,startDate:core.gameDate(),nextSession:1,
+        plans:[{id:'profile-high-dozing',name:'高浅浅',percentages:{dozing:96.5,snoozing:0,slumbering:3.5},range:{min:[96,0,3],max:[97,0,4]},enabled:true,note:'初始方案A；波动范围内合计仍为100%'},{id:'profile-pure-slumbering',name:'纯深深',percentages:{dozing:0,snoozing:0,slumbering:100},enabled:true,note:'初始方案B'}]};}
+    function normalize(raw){
+        const d=defaults(),v=raw && typeof raw==='object'?raw:{};
+        return {...d,...v,version:1,strategy:strategies.some(s=>s.id===v.strategy)?v.strategy:d.strategy,
+            days:[7,15,30].includes(Number(v.days))?Number(v.days):15,
+            minimumIncrease:Math.max(0,Math.min(100,Number.isFinite(Number(v.minimumIncrease))?Number(v.minimumIncrease):6)),
+            minimumLead:Math.max(0,Math.min(200,Number.isFinite(Number(v.minimumLead))?Number(v.minimumLead):6)),
+            secondSleep:v.secondSleep!==false,autoStart:v.autoStart!==false,nextSession:Number(v.nextSession)===2?2:1,
+            plans:Array.isArray(v.plans)?v.plans.slice(0,40):d.plans,skipSecondDates:Array.isArray(v.skipSecondDates)?v.skipSecondDates.filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)).slice(-100):[]};
+    }
+    function load(){
+        const nextOwner=key();
+        const cloud=(Array.isArray(historyLogs)?historyLogs:[]).filter(row=>row.type===TYPE && row.id===ID).reduce((best,row)=>!best || (Date.parse(row.updatedAt)||0)>(Date.parse(best.updatedAt)||0)?row:best,null);
+        let local=null;try{local=JSON.parse(localStorage.getItem(nextOwner)||'null');}catch(_){}
+        const latest=(Date.parse(cloud?.updatedAt)||0)>=(Date.parse(local?.updatedAt)||0)?cloud?.state:local;
+        if(owner!==nextOwner || !cfg || (Date.parse(latest?.updatedAt)||0)>(Date.parse(cfg.updatedAt)||0)){
+            cancel();cfg=normalize(latest);owner=nextOwner;editId=null;cache=null;
+        }
+        return cfg;
+    }
+    function save(){
+        const now=new Date().toISOString();cfg.updatedAt=now;
+        try{localStorage.setItem(key(),JSON.stringify(cfg));}catch(_){showToast('优化配置暂存失败，请检查本机空间；账号同步仍会尝试');}
+        const prior=(historyLogs||[]).find(row=>row.type===TYPE && row.id===ID);
+        historyLogs=mergeHistoryLogs([], [...(historyLogs||[]).filter(row=>!(row.type===TYPE && row.id===ID)),{id:ID,type:TYPE,state:JSON.parse(JSON.stringify(cfg)),createdAt:prior?.createdAt||now,updatedAt:now}]);
+        saveHistoryToLocal();cache=null;
+    }
+    function records(){
+        const rawById=new Map((historyLogs||[]).filter(row=>row.type==='sleep_type_record').map(row=>[String(row.id),row]));
+        return getVisibleSleepTypeRecords().map(row=>{
+            const raw=rawById.get(String(row.id))||row;
+            return {id:row.id,date:row.date,session:row.session,result:row.result,percentages:row.percentages,updatedAt:row.updatedAt,
+                stageMinutes:raw.stageMinutes || raw.minutes};
+        });
+    }
+    function inferStart(list){
+        const all=core.history(list),last=all[all.length-1],today=core.gameDate();
+        if(!last || last.date<today)return {startDate:today,nextSession:1};
+        if(last.session===1 && cfg.secondSleep && !cfg.skipSecondDates.includes(last.date))return {startDate:last.date,nextSession:2};
+        return {startDate:core.dateShift(last.date,1),nextSession:1};
+    }
+    function effective(list){return {...cfg,...strategies.find(s=>s.id===cfg.strategy),...(cfg.autoStart?inferStart(list):{})};}
+    function cancel(){serial++;if(active){active.worker?.terminate();if(active.url)URL.revokeObjectURL(active.url);active.reject?.(new Error('cancelled'));active=null;}}
+    async function compute(list,config,progress){
+        if(typeof Worker==='undefined'){
+            const result=await core.optimize(list,cfg.plans,config,progress);
+            return {...result,backtest:core.backtest(list,config),comparisons:core.fixedComparisons(list,cfg.plans,config)};
+        }
+        const source=`const core=(${createSleepDynamicCore.toString()})();onmessage=async event=>{try{const {records,plans,config}=event.data;const result=await core.optimize(records,plans,config,progress=>postMessage({progress}));postMessage({result:{...result,backtest:core.backtest(records,config),comparisons:core.fixedComparisons(records,plans,config)}});}catch(error){postMessage({error:error.message});}};`;
+        let url,worker;
+        try{url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));worker=new Worker(url);}
+        catch(_){if(url)URL.revokeObjectURL(url);const result=await core.optimize(list,cfg.plans,config,progress);return {...result,backtest:core.backtest(list,config),comparisons:core.fixedComparisons(list,cfg.plans,config)};}
+        return new Promise((resolve,reject)=>{
+            active={worker,url,reject};
+            const finish=()=>{worker.terminate();URL.revokeObjectURL(url);if(active?.worker===worker)active=null;};
+            worker.onmessage=event=>{if(event.data.progress)progress(event.data.progress);else{finish();if(event.data.error)reject(new Error(event.data.error));else resolve(event.data.result);}};
+            worker.onerror=()=>{finish();reject(new Error('后台计算未能启动，请重开本弹窗再试；记录不会被更改'));};
+            worker.postMessage({records:list,plans:cfg.plans,config});
+        });
+    }
+    const css=`#sleep-type-planner-modal .sd-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}#sleep-type-planner-modal .sd-grid label{font-size:12px;font-weight:700}#sleep-type-planner-modal .sd-grid input,#sleep-type-planner-modal .sd-grid select{width:100%;margin-top:5px}#sleep-type-planner-modal .sd-info{font-size:12px;color:#64748b;line-height:1.8}#sleep-type-planner-modal .sd-warning{border-radius:12px;padding:12px;background:#fffbeb;color:#92400e;font-size:12px;line-height:1.8}#sleep-type-planner-modal .sd-card{border-radius:14px;padding:14px;border:1px solid #ddd6fe;background:#f5f3ff;margin:10px 0}#sleep-type-planner-modal .sd-values{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;font-weight:700;margin:8px 0}#sleep-type-planner-modal .sd-table{width:100%;border-collapse:collapse;font-size:12px}#sleep-type-planner-modal .sd-table td,#sleep-type-planner-modal .sd-table th{padding:9px 6px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top;white-space:nowrap}#sleep-type-planner-modal .sd-table small{display:block;color:#64748b}#sleep-type-planner-modal details{margin-top:10px}#sleep-type-planner-modal summary{cursor:pointer;font-size:13px;font-weight:700;color:#6d28d9}#sleep-type-planner-modal .sd-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}#sleep-type-planner-modal .sd-metrics div{padding:10px;border-radius:12px;background:#f8fafc;font-size:12px}#sleep-type-planner-modal .sd-metrics strong{display:block;font-size:19px;color:#5b21b6}#sleep-type-planner-modal .sd-link{color:#6d28d9;font-weight:700}#sleep-type-planner-modal .sd-bad{color:#b45309}#sleep-type-planner-modal .sd-ok{color:#047857}@media(max-width:700px){#sleep-type-planner-modal .sd-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#sleep-type-planner-modal .sd-metrics{grid-template-columns:repeat(2,1fr)}#sleep-type-planner-modal .sd-grid input,#sleep-type-planner-modal .sd-grid select{font-size:16px}}`;
+    function plansHtml(){return `<details><summary>我的睡眠方案（${cfg.plans.filter(p=>p.enabled!==false).length}/${cfg.plans.length}个启用）</summary><div style="overflow:auto"><table class="sd-table"><thead><tr><th>方案</th><th>默认比例（浅／安／深）</th><th>波动范围</th><th>操作</th></tr></thead><tbody>${cfg.plans.map(p=>`<tr><td>${esc(p.name)}<small>${p.enabled===false?'已停用':'已启用'}${p.id===cfg.firstPlanId?' · 第1觉固定':''}</small><small>${esc(p.note)}</small></td><td>${core.vector(p.percentages)?.map(n=>num(n)).join(' / ')||'比例无效'}</td><td>${p.range?p.range.min.map((n,i)=>`${num(n)}–${num(p.range.max[i])}`).join(' / '):'固定比例'}</td><td><button class="sd-link" data-id="${esc(p.id)}" onclick="SleepTypeDynamics.edit(this.dataset.id)">编辑</button> · <button class="sd-link" data-id="${esc(p.id)}" onclick="SleepTypeDynamics.toggle(this.dataset.id)">${p.enabled===false?'启用':'停用'}</button> · <button class="sd-link" data-id="${esc(p.id)}" onclick="SleepTypeDynamics.remove(this.dataset.id)">删除</button></td></tr>`).join('')}</tbody></table></div><button class="sn-button" style="margin-top:10px" onclick="SleepTypeDynamics.edit('')">新增方案</button><div id="sd-plan-editor">${editId!==null?editorHtml():''}</div></details>`;}
+    function editorHtml(){
+        const p=cfg.plans.find(p=>p.id===editId)||{name:'',percentages:{dozing:'',snoozing:'',slumbering:''},note:''};
+        return `<div class="sd-card"><label class="sd-info">方案名称<input id="sd-name" maxlength="60" style="width:100%" value="${esc(p.name)}"></label><div class="sd-grid">${core.TYPES.map((type,i)=>`<label>${labels[type]}%<input id="sd-p-${i}" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="${esc(p.percentages[type])}" onblur="SleepTypeDynamics.completePlan()"></label>`).join('')}</div><label class="sd-info"><input id="sd-range-enabled" type="checkbox" ${p.range?'checked':''}> 使用波动范围（范围须包含默认值，三项仍合计100%）</label><div class="sd-grid">${core.TYPES.map((type,i)=>`<label>${labels[type]}下限／上限<div style="display:flex;gap:4px"><input aria-label="${labels[type]}下限" id="sd-min-${i}" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="${esc(p.range?.min[i]??p.percentages[type])}"><input aria-label="${labels[type]}上限" id="sd-max-${i}" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="${esc(p.range?.max[i]??p.percentages[type])}"></div></label>`).join('')}</div><label class="sd-info">备注<input id="sd-note" style="width:100%" maxlength="300" value="${esc(p.note)}"></label><div class="sn-tools"><button class="sn-button sn-primary" onclick="SleepTypeDynamics.savePlan()">保存方案</button><button class="sn-button" onclick="SleepTypeDynamics.edit(null)">取消</button></div></div>`;
+    }
+    function mount(){
+        const zone=document.getElementById('sleep-type-dynamic-panel');if(!zone)return;
+        load();viewRecords=records();const config=effective(viewRecords),all=core.history(viewRecords),recent=all.slice(-30),valid=recent.filter(r=>r.profile);
+        const base=valid.length?core.baseline(valid.map(r=>r.profile)):null;
+        zone.innerHTML=`<style>${css}</style><h4>睡眠类型动态优化 <span class="sd-info">理论模型 · 滚动规划</span></h4><p class="sd-info">凌晨4点切换游戏日；历史日期按原记录的“游戏归属日”读取，不自动平移旧日期。可以在记录区手动修正。</p>
+        <div class="sd-values"><span>当前历史 ${recent.length}/30觉（完整${valid.length}觉）</span>${core.TYPES.map((key,i)=>`<span>${labels[key]} ${num(base?.avg[i])}%</span>`).join('')}<span>下一觉：${esc(config.startDate)} · 第${config.nextSession}觉</span></div>
+        ${recent.length<30?'<p class="sd-warning">历史不足30觉：先按已知记录等权均值试算，填满30觉后改为严格滚动窗口。此阶段不能视为游戏完整个人基准。</p>':''}
+        ${valid.length<recent.length?'<p class="sd-warning">最近窗口内有缺失比例，须先补齐才可优化，不会跳过缺失记录凑满30条。</p>':''}
+        <div class="sd-grid"><label>优化目标<select onchange="SleepTypeDynamics.setting('strategy',this.value)">${strategies.map(s=>`<option value="${s.id}" ${s.id===cfg.strategy?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>规划期限<select onchange="SleepTypeDynamics.setting('days',this.value)">${[7,15,30].map(n=>`<option ${n===cfg.days?'selected':''} value="${n}">${n}天</option>`).join('')}</select></label><label>第1觉固定方案<select onchange="SleepTypeDynamics.setting('firstPlanId',this.value)">${cfg.plans.map(p=>`<option value="${esc(p.id)}" ${p.id===cfg.firstPlanId?'selected':''}>${esc(p.name)}${p.enabled===false?'（已停用）':''}</option>`).join('')}${!cfg.plans.some(p=>p.id===cfg.firstPlanId)?'<option selected value="">请选择有效方案</option>':''}</select></label><label>目标比自身历史增加至少（百分点）<input type="number" min="0" max="100" step="0.1" value="${cfg.minimumIncrease}" onchange="SleepTypeDynamics.setting('minimumIncrease',this.value)"></label><label>目标比其他阶段领先至少（百分点）<input type="number" min="0" max="200" step="0.1" value="${cfg.minimumLead}" onchange="SleepTypeDynamics.setting('minimumLead',this.value)"></label><label>每日觉次<select onchange="SleepTypeDynamics.setting('secondSleep',this.value)"><option value="true" ${cfg.secondSleep?'selected':''}>默认两觉，可逐天跳过第2觉</option><option value="false" ${!cfg.secondSleep?'selected':''}>每天仅第1觉</option></select></label></div>
+        <div class="sn-tools"><span class="sd-info">余量预设（两个指标同时设置）：</span>${[[3,'激进'],[6,'均衡'],[10,'保守']].map(([n,label])=>`<button class="sn-button" onclick="SleepTypeDynamics.risk(${n})">${label} ${n}</button>`).join('')}<button class="sn-button" onclick="SleepTypeDynamics.compareRisks()">对比3／6／10余量</button></div>
+        <p class="sd-info">以上是可调的风险参数，不是已证实的游戏阈值。安全标记同时要求：目标是最大正差值、增幅达标、领先达标；有波动时还检查最不利边界。不保证游戏一定判为该类型。</p>
+        <details><summary>调整下一觉、临时跳过第2觉</summary><div class="sn-tools"><label class="sd-info"><input type="checkbox" ${cfg.autoStart?'checked':''} onchange="SleepTypeDynamics.setting('autoStart',this.checked)"> 根据真实记录自动推进起点</label><input id="sd-start-date" aria-label="下一觉游戏日期" type="date" value="${esc(config.startDate)}" onchange="SleepTypeDynamics.manualStart()"><select id="sd-start-session" aria-label="下一觉觉次" onchange="SleepTypeDynamics.manualStart()"><option value="1" ${config.nextSession===1?'selected':''}>第1觉</option><option value="2" ${config.nextSession===2?'selected':''}>第2觉</option></select></div><div class="sn-tools"><input id="sd-skip-date" aria-label="跳过第2觉的日期" type="date" value="${esc(config.startDate)}"><button class="sn-button" onclick="SleepTypeDynamics.skip(document.getElementById('sd-skip-date').value)">切换该日第2觉：跳过／恢复</button></div><p class="sd-info">已跳过：${cfg.skipSecondDates.length?cfg.skipSecondDates.map(date=>`<button class="sd-link" data-date="${esc(date)}" onclick="SleepTypeDynamics.skip(this.dataset.date)">${esc(date)} ×</button>`).join('；'):'无'}。跳过不会向历史追加任何记录。</p></details>
+        ${plansHtml()}
+        <div class="sn-tools"><button class="sn-button sn-primary" onclick="SleepTypeDynamics.refresh()">重新计算动态排程</button><span id="sd-progress" class="sd-info">准备计算…</span></div><div id="sd-risk-comparison"></div><div id="sd-output"></div>`;
+        if(editId!==null)document.getElementById('sd-plan-editor')?.closest('details')?.setAttribute('open','');
+        const fingerprint=JSON.stringify([viewRecords,config]);
+        if(cache?.key===fingerprint){renderResult(cache.result);return;}
+        void run(config,fingerprint);
+    }
+    function progress(text){const node=document.getElementById('sd-progress');if(node)node.textContent=text;}
+    async function run(config,fingerprint){
+        cancel();const token=serial;
+        const start=Date.now();progress('后台搜索中，真实记录不会被修改…');
+        try{
+            const result=await compute(viewRecords,config,p=>{if(token===serial)progress(`已推演 ${p.step}/${p.total}步 · 保留${p.beamWidth}条候选路径`);});
+            if(token!==serial)return;
+            result.config=config;result.elapsed=Date.now()-start;cache={key:fingerprint,result};renderResult(result);
+        }catch(error){if(token!==serial || error.message==='cancelled')return;progress('暂不能生成排程');const out=document.getElementById('sd-output');if(out)out.innerHTML=`<p class="sd-warning">${esc(error.message)}</p>`;}
+    }
+    function renderResult(result){
+        const out=document.getElementById('sd-output');if(!out)return;
+        const config=result.config,main=result.path.filter(row=>!row.slot.buffer),s=result.summary,next=main[0],target=labels[config.targetType],unsafe=main.filter(row=>row.slot.session===config.prioritySleep && !row.prediction.safe),nextOtherFirst=main.find((row,i)=>i>0 && row.slot.session===config.prioritySleep);
+        const riskText=s.bufferSafe<s.bufferTotal?`额外7天缓冲期仍有${s.bufferTotal-s.bufferSafe}次第1觉未达余量，末端风险尚未消除。`:'额外7天缓冲期的第1觉均达到模型余量；更长期仍须滚动重算。';
+        progress(`完成 · ${(result.elapsed/1000).toFixed(1)}秒 · ${result.expanded.toLocaleString()}个候选展开`);
+        out.innerHTML=`<p class="sd-warning">模型只比较与此前窗口的比例差值，无法精确预测“无特征”或其他特殊改判。以下全为理论预测，不是真实成功率。${unsafe.length?`规划期${unsafe.length}次第1觉未达安全余量；固定方案与当前历史下，搜索未找到全部达标的排程，未擅自放宽约束。`:'搜索保留路径中，第1觉均达到所设模型余量。'} ${riskText}</p>
+        ${next?`<div class="sd-card"><h4>下一觉：${esc(next.name)} <span class="sd-info">${esc(next.slot.date)} · 第${next.slot.session}觉</span></h4><div class="sd-values"><span>浅／安／深：${next.percentages.map(n=>num(n)).join(' / ')}%</span><span>理论判定：${labels[next.prediction.type]}</span><span class="${next.prediction.safe?'sd-ok':'sd-bad'}">${next.prediction.safe?'满足所设余量':'未满足所设余量'}</span></div><p class="sd-info">${target}相对历史增幅 ${signed(next.prediction.increase)} 个百分点；比第二名领先 ${signed(next.prediction.lead)} 个百分点。考虑方案及历史波动后的下界：增幅 ${signed(next.prediction.worstIncrease)}、领先 ${signed(next.prediction.worstLead)}。</p><p class="sd-info">${next.slot.session===config.prioritySleep?'此觉严格使用指定的优先觉固定方案，不会为了第2觉收益换掉它。':'不是只看这一觉：比较后续窗口退出、后续第1觉安全次数及末端缓冲期后选择。'}${nextOtherFirst?`接下来第1觉：理论${labels[nextOtherFirst.prediction.type]}，最不利领先${signed(nextOtherFirst.prediction.worstLead)}个百分点。`:''}</p><button class="sn-button" data-date="${esc(next.slot.date)}" data-session="${next.slot.session}" onclick="SleepTypeDynamics.record(this.dataset.date,Number(this.dataset.session))">去录入这觉的真实结果</button></div>`:''}
+        <div class="sd-metrics"><div>理论${target}次数<strong>${s.targets}/${main.length}</strong>${main.length?num(s.targets/main.length*100):'—'}%（理论占比）</div><div>第1觉余量达标<strong>${s.firstSafe}/${s.firstTotal}</strong>理论目标判定 ${s.firstTargets}次</div><div>理论非目标／未定<strong>${main.length-s.targets}次</strong>不表示游戏一定非目标</div><div>第1觉最低安全指标<strong>${signed(s.minSafety)}</strong>增幅与领先两者中的较小值</div></div>
+        <details><summary>当前候选的长期比较</summary><div style="overflow:auto"><table class="sd-table"><thead><tr><th>当前选择</th><th>第1觉余量达标</th><th>总目标次数</th><th>缓冲期第1觉达标</th></tr></thead><tbody>${result.alternatives.map(a=>`<tr><td>${esc(cfg.plans.find(p=>p.id===a.planId)?.name || a.planId)}</td><td>${a.summary.firstSafe}/${a.summary.firstTotal}</td><td>${a.summary.targets}</td><td>${a.summary.bufferSafe}/${a.summary.bufferTotal}</td></tr>`).join('')}</tbody></table></div></details>
+        <details open><summary>未来${config.days}天排程（${main.length}觉）</summary><div style="overflow:auto"><table class="sd-table"><thead><tr><th>游戏日／觉次</th><th>方案／理论结果</th><th>目标增幅／领先</th><th>解释与操作</th></tr></thead><tbody>${main.map(row=>`<tr><td>${esc(row.slot.date)}<small>第${row.slot.session}觉</small></td><td>${esc(row.name)}<small>理论${labels[row.prediction.type]} · ${row.prediction.safe?'余量达标':'有风险'}</small></td><td>${signed(row.prediction.increase)} / ${signed(row.prediction.lead)}<small>最不利 ${signed(row.prediction.worstIncrease)} / ${signed(row.prediction.worstLead)}</small></td><td><details><summary>${row.slot.session===config.prioritySleep?'策略固定方案':'按完整后续窗口比较'}</summary><p class="sd-info">睡前基准（浅／安／深）：${row.baseline?.map(n=>num(n)).join(' / ')}%；本觉差值：${row.prediction.delta.map(signed).join(' / ')}个百分点。先预测，再加入窗口；所有后续基准均按此路径滚动。</p></details>${row.slot.session===1&&config.secondSleep?`<button class="sd-link" data-date="${esc(row.slot.date)}" onclick="SleepTypeDynamics.skip(this.dataset.date)">${config.skipSecondDates.includes(row.slot.date)?'恢复':'跳过'}当日第2觉</button>`:''}</td></tr>`).join('')}</tbody></table></div></details>
+        <details><summary>额外7天缓冲期（只用于防止末端透支）</summary><p class="sd-info">在第1觉达标次数相同的路径之间，先保留缓冲期第1觉更安全的状态，再比较规划期总目标次数。缓冲期不计入上方次数。它是有限时域保护，不是无限期保证。</p><div class="sd-info">${result.path.filter(row=>row.slot.buffer).map(row=>`${esc(row.slot.date)} 第${row.slot.session}觉：${esc(row.name)} → 理论${labels[row.prediction.type]}（最不利领先${signed(row.prediction.worstLead)}）`).join('<br>')}</div></details>
+        <details><summary>与固定循环对照（只对第2觉安排循环）</summary><div style="overflow:auto"><table class="sd-table"><thead><tr><th>策略</th><th>第1觉余量达标</th><th>理论目标次数</th><th>缓冲期第1觉达标</th></tr></thead><tbody><tr><td>当前动态搜索</td><td>${s.firstSafe}/${s.firstTotal}</td><td>${s.targets}</td><td>${s.bufferSafe}/${s.bufferTotal}</td></tr>${result.comparisons.map(c=>`<tr><td>${esc(c.label)}</td><td>${c.summary.firstSafe}/${c.summary.firstTotal}</td><td>${c.summary.targets}</td><td>${c.summary.bufferSafe}/${c.summary.bufferTotal}</td></tr>`).join('')}</tbody></table></div><p class="sd-info">各对照共用真实历史、觉次、跳过日、安全参数。固定循环只作为对照，动态搜索不使用固定周期。</p></details>
+        <details><summary>历史模型验证（${result.backtest.total}条有完整前30觉依据）</summary><div id="sd-backtest">${backtestHtml(result.backtest)}</div></details>
+        <details><summary>算法与局限</summary><p class="sd-info">采用滚动时域（MPC）＋保留${result.beamWidth}条路径的Beam Search。保留完整有序窗口，先比较第1觉余量达标次数，再保护末端缓冲期，之后比较总目标次数与安全程度。启发式剪枝不保证全局最优，也可能不如某个固定对照；可结合对照检查。模拟不保存为真实记录；录入、修改或删除真实记录后重新规划。当前仅展示浅浅策略，判定器与搜索核心不含浅浅专用逻辑；新增目标只需添加策略配置，方案可直接在上方管理。读取到实际分钟数时优先按分钟求比例，否则沿用现有百分比，不对模拟中间值反复四舍五入。漏录的真实睡眠无法自动推断。</p></details>`;
+    }
+    function backtestHtml(test){
+        const rows=mismatchOnly?test.rows.filter(row=>!row.match):test.rows;
+        return `<p class="sd-info">历史观测匹配 ${test.matches}/${test.total}；${test.total<30?'可验证样本偏少，不能据此宣称未来成功率。':'仅描述已录入样本，不代表未来成功率。'} 开头不足30觉、缺比例、缺实际判定的条目不参与。无特征按真实结果统计，不伪装成模型能精确预测。</p><label class="sd-info"><input type="checkbox" ${mismatchOnly?'checked':''} onchange="SleepTypeDynamics.filterMismatch(this.checked)"> 只看预测不一致</label><div style="overflow:auto;max-height:400px"><table class="sd-table"><thead><tr><th>记录</th><th>本觉浅／安／深%</th><th>此前30觉基准%</th><th>理论／实际</th><th>目标增幅／领先</th></tr></thead><tbody>${rows.slice(-300).reverse().map(row=>`<tr><td>${esc(row.date)} · ${row.session}</td><td>${row.p.map(n=>num(n)).join(' / ')}</td><td>${row.baseline.map(n=>num(n)).join(' / ')}</td><td class="${row.match?'sd-ok':'sd-bad'}">${labels[row.prediction.type]} / ${labels[row.actual]||'未填写'}</td><td>${signed(row.prediction.increase)} / ${signed(row.prediction.lead)}</td></tr>`).join('')||'<tr><td colspan="5">暂无符合条件的记录</td></tr>'}</tbody></table></div><p class="sd-info">表格最多展示最近300条符合筛选的记录；下列分桶统计使用全部可验证样本。</p><div style="overflow:auto"><table class="sd-table"><thead><tr><th>目标相对历史增幅（百分点）</th><th>样本数</th><th>实际为目标</th><th>实际无特征</th></tr></thead><tbody>${test.bins.map(b=>`<tr><td>${b.lo===-Infinity?'小于0':b.hi===Infinity?'至少10':`${b.lo} 至小于 ${b.hi}`}</td><td>${b.count}</td><td>${b.target}</td><td>${b.balanced}</td></tr>`).join('')}</tbody></table></div>`;
+    }
+    function rerender(){cancel();renderSleepTypePlannerModal();}
+    function setting(name,value){
+        if(['days','minimumIncrease','minimumLead'].includes(name))value=Number(value);
+        if(['secondSleep','autoStart'].includes(name))value=value===true || value==='true';
+        cfg=normalize({...cfg,[name]:value});save();rerender();
+    }
+    function risk(n){cfg.minimumIncrease=n;cfg.minimumLead=n;save();rerender();}
+    function manualStart(){const date=document.getElementById('sd-start-date').value,session=Number(document.getElementById('sd-start-session').value);if(!sleepNotebookValidDate(date)){alert('请选择有效游戏日期');return;}cfg.startDate=date;cfg.nextSession=session;cfg.autoStart=false;save();rerender();}
+    function skip(date){if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return;cfg.skipSecondDates=cfg.skipSecondDates.includes(date)?cfg.skipSecondDates.filter(x=>x!==date):[...cfg.skipSecondDates,date];save();rerender();}
+    function edit(id){editId=id;const node=document.getElementById('sd-plan-editor');if(node){node.innerHTML=id!==null?editorHtml():'';if(id!==null)node.scrollIntoView({block:'nearest',behavior:'smooth'});}}
+    function completePlan(){const values=core.TYPES.map((_,i)=>document.getElementById(`sd-p-${i}`).value);if(values.filter(v=>v!=='').length===2){const empty=values.indexOf(''),rest=100-values.reduce((sum,v)=>sum+(v===''?0:Number(v)),0);if(Number.isFinite(rest)&&rest>=0&&rest<=100)document.getElementById(`sd-p-${empty}`).value=Number(rest.toFixed(3));}}
+    function savePlan(){
+        completePlan();const old=cfg.plans.find(p=>p.id===editId),read=id=>document.getElementById(id).value;
+        const plan={id:old?.id || `sleep-plan-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,name:read('sd-name').trim(),enabled:old?.enabled!==false,note:read('sd-note'),percentages:Object.fromEntries(core.TYPES.map((key,i)=>[key,read(`sd-p-${i}`)]))};
+        if(!plan.name){alert('请填写方案名称');return;}
+        if(document.getElementById('sd-range-enabled').checked){const low=core.TYPES.map((_,i)=>read(`sd-min-${i}`)),high=core.TYPES.map((_,i)=>read(`sd-max-${i}`));if([...low,...high].some(v=>v==='')){alert('波动范围启用后请填写所有下限与上限');return;}plan.range={min:low.map(Number),max:high.map(Number)};}
+        try{const p=core.profile(plan);plan.percentages=Object.fromEntries(core.TYPES.map((key,i)=>[key,p.p[i]]));}catch(error){alert(error.message);return;}
+        if(!old&&cfg.plans.length>=40){alert('当前最多保存40种方案，请先停用或删除不需要的方案');return;}
+        cfg.plans=old?cfg.plans.map(p=>p.id===old.id?plan:p):[...cfg.plans,plan];editId=null;save();rerender();
+    }
+    function toggle(id){cfg.plans=cfg.plans.map(p=>p.id===id?{...p,enabled:p.enabled===false}:p);save();rerender();}
+    function remove(id){if(!confirm('删除此睡眠方案？真实睡眠记录不会删除。若它是第1觉固定方案，需要重新指定。'))return;cfg.plans=cfg.plans.filter(p=>p.id!==id);save();rerender();}
+    function record(date,session){sleepNotebookLoadDraft();sleepNotebookDraft.mode='single';sleepNotebookDraft.single=sleepNotebookRow({date,session:session===2?'二觉':'一觉'});sleepNotebookSaveDraft();renderSleepTypePlannerModal();document.getElementById('sleep-notebook-rows')?.scrollIntoView({block:'center',behavior:'smooth'});showToast('请填写实际比例与实际判定；不会把模拟比例当成真实记录');}
+    async function compareRisks(){
+        cancel();const token=serial,zone=document.getElementById('sd-risk-comparison');if(!zone)return;zone.innerHTML='<p class="sd-info">正在分别计算3、6、10个百分点余量…</p>';
+        try{const rows=[];for(const n of [3,6,10]){const config={...effective(viewRecords),minimumIncrease:n,minimumLead:n};const result=await compute(viewRecords,config,p=>progress(`余量${n}：${p.step}/${p.total}步`));if(token!==serial)return;rows.push({n,result});}
+            zone.innerHTML=`<div style="overflow:auto"><table class="sd-table"><thead><tr><th>两个余量均设置为</th><th>第1觉达标</th><th>理论目标次数</th><th>缓冲期第1觉达标</th></tr></thead><tbody>${rows.map(({n,result})=>`<tr><td>${n}个百分点</td><td>${result.summary.firstSafe}/${result.summary.firstTotal}</td><td>${result.summary.targets}</td><td>${result.summary.bufferSafe}/${result.summary.bufferTotal}</td></tr>`).join('')}</tbody></table></div>`;progress('余量对照完成，未改变当前配置');
+        }catch(error){if(token===serial)zone.innerHTML=`<p class="sd-warning">${esc(error.message)}</p>`;}
+    }
+    function filterMismatch(value){mismatchOnly=value;const node=document.getElementById('sd-backtest');if(node&&cache)node.innerHTML=backtestHtml(cache.result.backtest);}
+    function refresh(){cache=null;mount();}
+    return {mount,setting,risk,manualStart,skip,edit,completePlan,savePlan,toggle,remove,record,compareRisks,filterMismatch,refresh,cancel};
+})();
+
 // 睡眠类型记录本：独立界面，沿用原有睡眠比例记录与账号同步。
 let sleepNotebookDraft = null;
 let sleepNotebookDraftOwner = '';
@@ -18386,7 +18733,7 @@ function renderSleepTypePlannerModal() {
         #sleep-type-planner-modal .sn-empty{padding:25px 0;text-align:center;color:#94a3b8;font-size:13px}#sleep-type-planner-modal .sn-history{width:100%;border-collapse:collapse;font-size:13px}#sleep-type-planner-modal .sn-history td,#sleep-type-planner-modal .sn-history th{padding:10px 6px;text-align:left;border-bottom:1px solid #f1f5f9;white-space:nowrap}#sleep-type-planner-modal .sn-history th{font-size:12px;color:#64748b}
         @media(max-width:700px){#sleep-type-planner-modal .sn-body{padding:12px}#sleep-type-planner-modal .sn-stats{gap:6px}#sleep-type-planner-modal .sn-stat{padding:10px}#sleep-type-planner-modal .sn-stat strong{font-size:23px}#sleep-type-planner-modal .sn-row{grid-template-columns:repeat(3,minmax(0,1fr)) 24px;gap:8px}#sleep-type-planner-modal .sn-date{grid-column:1/4;grid-row:1}#sleep-type-planner-modal .sn-remove{grid-column:4;grid-row:1}#sleep-type-planner-modal .sn-percent{grid-row:2}#sleep-type-planner-modal .sn-result{grid-column:1/4}#sleep-type-planner-modal .sn-row input,#sleep-type-planner-modal .sn-row select,#sleep-type-planner-modal .sn-tools input,#sleep-type-planner-modal .sn-tools select,#sleep-type-planner-modal textarea{font-size:16px}#sleep-type-planner-modal .sn-panel{padding:12px}}
     </style><div class="sn-shell">
-        <div class="sn-top"><div><h3>睡眠类型记录</h3><p style="font-size:12px;opacity:.85;margin-top:4px">记录比例，查看最近30觉的个人平均</p></div><button type="button" aria-label="关闭睡眠类型记录" style="font-size:25px;padding:5px 10px" onclick="document.getElementById('sleep-type-planner-modal')?.remove()">×</button></div>
+        <div class="sn-top"><div><h3>睡眠类型规划</h3><p style="font-size:12px;opacity:.85;margin-top:4px">真实记录 · 可配置方案 · 动态优化</p></div><button type="button" aria-label="关闭睡眠类型规划" style="font-size:25px;padding:5px 10px" onclick="SleepTypeDynamics.cancel();document.getElementById('sleep-type-planner-modal')?.remove()">×</button></div>
         <div class="sn-body">
             <h4>${stats.missing ? '最近30条中的已知比例均值' : '最近30觉平均比例'}</h4>
             <p class="sn-muted">已录入${stats.window.length}/30觉 · ${stats.complete.length}觉有完整比例 · 一觉、二觉分别计次，每觉等权</p>
@@ -18394,8 +18741,10 @@ function renderSleepTypePlannerModal() {
             <p class="sn-muted">按睡眠日期与觉次取最近30条，不按录入顺序；不足30条按现有完整记录计算。最终判定不影响均值。漏录时，此处不等于游戏真实的最近30觉基准。</p>
             ${stats.missing ? `<p style="color:#b45309;font-size:12px;margin-top:6px">最近${stats.window.length}条中有${stats.missing}条缺少比例，目前仅按${stats.complete.length}条完整数据计算，不会用更早记录凑满30条。请在下方补齐。</p>` : ''}
             ${stats.window.some(row => row.measurementMode === 'fake') ? '<p class="sn-muted">含旧版标记为“假睡”的记录：按原来保存的比例纳入，不依据最终判定推算比例；可在历史记录中核对修改。</p>' : ''}
+            <section id="sleep-type-dynamic-panel" class="sn-panel"></section>
             <section class="sn-panel">
-                <div class="sn-tools" style="margin-top:0"><button type="button" class="sn-button ${batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('batch')">批量表格录入</button><button type="button" class="sn-button ${!batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('single')">单次快速录入</button></div>
+                <h4>录入真实睡眠记录</h4>
+                <div class="sn-tools"><button type="button" class="sn-button ${batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('batch')">批量表格录入</button><button type="button" class="sn-button ${!batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('single')">单次快速录入</button></div>
                 ${batch ? `<div class="sn-tools"><label class="sn-muted">起始日期 <input id="sleep-notebook-start" type="date" value="${escapeHtmlAttr(sleepNotebookDraft.start)}" onchange="sleepNotebookDraft.start=this.value;sleepNotebookSaveDraft()"></label><select id="sleep-notebook-sessions" aria-label="自动排日期方式" onchange="sleepNotebookDraft.sessions=this.value;sleepNotebookSaveDraft()"><option value="one" ${sleepNotebookDraft.sessions === 'one' ? 'selected' : ''}>每天一觉</option><option value="two" ${sleepNotebookDraft.sessions === 'two' ? 'selected' : ''}>每天两觉</option></select>${[1,7,14,30].map(count => `<button type="button" class="sn-button" onclick="sleepNotebookGenerate(${count})">+${count}行</button>`).join('')}<button type="button" class="sn-button" onclick="sleepNotebookClearDraft()">清空草稿</button></div><p class="sn-muted">首批从起始日期排；继续加行会接着最后一行排。可跳过空白行，未来日期有内容时不能保存。</p>` : ''}
                 <p class="sn-muted">填两项后，离开输入框才补第三项；已有数值不覆盖。Tab连续填写，回车跳至下一比例格。</p>
                 <div id="sleep-notebook-rows"></div>
@@ -18408,6 +18757,7 @@ function renderSleepTypePlannerModal() {
             </section>
         </div></div>`;
     sleepNotebookRenderRows();
+    if (typeof SleepTypeDynamics !== 'undefined') SleepTypeDynamics.mount();
 }
 
 function renderSleepNotebookEditFields(prefix, record) {
