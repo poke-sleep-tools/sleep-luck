@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.01.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.01.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -5966,7 +5966,7 @@ function getSubskillDisplayName(key) {
 
 function getGraduationAuditSpeciesKey(name) {
     const raw = String(name || '').trim();
-    return pokemonDictionary?.[raw]?.standard || raw;
+    return pokemonDictionary?.[raw]?.standard || canonicalPaldeanWooperName(raw);
 }
 
 function getBoxGraduationDexAudit(p) {
@@ -7207,7 +7207,83 @@ function findCompatiblePokemonBoxIndex(name) {
     return playerBox.findIndex(row => canonicalPaldeanWooperName(row.name) === standard);
 }
 
+// 只整合同一图鉴身份7054。历史流水及出货个体的原始名字和ID不改写。
+function wooperBoxCounterSnapshot(row) {
+    const out={};
+    for(const key of ['count','tiedCount','gradCount','bigGradCount','goldGradCount','shinyCount','shinyUsefulCount'])out[key]=Math.max(0,Number(row[key])||0);
+    for(const track of ['AAA','ABB','OTHER'])for(const result of ['tied','grad','bigGrad','goldGrad'])out[`${result}Count_${track}`]=Math.max(0,Number(row[`${result}Count_${track}`])||0);
+    for(const result of ['tied','grad','bigGrad','goldGrad']){
+        out[`exclude:${result}`]=Math.max(0,Number(row.luckExcludeCounts?.[result])||0);
+        for(const track of ['AAA','ABB','OTHER'])out[`exclude:${track}:${result}`]=Math.max(0,Number(row.luckExcludeTrackCounts?.[track]?.[result])||0);
+    }
+    return out;
+}
+function wooperBoxRepairMetadata(rows) {
+    const sources={},covered={};
+    for(const row of rows){
+        const meta=row?._wooperIdentity7054;
+        for(const [name,snapshots] of Object.entries(meta?.sources||{}))if(!Object.hasOwn(sources,name))sources[name]=JSON.parse(JSON.stringify(snapshots));
+        for(const [name,counts] of Object.entries(meta?.covered||{})){
+            covered[name] ||= {};
+            for(const [key,value]of Object.entries(counts))covered[name][key]=Math.max(Number(covered[name][key])||0,Number(value)||0);
+        }
+    }
+    return {version:1,identity:'7054',sources,covered};
+}
+function consolidateWooperBoxIdentity(box=[]) {
+    if(!Array.isArray(box))return [];
+    const group=box.filter(row=>row?.name&&canonicalPaldeanWooperName(row.name)==='乌波(帕底亚的样子)');
+    if(!group.length)return box;
+    // 兼容旧数据中的空格／括号变体，所有按字典取类型或标准名的旧入口也能识别。
+    for(const row of group)for(const alias of [row.name,...Object.keys(row._wooperIdentity7054?.sources||{})]){
+        if(!pokemonDictionary[alias])pokemonDictionary[alias]=Object.assign({},pokemonDictionary['乌波(帕底亚的样子)'],{standard:'乌波(帕底亚的样子)'});
+    }
+    // 无旧别名且没有历史合并标记时保持原条目，不给普通记录添加恢复负担。
+    if(group.length===1&&group[0].name==='乌波(帕底亚的样子)'&&!group[0]._wooperIdentity7054)return box;
+    const prepared=group.map(source=>{
+        const row=JSON.parse(JSON.stringify(source));row.name='乌波(帕底亚的样子)';
+        for(const result of ['tied','grad','bigGrad','goldGrad']){
+            const total=Math.max(0,Number(row[`${result}Count`])||0);
+            const tracked=['AAA','ABB','OTHER'].reduce((sum,track)=>sum+Math.max(0,Number(row[`${result}Count_${track}`])||0),0);
+            if(total>tracked)row[`${result}Count_AAA`]=(Number(row[`${result}Count_AAA`])||0)+total-tracked;
+        }
+        recalcFoodTrackTotals(row);
+        row.shinyUsefulCount=Math.max(0,Number(row.shinyUsefulCount)||0);
+        row.shinyCount=Math.max(row.shinyUsefulCount,Number(row.shinyCount)||0);
+        ensureLuckExcludeCounts(row);return row;
+    });
+    const preferred=prepared.find((_,i)=>group[i].name==='乌波(帕底亚的样子)')||prepared[0];
+    const merged=JSON.parse(JSON.stringify(preferred)),meta=wooperBoxRepairMetadata(prepared),totals={},legacy=new Map();
+    // 已整合的两份快照是同一汇总，不能相加。
+    prepared.forEach((row,i)=>{
+        const counts=wooperBoxCounterSnapshot(row);
+        if(row._wooperIdentity7054){for(const [key,value]of Object.entries(counts))totals[key]=Math.max(totals[key]||0,value);return;}
+        const name=String(group[i].name);
+        if(!legacy.has(name))legacy.set(name,{counts:{},originals:[]});
+        const bucket=legacy.get(name);bucket.originals.push(JSON.parse(JSON.stringify(group[i])));
+        for(const [key,value]of Object.entries(counts))bucket.counts[key]=(bucket.counts[key]||0)+value;
+    });
+    for(const [name,bucket]of legacy){
+        // 已吸收过的旧条目再次从旧设备返回，只接纳超出覆盖量的部分。
+        const covered=meta.covered[name]||{};
+        for(const [key,value]of Object.entries(bucket.counts))totals[key]=(totals[key]||0)+Math.max(0,value-(Number(covered[key])||0));
+        if(!Object.hasOwn(meta.sources,name))meta.sources[name]=bucket.originals;
+        meta.covered[name] ||= {};
+        for(const [key,value]of Object.entries(bucket.counts))meta.covered[name][key]=Math.max(Number(meta.covered[name][key])||0,value);
+    }
+    for(const [key,value]of Object.entries(totals)){
+        const parts=key.split(':');
+        if(parts[0]!=='exclude')merged[key]=value;
+        else if(parts.length===2){merged.luckExcludeCounts||={};merged.luckExcludeCounts[parts[1]]=value;}
+        else{merged.luckExcludeTrackCounts||={};merged.luckExcludeTrackCounts[parts[1]]||={};merged.luckExcludeTrackCounts[parts[1]][parts[2]]=value;}
+    }
+    merged.name='乌波(帕底亚的样子)';merged._wooperIdentity7054=meta;
+    let inserted=false;
+    return box.flatMap(row=>{if(!group.includes(row))return [row];if(inserted)return [];inserted=true;return [merged];});
+}
+
 function normalizePlayerBox() {
+    playerBox = consolidateWooperBoxIdentity(playerBox);
     playerBox.forEach(p => { 
         // 旧地区形态曾未被识别成食材型：先保留总数到轨道，再整理排除计分，避免先夹成0。
         if (canonicalPaldeanWooperName(p.name) === '乌波(帕底亚的样子)') {
@@ -9293,6 +9369,7 @@ function getEvolutionCatchWeight(name) {
         }
 
         function updateBoxUI(saveToCloud = true) {
+            normalizePlayerBox();
             localStorage.setItem(getLocalStorageKey(), JSON.stringify(playerBox));
 
             if (saveToCloud) {
@@ -9936,6 +10013,7 @@ function getEvolutionCatchWeight(name) {
 
 async function saveBoxToCloudNow() {
     if (!currentCloudUser) return;
+    normalizePlayerBox();
 
     const { error } = await supabaseClient
         .from('player_boxes')
@@ -10436,7 +10514,7 @@ const FOOD_TRACK_META = {
 };
 
 function getPokemonTypeByName(name) {
-    const dict = pokemonDictionary[name] || pokemonDictionary[pokemonDictionary[name]?.standard];
+    const dict = pokemonDictionary[name] || pokemonDictionary[canonicalPaldeanWooperName(name)];
     return dict ? dict.type : null;
 }
 
@@ -11031,7 +11109,7 @@ function getActiveFoodTrackProbabilityRows(p) {
         const EEVEE_FAMILY_NAMES = [EEVEE_BASE_NAME, ESPEON_NAME, ...EEVEE_NORMAL_SKILL_EVOLUTIONS, ...EEVEE_OTHER_EVOLUTIONS];
 
 function normalizeStandardName(name) {
-    return pokemonDictionary[name]?.standard || name;
+    return pokemonDictionary[name]?.standard || canonicalPaldeanWooperName(name);
 }
 
 function isSpecialStandardDowngradeName(name) {
@@ -11167,7 +11245,7 @@ function isTiedOutcomeIncludedInLuckDistribution(name) {
 }
 
 function getLuckScoringTypeForPokemon(name) {
-    const dict = pokemonDictionary[name];
+    const dict = pokemonDictionary[name] || pokemonDictionary[canonicalPaldeanWooperName(name)];
     if (!dict) return null;
     if (isLatiosCustomScoringName(name)) return 'latios';
     if (isLatiasCustomScoringName(name)) return 'latias';
@@ -25758,6 +25836,9 @@ let captureBatchSafetyTimerV42 = null;
 let captureBundleCloudQueueV42 = Promise.resolve();
 
 function mergePlayerBoxForCaptureBundleV42(remoteBox = [], localBox = [], remoteHistory = [], localHistory = [], options = {}) {
+    // 先各自整合身份，再沿用跨设备取最大值／流水增量，不能把两端汇总再次相加。
+    remoteBox = consolidateWooperBoxIdentity(remoteBox);
+    localBox = consolidateWooperBoxIdentity(localBox);
     const result = new Map();
     (Array.isArray(remoteBox) ? remoteBox : []).forEach(item => {
         if (!item?.name) return;
@@ -25771,7 +25852,7 @@ function mergePlayerBoxForCaptureBundleV42(remoteBox = [], localBox = [], remote
     ) : [];
     const localOnlyByName = new Map();
     localOnlyCaptures.forEach(log => {
-        const name = pokemonDictionary[log.name]?.standard || String(log.name || '');
+        const name = canonicalPaldeanWooperName(pokemonDictionary[log.name]?.standard || String(log.name || ''));
         if (!name) return;
         if (!localOnlyByName.has(name)) localOnlyByName.set(name, []);
         localOnlyByName.get(name).push(log);
@@ -25796,6 +25877,17 @@ function mergePlayerBoxForCaptureBundleV42(remoteBox = [], localBox = [], remote
 
         // 若另一端云端快照仍是旧基数，把“仅存在于本机历史”的本次捕捉增量叠加到云端基数。
         // 这样手机、电脑从同一个 5 同时各录 1 只时，最终能够得到 7，而不是后写者覆盖成 6。
+        if (canonicalPaldeanWooperName(name) === '乌波(帕底亚的样子)' && (remoteItem._wooperIdentity7054 || localItem._wooperIdentity7054)) {
+            merged._wooperIdentity7054 = wooperBoxRepairMetadata([remoteItem,localItem]);
+            for(const result of ['tied','grad','bigGrad','goldGrad']){
+                merged.luckExcludeCounts ||= {};
+                merged.luckExcludeCounts[result]=Math.max(Number(remoteItem.luckExcludeCounts?.[result])||0,Number(localItem.luckExcludeCounts?.[result])||0);
+                for(const track of ['AAA','ABB','OTHER']){
+                    merged.luckExcludeTrackCounts ||= {};merged.luckExcludeTrackCounts[track] ||= {};
+                    merged.luckExcludeTrackCounts[track][result]=Math.max(Number(remoteItem.luckExcludeTrackCounts?.[track]?.[result])||0,Number(localItem.luckExcludeTrackCounts?.[track]?.[result])||0);
+                }
+            }
+        }
         const projected = JSON.parse(JSON.stringify(remoteItem));
         (localOnlyByName.get(name) || []).forEach(log => {
             projected.count = (Number(projected.count) || 0) + 1;
