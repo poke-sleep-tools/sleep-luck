@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.10.29.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.01.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -7192,8 +7192,31 @@ function hasRecordedTiedCount(p) {
     return false;
 }
 
+function canonicalPaldeanWooperName(name) {
+    if (name == null) return name;
+    const entry = getPokemonIngredientDexEntry(name);
+    return entry?.id === '7054' ? '乌波(帕底亚的样子)' : name;
+}
+
+function findCompatiblePokemonBoxIndex(name) {
+    // 优先保持旧记录所属的原条目；只有原名字不存在时才兼容地区形态别名。
+    const exact = playerBox.findIndex(row => row.name === name);
+    if (exact >= 0) return exact;
+    const standard = canonicalPaldeanWooperName(name);
+    if (standard !== '乌波(帕底亚的样子)') return -1;
+    return playerBox.findIndex(row => canonicalPaldeanWooperName(row.name) === standard);
+}
+
 function normalizePlayerBox() {
     playerBox.forEach(p => { 
+        // 旧地区形态曾未被识别成食材型：先保留总数到轨道，再整理排除计分，避免先夹成0。
+        if (canonicalPaldeanWooperName(p.name) === '乌波(帕底亚的样子)') {
+            for (const result of ['tied','grad','bigGrad','goldGrad']) {
+                const total = Math.max(0,Number(p[`${result}Count`])||0);
+                const tracked = ['AAA','ABB','OTHER'].reduce((sum,track)=>sum+Math.max(0,Number(p[`${result}Count_${track}`])||0),0);
+                if (total > tracked) p[`${result}Count_AAA`] = (Number(p[`${result}Count_AAA`])||0)+total-tracked;
+            }
+        }
         if (!p.lockMode) p.lockMode = getRecommendedLockModeForName(p.name); 
         if (!p.evalMode) p.evalMode = 'grad'; 
         ensureFoodTrackCounts(p);
@@ -7477,6 +7500,10 @@ function normalizePlayerBox() {
             if (!pokemonDictionary[standard]) pokemonDictionary[standard] = base;
             pokemonDictionary[standard].pokedexId = entry.pokedexId;
             pokemonDictionary[standard].ingredientDataId = entry.id;
+            // 资料库的简体全角括号名也必须指向评分字典的既有标准名。
+            if (entry.name && !pokemonDictionary[entry.name]) {
+                pokemonDictionary[entry.name] = Object.assign({}, pokemonDictionary[standard], { standard });
+            }
             if (entry.traditionalName && !pokemonDictionary[entry.traditionalName]) {
                 pokemonDictionary[entry.traditionalName] = Object.assign({}, pokemonDictionary[standard], { standard });
             }
@@ -9757,7 +9784,7 @@ function getEvolutionCatchWeight(name) {
         addedGoldGrad = isLatiCustomScoringName(standardName) ? 0 : (parseInt(document.getElementById('num-gold-grad')?.value) || 0);
     }
 
-    let existingIndex = playerBox.findIndex(item => item.name === standardName);
+    let existingIndex = findCompatiblePokemonBoxIndex(standardName);
 
     if (existingIndex > -1) {
         let p = playerBox[existingIndex];
@@ -10624,7 +10651,7 @@ function getGraduationDexLuckExcludedTrackCountsByName(name) {
     graduationDex.forEach(item => {
         if (!item || !item.excludeFromLuck) return;
         const cap = getGraduationCapture(item);
-        if (!cap || cap.name !== name || !isGraduationResult(cap.result)) return;
+        if (!cap || canonicalPaldeanWooperName(cap.name) !== canonicalPaldeanWooperName(name) || !isGraduationResult(cap.result)) return;
         const track = normalizeFoodTrack(cap.track) || getFoodTrackForNameAndCombo(cap.name, cap.foodCombo) || 'OTHER';
         if (!out[track]) out[track] = getEmptyLuckResultCounts();
         if (out[track][cap.result] !== undefined) out[track][cap.result] += 1;
@@ -10645,7 +10672,7 @@ function getGraduationDexLuckExcludedCountsByName(name) {
     graduationDex.forEach(item => {
         if (!item || !item.excludeFromLuck) return;
         const cap = getGraduationCapture(item);
-        if (!cap || cap.name !== name || !isGraduationResult(cap.result)) return;
+        if (!cap || canonicalPaldeanWooperName(cap.name) !== canonicalPaldeanWooperName(name) || !isGraduationResult(cap.result)) return;
         if (out[cap.result] !== undefined) out[cap.result] += 1;
     });
     return out;
@@ -10656,7 +10683,7 @@ function getGraduationDexLuckExcludedShinyUsefulByName(name) {
     return graduationDex.filter(item => {
         if (!item || !item.excludeFromLuck) return false;
         const cap = getGraduationCapture(item);
-        return cap && cap.name === name && isGraduationResult(cap.result) && !!cap.isShiny;
+        return cap && cacanonicalPaldeanWooperName(p.name) === canonicalPaldeanWooperName(name) && isGraduationResult(cap.result) && !!cap.isShiny;
     }).length;
 }
 
@@ -14358,7 +14385,8 @@ async function handlePokemonScreenshotFile(input) {
 }
 
 function applyPokemonScreenshotRecognition() {
-    const name = document.getElementById('pokemon-screenshot-name')?.value || '';
+    const recognizedName = document.getElementById('pokemon-screenshot-name')?.value || '';
+    const name = pokemonDictionary[recognizedName]?.standard || recognizedName;
     if (!name) { showToast('尚未识别出宝可梦名字'); return; }
     const nameEl = document.getElementById('checkin-name');
     if (!nameEl) return;
@@ -14520,7 +14548,7 @@ function submitDailyCheckInCore() {
     let s3 = document.getElementById('checkin-slot3') ? document.getElementById('checkin-slot3').value : 'B';
     let foodCombo = s1 + s2 + s3;
 
-    let idx = playerBox.findIndex(item => item.name === standardName);
+    let idx = findCompatiblePokemonBoxIndex(standardName);
     let beforeRate = null;
     if (idx > -1) {
         let metrics = getPokemonLuckMetrics(playerBox[idx]); if(metrics) beforeRate = metrics.rate;
@@ -14690,7 +14718,7 @@ function processDailyCheckInSnapshot(data) {
 
     // 批量录入时先跳过概率战报所需的即时单宠评分，避免第一只就卡住。
     let beforeRate = null;
-    const idxBefore = playerBox.findIndex(item => item.name === standardName);
+    const idxBefore = findCompatiblePokemonBoxIndex(standardName);
     if (!isBatchMode && isLuckCalculationEnabled() && idxBefore > -1) {
         try {
             const metrics = getPokemonLuckMetrics(playerBox[idxBefore]);
@@ -14700,7 +14728,7 @@ function processDailyCheckInSnapshot(data) {
         }
     }
 
-    let idx = playerBox.findIndex(item => item.name === standardName);
+    let idx = findCompatiblePokemonBoxIndex(standardName);
     if (idx > -1) {
         const p = playerBox[idx];
         p.count += 1;
@@ -15728,7 +15756,7 @@ async function revokeDailyCheckIn(checkInId) {
     if (logIdx === -1) return;
     
     let item = todayCheckIns[logIdx];
-    let boxIdx = playerBox.findIndex(p => p.name === item.name);
+    let boxIdx = findCompatiblePokemonBoxIndex(item.name);
     
     if (boxIdx > -1) {
         let p = playerBox[boxIdx];
@@ -15821,7 +15849,7 @@ function submitEditDailyCheckIn(checkInId) {
     let oldItem = todayCheckIns[logIdx];
     
     // 【A. 逆向因果抹除】：把大仓里之前录的老东西彻底退除
-    let oldBoxIdx = playerBox.findIndex(p => p.name === oldItem.name);
+    let oldBoxIdx = findCompatiblePokemonBoxIndex(oldItem.name);
     if (oldBoxIdx > -1) {
         let p = playerBox[oldBoxIdx]; if (p.count > 0) p.count -= 1;
         if (oldItem.isShiny) applyShinyTotalToBoxRecord(p, -1);
@@ -15838,14 +15866,14 @@ function submitEditDailyCheckIn(checkInId) {
     }
     
     // 【B. 运势对撞重算】：获取并融入前的新基准击败率
-    let newBoxIdx = playerBox.findIndex(p => p.name === standardName);
+    let newBoxIdx = findCompatiblePokemonBoxIndex(standardName);
     let beforeRate = null;
     if (newBoxIdx > -1) {
         let metrics = getPokemonLuckMetrics(playerBox[newBoxIdx]); if (metrics) beforeRate = metrics.rate;
     }
     
     // 【C. 正向高维注入】：将精修后的新明细全量重记入大仓
-    newBoxIdx = playerBox.findIndex(p => p.name === standardName);
+    newBoxIdx = findCompatiblePokemonBoxIndex(standardName);
     if (newBoxIdx > -1) {
         let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
         if (isShiny) applyShinyTotalToBoxRecord(p, 1);
@@ -15902,7 +15930,7 @@ function submitEditDailyCheckIn(checkInId) {
 function rollbackCheckInAsset(item) {
     if (!item) return;
 
-    let boxIdx = playerBox.findIndex(p => p.name === item.name);
+    let boxIdx = findCompatiblePokemonBoxIndex(item.name);
     if (boxIdx === -1) return;
 
     let p = playerBox[boxIdx];
@@ -22485,7 +22513,7 @@ function readCurrentCheckInPanelState() {
 
 
 function getBoxRecordForNameOrCreate(name, lockMode = null) {
-    let idx = playerBox.findIndex(p => p.name === name);
+    let idx = findCompatiblePokemonBoxIndex(name);
     if (idx >= 0) return playerBox[idx];
     const record = createEmptyBoxRecord(name, 0, lockMode || getRecommendedLockModeForName(name));
     playerBox.unshift(record);
@@ -24210,7 +24238,7 @@ async function submitEditHistoryLog(logId) {
     }
     
     // 【A. 逆向因果因退扣除】
-    let oldBoxIdx = playerBox.findIndex(p => p.name === oldItem.name);
+    let oldBoxIdx = findCompatiblePokemonBoxIndex(oldItem.name);
     if (oldBoxIdx > -1) {
         let p = playerBox[oldBoxIdx]; if (p.count > 0) p.count -= 1;
         if (oldItem.isShiny) applyShinyTotalToBoxRecord(p, -1);
@@ -24227,7 +24255,7 @@ async function submitEditHistoryLog(logId) {
     }
     
     // 【B. 正向新资产注入】
-    let newBoxIdx = playerBox.findIndex(p => p.name === standardName);
+    let newBoxIdx = findCompatiblePokemonBoxIndex(standardName);
     if (newBoxIdx > -1) {
         let p = playerBox[newBoxIdx]; p.count += 1; p.lockMode = lockMode;
         if (isShiny) applyShinyTotalToBoxRecord(p, 1);
@@ -26069,7 +26097,7 @@ function stableWriteDailyCheckInV22(state, modalContext) {
     stickyCheckInDate = state.date || getTodayLocalDateString();
     stickyCheckInSession = state.session || '一觉';
 
-    let idx = playerBox.findIndex(item => item.name === standardName);
+    let idx = findCompatiblePokemonBoxIndex(standardName);
     if (idx > -1) {
         const p = playerBox[idx];
         p.count = (Number(p.count) || 0) + 1;
