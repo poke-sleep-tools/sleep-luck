@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.02.2</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.02.3</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -31928,18 +31928,31 @@ function createWeeklyRhythmCore() {
         for(const cut of clocks){const v=clocks.map(n=>n<cut?n+DAY:n),s=sd(v);if(s<best.sd)best={sd:s,mean:(v.reduce((a,b)=>a+b,0)/v.length)%DAY};}
         return best;
     }
-    function metrics(path,conservative=false){
+    function circularRange(values){
+        if(values.length<2)return 0;
+        const v=values.map(n=>((n%DAY)+DAY)%DAY).sort((a,b)=>a-b);
+        let gap=0;for(let i=0;i<v.length;i++)gap=Math.max(gap,(i+1<v.length?v[i+1]:v[0]+DAY)-v[i]);
+        return DAY-gap;
+    }
+    function metrics(path,conservative=false,rawSettings={}){
+        const s=settings(rawSettings);
         const totals=path.map(p=>p.total),centerLists=path.map(p=>p.centers);let center=circular(centerLists.map(v=>v[0]));
+        let centerRange=circularRange(centerLists.map(v=>v[0]));
         if(conservative&&centerLists.some(v=>v.length>1)){
             function walk(i,values){if(i===centerLists.length){const m=circular(values);if(m.sd>center.sd)center=m;return;}for(const value of centerLists[i])walk(i+1,[...values,value]);}walk(0,[]);
         }
-        return {count:path.length,durationSD:sd(totals),centerSD:center.sd,centerMean:center.mean,meanTotal:totals.length?totals.reduce((a,b)=>a+b,0)/totals.length:null,
+        if(conservative&&centerLists.some(v=>v.length>1)){
+            function walkRange(i,values){if(i===centerLists.length){centerRange=Math.max(centerRange,circularRange(values));return;}for(const value of centerLists[i])walkRange(i+1,[...values,value]);}walkRange(0,[]);
+        }
+        const durationRange=totals.length?Math.max(...totals)-Math.min(...totals):0;
+        return {count:path.length,durationRange,centerRange,durationSD:sd(totals),centerSD:center.sd,centerMean:center.mean,meanTotal:totals.length?totals.reduce((a,b)=>a+b,0)/totals.length:null,
             tieDays:path.filter(p=>p.centers.length>1).length,total:totals.reduce((a,b)=>a+b,0),late:path.reduce((a,b)=>a+b.late,0),secondLong:path.filter(p=>p.second&&p.second.duration>p.first.duration).length,
-            within:!!path.length&&sd(totals)<=60+1e-7&&center.sd<=30+1e-7};
+            within:!!path.length&&durationRange<=s.maxDurationRange+1e-7&&centerRange<=s.maxCenterRange+1e-7};
     }
-    function settings(raw={}){const s={base:510,gap:10,maxTotal:960,firstEarliest:'08:00',firstLatest:'18:00',secondEarliest:'12:00',secondLatest:'01:00',preferredSecond:'23:30',longRule:'any',...raw};if(s.maxTotal==='')s.maxTotal=MAX*2;return s;}
+    function settings(raw={}){const s={base:510,gap:10,maxTotal:960,maxDurationRange:60,maxCenterRange:60,firstEarliest:'08:00',firstLatest:'18:00',secondEarliest:'12:00',secondLatest:'01:00',preferredSecond:'23:30',longRule:'any',...raw};if(s.maxTotal==='')s.maxTotal=MAX*2;return s;}
     function bound(s,key){return gameClock(s[key]||(/Latest$/.test(key)?'03:59':'04:00'));}
     function validateSettings(s){
+        for(const key of ['maxDurationRange','maxCenterRange'])if(s[key]===''||!Number.isFinite(Number(s[key]))||s[key]<0||s[key]>1440)throw new Error('最大差值上限须为0–1440分钟');
         if(![510,660].includes(Number(s.base)))throw new Error('请选择有效的满分时长口径');
         if(!Number.isFinite(Number(s.gap))||s.gap<0||s.gap>240)throw new Error('两觉间隔须为0–240分钟');
         if(!Number.isFinite(Number(s.maxTotal))||s.maxTotal<180||s.maxTotal>MAX*2)throw new Error('每日总计时上限须为3–26小时，或留空不额外限制');
@@ -32037,12 +32050,12 @@ function createWeeklyRhythmCore() {
         return {pending:false,options:capped,generated:result.length,warnings};
     }
     function rank(path,mode,s){
-        const m=metrics(path),over=Math.max(0,(m.durationSD||0)/60-1)+Math.max(0,(m.centerSD||0)/30-1),nonSecond=path.filter(c=>c.second&&c.second.duration<=c.first.duration).length;
+        const m=metrics(path,true,s),over=Math.max(0,m.durationRange-s.maxDurationRange)+Math.max(0,m.centerRange-s.maxCenterRange),nonSecond=path.filter(c=>c.second&&c.second.duration<=c.first.duration).length;
         const preference=s.longRule==='preferSecond'?nonSecond*300:0;
         const secondary=mode==='early'?m.late*10+path.reduce((n,c)=>n+(c.second?.start||0),0)*.05+m.total*.01+preference
             :mode==='second'?nonSecond*1000+m.late*2+m.total*.01+preference
             :m.total+m.late*.2+preference;
-        return [over>1e-8?1:0,over,secondary,(m.durationSD||0)+(m.centerSD||0)*2+m.tieDays*15];
+        return [over>1e-8?1:0,over,m.durationRange+m.centerRange,secondary,(m.durationSD||0)+(m.centerSD||0)*2+m.tieDays*15];
     }
     function compare(a,b,mode,s){const x=rank(a,mode,s),y=rank(b,mode,s);for(let i=0;i<x.length;i++)if(Math.abs(x[i]-y[i])>1e-7)return x[i]-y[i];return 0;}
     function sortPaths(paths,mode,s){const ranks=new Map(paths.map(path=>[path,rank(path,mode,s)]));paths.sort((a,b)=>{const x=ranks.get(a),y=ranks.get(b);for(let i=0;i<x.length;i++)if(Math.abs(x[i]-y[i])>1e-7)return x[i]-y[i];return 0;});}
@@ -32068,11 +32081,11 @@ function createWeeklyRhythmCore() {
                 progress({stage:label,step:j+1,total:days.length});await new Promise(r=>setTimeout(r,0));
                 if(!beam.length){errors.push({index:days[j].index,message:'与上一已确定日的睡眠发生跨日重叠，无法衔接'});break;}
             }
-            if(beam.length&&!errors.length){beam.sort((a,b)=>compare(a,b,mode,s));const path=beam[0];plans.push({mode,label,path,metrics:metrics(path,true)});}
+            if(beam.length&&!errors.length){beam.sort((a,b)=>compare(a,b,mode,s));const path=beam[0];plans.push({mode,label,path,metrics:metrics(path,true,s)});}
         }
         const observed=[];
         rows.forEach((row,index)=>{if(row.first?.status!=='actual'||(row.mode!=='one'&&row.second?.status!=='actual'))return;const f=fixed(row.first),b=row.mode==='one'?null:fixed(row.second);if(f&&(row.mode==='one'||b))observed.push(candidate({...f,status:'actual'},b?{...b,status:'actual'}:null,index,s,true));});
-        return {plans,errors,pending,warnings,settings:s,observed:metrics(observed,true),knownDays:days.length,approximate:true};
+        return {plans,errors,pending,warnings,settings:s,observed:metrics(observed,true,s),knownDays:days.length,approximate:true};
     }
     function estimate(row,key,rawSettings={}){
         const s=settings(rawSettings),r=row[key]||{},isSecond=key==='second',f=fixed(r),first=fixed(row.first);
@@ -32093,7 +32106,7 @@ function createWeeklyRhythmCore() {
         if(end!=null)return {kind:'start',time:((end-d)%DAY+DAY)%DAY,duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
         return {kind:'duration',duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
     }
-    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,sd,circular,metrics,settings,dayOptions,estimate,plan};
+    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,sd,circular,circularRange,metrics,settings,dayOptions,estimate,plan};
 }
 
 var WeeklyRhythmPlanner=(()=>{
@@ -32145,13 +32158,13 @@ var WeeklyRhythmPlanner=(()=>{
         </style><div class="wr-shell"><div class="wr-head"><div><h3>周评作息规划 · 试用</h3><p style="font-size:12px;opacity:.85">每天逐步确定 · 多方案选择 · 实际记录锁定</p></div><button aria-label="关闭周评作息规划" style="font-size:26px;padding:5px" onclick="WeeklyRhythmPlanner.close()">×</button></div><div class="wr-body">
         <div class="wr-tools"><button class="wr-button" onclick="WeeklyRhythmPlanner.moveWeek(-7)">上周</button><label>游戏周一日期<input id="wr-week" type="date" value="${week}" onchange="WeeklyRhythmPlanner.pickWeek(this.value)"></label><button class="wr-button" onclick="WeeklyRhythmPlanner.moveWeek(7)">下周</button><span class="wr-info">${week} ～ ${core.shift(week,6)}</span></div>
         <p class="wr-info">这里独立规划具体时间，不修改原“睡眠类型规划”、睡眠研究或捕捉数据。每天只填已确定的分数；空白日保留未定。填写的时间均指游戏记录的有效睡眠，不含按开始后等待入睡的时间。</p>
-        <div class="wr-warn">目标是提高周评S的可行性，不保证S。社区参考线：每日总时长标准差≤60分钟、每日长觉中心标准差≤30分钟。二觉分数受每日100分封顶，但总时长不按8.5小时截断。方案可能需要很长计时，只是游戏约束的数学解，不建议为游戏强行延长实际睡眠。</div>
-        <details><summary>个人时间要求与偏好</summary><div class="wr-grid">${[['firstEarliest','一觉最早开始'],['firstLatest','一觉最晚开始'],['secondEarliest','二觉最早开始'],['secondLatest','二觉硬性最晚开始'],['preferredSecond','二觉最好在此时之前开始']].map(([key,label])=>`<label>${label}<input type="time" value="${esc(s[key])}" onchange="WeeklyRhythmPlanner.setting('${key}',this.value)"></label>`).join('')}<label>长觉偏好<select onchange="WeeklyRhythmPlanner.setting('longRule',this.value)">${[['any','一觉／二觉都可较长'],['preferSecond','尽量二觉更长'],['requireSecond','未完成日必须二觉更长']].map(([v,label])=>`<option value="${v}" ${s.longRule===v?'selected':''}>${label}</option>`).join('')}</select></label><label>每日总计时上限（小时）<input type="number" min="3" max="26" step="0.5" value="${s.maxTotal===''?'':s.maxTotal/60}" onchange="WeeklyRhythmPlanner.setting('maxTotal',this.value===''?'':Number(this.value)*60)"></label><label>两觉至少间隔（分钟）<input type="number" min="0" max="240" value="${s.gap}" onchange="WeeklyRhythmPlanner.setting('gap',Number(this.value))"></label><label>满分时长口径<select onchange="WeeklyRhythmPlanner.setting('base',Number(this.value))"><option value="510" ${Number(s.base)===510?'selected':''}>8小时30分＝100分</option><option value="660" ${Number(s.base)===660?'selected':''}>11小时＝100分</option></select></label></div><p class="wr-info">时间按本设备当地时区。00:00～03:59是该游戏日的次日凌晨；每觉开始必须属于同一游戏日（04:00切换），结束可跨过次日04:00。允许时段可留空（该方向不额外限制），最好入睡时间也可留空；总计时上限留空时只受两觉各13小时的计时规则限制。完整实际时间不会被改动。</p></details>
+        <div class="wr-warn">目标是提高周评S的可行性，不保证S。本工具按最大差值规划：每日总时长最长减最短、每日长觉中心最短跨日覆盖范围，默认均≤60分钟，可在下方分别调整；这是自定义约束，不是游戏S评级的官方阈值。二觉分数受每日100分封顶，但总时长不按8.5小时截断。方案可能需要很长计时，只是游戏约束的数学解，不建议为游戏强行延长实际睡眠。</div>
+        <details><summary>个人时间要求与偏好</summary><div class="wr-grid">${[['firstEarliest','一觉最早开始'],['firstLatest','一觉最晚开始'],['secondEarliest','二觉最早开始'],['secondLatest','二觉硬性最晚开始'],['preferredSecond','二觉最好在此时之前开始']].map(([key,label])=>`<label>${label}<input type="time" value="${esc(s[key])}" onchange="WeeklyRhythmPlanner.setting('${key}',this.value)"></label>`).join('')}<label>长觉偏好<select onchange="WeeklyRhythmPlanner.setting('longRule',this.value)">${[['any','一觉／二觉都可较长'],['preferSecond','尽量二觉更长'],['requireSecond','未完成日必须二觉更长']].map(([v,label])=>`<option value="${v}" ${s.longRule===v?'selected':''}>${label}</option>`).join('')}</select></label><label>日总时长最大差值（分钟）<input type="number" min="0" max="1440" step="1" value="${s.maxDurationRange}" onchange="WeeklyRhythmPlanner.setting('maxDurationRange',Number(this.value))"></label><label>长觉中心最大差值（分钟）<input type="number" min="0" max="1440" step="1" value="${s.maxCenterRange}" onchange="WeeklyRhythmPlanner.setting('maxCenterRange',Number(this.value))"></label><label>每日总计时上限（小时）<input type="number" min="3" max="26" step="0.5" value="${s.maxTotal===''?'':s.maxTotal/60}" onchange="WeeklyRhythmPlanner.setting('maxTotal',this.value===''?'':Number(this.value)*60)"></label><label>两觉至少间隔（分钟）<input type="number" min="0" max="240" value="${s.gap}" onchange="WeeklyRhythmPlanner.setting('gap',Number(this.value))"></label><label>满分时长口径<select onchange="WeeklyRhythmPlanner.setting('base',Number(this.value))"><option value="510" ${Number(s.base)===510?'selected':''}>8小时30分＝100分</option><option value="660" ${Number(s.base)===660?'selected':''}>11小时＝100分</option></select></label></div><p class="wr-info">时间按本设备当地时区。00:00～03:59是该游戏日的次日凌晨；每觉开始必须属于同一游戏日（04:00切换），结束可跨过次日04:00。允许时段可留空（该方向不额外限制），最好入睡时间也可留空；总计时上限留空时只受两觉各13小时的计时规则限制。完整实际时间不会被改动。</p></details>
         <section class="wr-panel"><h4>本周逐日输入</h4><p class="wr-info">填一觉目标后离开输入框，空白二觉会补为剩余分数；不是把13分当作只睡66分钟。开始、结束都可留空，也可以只填一个；分数＋开始会即时显示预计结束。实际时间填齐后才锁定；尚未结束或缺一项也可试算，但预测绝不算成实际完成。</p>
         ${state.days.map((day,i)=>`<div class="wr-day"><div class="wr-tools" style="margin-top:0"><strong>${weekLabels[i]} · ${core.shift(week,i)}</strong><select aria-label="${weekLabels[i]}觉次数" onchange="WeeklyRhythmPlanner.change(${i},'mode',this.value,true)"><option value="two" ${day.mode!=='one'?'selected':''}>两觉</option><option value="one" ${day.mode==='one'?'selected':''}>仅一觉</option></select><button class="wr-button" onclick="WeeklyRhythmPlanner.clearDay(${i})">清除此日输入</button></div><div class="wr-day-grid"><div class="wr-score-block"><div class="wr-score-pair"><label>一觉目标分<input id="wr-score-${i}-1" type="number" min="0" max="100" step="1" value="${esc(day.score1)}" placeholder="未定" oninput="WeeklyRhythmPlanner.change(${i},'score1',this.value)" onblur="WeeklyRhythmPlanner.completeScore(${i})"></label><label>二觉目标分<input id="wr-score-${i}-2" type="number" min="0" max="100" step="1" value="${esc(day.score2)}" placeholder="剩余／未定" oninput="WeeklyRhythmPlanner.change(${i},'score2',this.value)" onblur="WeeklyRhythmPlanner.completeScore(${i},'second')"></label></div><p class="wr-info">已完成时，以实际时长算出的分数为准；目标不一致会提示。</p></div>${sessionFields(day,i,'first','一觉')}${sessionFields(day,i,'second','二觉')}</div></div>`).join('')}
         <div class="wr-tools"><button class="wr-button wr-primary" onclick="WeeklyRhythmPlanner.commit()">保存并生成／更新方案</button><span id="wr-save-status" class="wr-info">仅保存输入和设置，不累计保存模拟方案</span></div></section>
         <section class="wr-panel"><h4>候选方案</h4><p id="wr-progress" class="wr-info">等待输入…</p><div id="wr-results"></div></section>
-        <details><summary>计算口径与试用限制</summary><p class="wr-info">得分按有效分钟÷满分分钟×100四舍五入，并限制两觉之和≤100。每觉按至少90分钟、至多13小时规划；两觉不得重叠，跨日也要给下一已确定日留出间隔。总时长按两觉实际和计算。长觉中心使用24小时时钟最小展开离散度，23:59与00:01不会算作相差一整天；两觉等长时同时检查两种可能中心，并提示判定不确定。网格候选＋有限Beam Search仅作近似，不保证最优；未填分数的日期不被伪造，必须在后续确定后重算。参考：<a href="https://wikiwiki.jp/poke_sleep/睡眠計測の仕様" target="_blank" rel="noopener" style="color:#0f766e">社区睡眠计测与周评研究</a>。阈值和等长处理均不能替代游戏实际结算。</p></details>
+        <details><summary>计算口径与试用限制</summary><p class="wr-info">得分按有效分钟÷满分分钟×100四舍五入，并限制两觉之和≤100。每觉按至少90分钟、至多13小时规划；两觉不得重叠，跨日也要给下一已确定日留出间隔。总时长按两觉实际和计算。最大差值为主要约束：总时长取最长减最短；长觉中心取24小时时钟能覆盖全部中心的最短范围，23:59与00:01只差2分钟；标准差仅辅助展示，不参与达标判断。先尽量减少超限，再尽量缩小两项差值，最后比较早睡／二觉长短等偏好。两觉等长时同时检查两种可能中心，并提示判定不确定。网格候选＋有限Beam Search仅作近似，不保证最优；未填分数的日期不被伪造，必须在后续确定后重算。参考：<a href="https://wikiwiki.jp/poke_sleep/睡眠計測の仕様" target="_blank" rel="noopener" style="color:#0f766e">社区睡眠计测与周评研究</a>。阈值和等长处理均不能替代游戏实际结算。</p></details>
         </div></div>`;
         void calculate();
     }
@@ -32171,9 +32184,9 @@ var WeeklyRhythmPlanner=(()=>{
         if(result.errors.length){zone.innerHTML=warnings+result.errors.map(e=>`<p class="wr-warn">${e.index==null?'':weekLabels[e.index]+'：'}${esc(e.message)}</p>`).join('');return;}
         if(!result.plans.length){zone.innerHTML=warnings+'<p class="wr-info">先填今天已确定的分数或部分时间即可，整天空白的日期继续保留未定。</p>';return;}
         const known=result.knownDays,observed=result.observed;
-        zone.innerHTML=warnings+`<p class="wr-warn">目前仅${known}/7天有输入条件（含可能的临时假设，不等于全部已确定）。${known<7?'其余日期保留未定，下面的稳定性不代表整周一定S；每天补充分数后重新规划。':'七天均纳入，但仍以游戏实际结算为准。'}${observed?.count?` 已完整记录实际时间${observed.count}天：总时长标准差${observed.durationSD?.toFixed(1)}分钟，长觉中心标准差${observed.centerSD?.toFixed(1)}分钟。`:''}</p>
-        ${result.plans.map(p=>`<section class="wr-panel ${state.selected===p.mode?'wr-selected':''}"><div class="wr-tools"><h4>${p.label}</h4><button class="wr-button ${state.selected===p.mode?'wr-primary':''}" data-mode="${p.mode}" onclick="WeeklyRhythmPlanner.select(this.dataset.mode)">${state.selected===p.mode?'当前参考':'选作当前参考'}</button></div><p class="wr-info ${p.metrics.within?'wr-ok':'wr-bad'}">按已确定${known}天计算：${p.metrics.within?'两项均在社区S参考线内':'至少一项超出社区S参考线，需要调整或接受风险'}。总时长标准差 ${p.metrics.durationSD?.toFixed(1)}分钟；长觉中心标准差 ${p.metrics.centerSD?.toFixed(1)}分钟；平均总计时 ${duration(p.metrics.meanTotal)}；二觉较长 ${p.metrics.secondLong}天。</p>
-        ${p.metrics.within&&(p.metrics.durationSD>50||p.metrics.centerSD>25)?'<p class="wr-warn">此候选接近社区参考边界。实际入睡／起床偏差可能让结果越线，建议选余量更大的方案。</p>':''}${p.metrics.tieDays?'<p class="wr-warn">含两觉等长日：已按两种可能中心取最不利离散度；游戏具体取哪觉尚未确认，不以此保证S。</p>':''}${p.path.some(row=>row.total>720)?'<p class="wr-info">此方案含超过12小时的日总计时，请权衡计时成本；它不是健康作息建议。</p>':''}
+        zone.innerHTML=warnings+`<p class="wr-warn">目前仅${known}/7天有输入条件（含可能的临时假设，不等于全部已确定）。${known<7?'其余日期保留未定，下面的稳定性不代表整周一定S；每天补充分数后重新规划。':'七天均纳入，但仍以游戏实际结算为准。'}${observed?.count?` 已完整记录实际时间${observed.count}天：总时长最大差值${observed.durationRange?.toFixed(1)}分钟，长觉中心最大差值${observed.centerRange?.toFixed(1)}分钟。`:''}</p>
+        ${result.plans.map(p=>`<section class="wr-panel ${state.selected===p.mode?'wr-selected':''}"><div class="wr-tools"><h4>${p.label}</h4><button class="wr-button ${state.selected===p.mode?'wr-primary':''}" data-mode="${p.mode}" onclick="WeeklyRhythmPlanner.select(this.dataset.mode)">${state.selected===p.mode?'当前参考':'选作当前参考'}</button></div><p class="wr-info ${p.metrics.within?'wr-ok':'wr-bad'}">按已输入${known}天计算：${p.metrics.within?'两项最大差值均满足设定上限（不代表保证S）':'不满足最大差值上限：仅展示冲突参考，当前搜索未找到达标方案'}。<strong>总时长最大差值 ${p.metrics.durationRange?.toFixed(1)}分钟／上限${result.settings.maxDurationRange}分钟；长觉中心最大差值 ${p.metrics.centerRange?.toFixed(1)}分钟／上限${result.settings.maxCenterRange}分钟</strong>；标准差仅供参考：总时长 ${p.metrics.durationSD?.toFixed(1)}分钟、长觉中心 ${p.metrics.centerSD?.toFixed(1)}分钟；平均总计时 ${duration(p.metrics.meanTotal)}；二觉较长 ${p.metrics.secondLong}天。</p>
+        ${p.metrics.within&&(p.metrics.durationRange>=result.settings.maxDurationRange*.85||p.metrics.centerRange>=result.settings.maxCenterRange*.85)?'<p class="wr-warn">此候选接近你设定的最大差值上限。实际入睡／起床偏差可能让结果越线，建议选余量更大的方案。</p>':''}${p.metrics.tieDays?'<p class="wr-warn">含两觉等长日：已按两种可能中心取最不利最大差值；游戏具体取哪觉尚未确认，不以此保证S。</p>':''}${p.path.some(row=>row.total>720)?'<p class="wr-info">此方案含超过12小时的日总计时，请权衡计时成本；它不是健康作息建议。</p>':''}
         <div style="overflow:auto"><table><thead><tr><th>游戏日</th><th>一觉</th><th>二觉</th><th>得分／日总时长</th><th>长觉中心／操作</th></tr></thead><tbody>${state.days.map((day,i)=>{const row=p.path.find(r=>r.day===i);if(!row)return `<tr><td>${weekLabels[i]} ${core.shift(week,i)}</td><td colspan="4">分配未定，暂不安排。新比例输入后再规划。</td></tr>`;const mismatch=(core.score?((day.score1!==''&&Number(day.score1)!==row.firstScore)||(day.mode!=='one'&&day.score2!==''&&Number(day.score2)!==row.secondScore)):false);return `<tr><td>${weekLabels[i]} ${core.shift(week,i)}</td><td>${sessionText(row.first)}</td><td>${sessionText(row.second)}</td><td>${row.firstScore}＋${row.secondScore}${row.provisionalScores?'<small class="wr-bad">分数未定，仅为临时试算</small>':''}<small>总时长 ${duration(row.total)}</small>${mismatch?'<small class="wr-bad">实际得分与目标不一致，实际记录未被改动</small>':''}</td><td>${row.centers.map(core.format).join(' 或 ')}<small>${row.second&&row.second.duration>row.first.duration?'二觉较长':row.second&&row.second.duration===row.first.duration?'两觉等长':'一觉较长'}</small>${!row.actual?`<button class="wr-button" data-mode="${p.mode}" data-day="${i}" onclick="WeeklyRhythmPlanner.fixDay(this.dataset.mode,Number(this.dataset.day))">固定此日建议</button>`:''}</td></tr>`;}).join('')}</tbody></table></div></section>`).join('')}
         <p class="wr-info">“选作参考”不会把预测记成事实。“固定此日建议”只锁定未完成的时间要求；已完成记录保持原样。若几种方案相同，说明当前约束下尚未找到有意义的其他形状，不会为了凑数量伪造差异。</p>`;
         lastResult=result;
