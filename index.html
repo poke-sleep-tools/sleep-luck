@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.01.2</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.02.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1018,6 +1018,7 @@
                     <button onclick="openSleepSplitPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-blue-100 text-blue-800 shadow-sm flex items-center gap-1 hover:bg-blue-200" title="根据岛屿、当前能量与活动倍率计算两觉拆分，并反推各种 x+y 所需的最低能量">
                         <i class="fa-solid fa-chart-simple text-blue-600"></i> 🛏️ 拆觉规划
                     </button>
+                    <button onclick="openWeeklyRhythmPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-cyan-100 text-cyan-800 shadow-sm flex items-center gap-1 hover:bg-cyan-200" title="逐日输入拆觉分数和时间要求，滚动比较多种周评作息方案"><i class="fa-solid fa-calendar-days"></i> 📅 周评作息规划</button>
                     <button onclick="openSleepEncounterPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-teal-100 text-teal-900 shadow-sm flex items-center gap-1 hover:bg-teal-200" title="按岛屿、能量、睡眠分数与类型计算各宝可梦的遇见期望，并分析目标宝可梦适合的岛屿和能量区间">
                         <i class="fa-solid fa-binoculars text-teal-700"></i> 🔭 宝可梦狙击
                     </button>
@@ -1809,7 +1810,7 @@ function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
-        !!(log && (log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
+        !!(log && (log.type === 'sleep_week_rhythm_state' || log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
 function isBallPlannerEnabled() {
@@ -31901,6 +31902,267 @@ function sleepSplitSelectRating(index) {
     sleepSplitKeepAxisScroll(()=>renderSleepSplitPlanner());
 }
 function closeSleepSplitPlannerModal() { document.getElementById('sleep-split-planner-modal')?.remove(); }
+// 周评计时模型：无DOM、无存储副作用；未知日不伪造分数。
+function createWeeklyRhythmCore() {
+    const DAY=1440,MIN=90,MAX=780;
+    function clock(text){if(!/^\d{2}:\d{2}$/.test(String(text)))return null;const [h,m]=text.split(':').map(Number);return h<24&&m<60?h*60+m:null;}
+    function gameClock(text){const n=clock(text);return n==null?null:n<240?n+DAY:n;}
+    function format(time){const n=((Math.round(time)%DAY)+DAY)%DAY;return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;}
+    function shift(date,n){const d=new Date(date+'T12:00:00');d.setDate(d.getDate()+n);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+    function validDate(date){const d=new Date(date+'T12:00:00');return /^\d{4}-\d{2}-\d{2}$/.test(date)&&!Number.isNaN(d.getTime())&&shift(date,0)===date;}
+    function gameDate(now=new Date()){const d=new Date(now);d.setHours(d.getHours()-4);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+    function monday(date){const d=new Date(date+'T12:00:00');return shift(date,-((d.getDay()+6)%7));}
+    function score(duration,base=510){return Math.min(100,Math.round(duration/base*100));}
+    function goal(value){return value===''||value==null?null:Number(value);}
+    function fixed(session){
+        if(!session?.start||!session?.end)return null;
+        const start=gameClock(session.start),endClock=clock(session.end);
+        if(start==null||endClock==null)return null;
+        let end=endClock;while(end<=start)end+=DAY;
+        return {start,end,duration:end-start};
+    }
+    function sd(values){if(!values.length)return null;const avg=values.reduce((a,b)=>a+b,0)/values.length;return Math.sqrt(Math.max(0,values.reduce((sum,n)=>sum+(n-avg)**2,0)/values.length));}
+    function circular(values){
+        if(!values.length)return {sd:null,mean:null};
+        const clocks=values.map(n=>((n%DAY)+DAY)%DAY).sort((a,b)=>a-b);let best={sd:Infinity,mean:null};
+        for(const cut of clocks){const v=clocks.map(n=>n<cut?n+DAY:n),s=sd(v);if(s<best.sd)best={sd:s,mean:(v.reduce((a,b)=>a+b,0)/v.length)%DAY};}
+        return best;
+    }
+    function metrics(path,conservative=false){
+        const totals=path.map(p=>p.total),centerLists=path.map(p=>p.centers);let center=circular(centerLists.map(v=>v[0]));
+        if(conservative&&centerLists.some(v=>v.length>1)){
+            function walk(i,values){if(i===centerLists.length){const m=circular(values);if(m.sd>center.sd)center=m;return;}for(const value of centerLists[i])walk(i+1,[...values,value]);}walk(0,[]);
+        }
+        return {count:path.length,durationSD:sd(totals),centerSD:center.sd,centerMean:center.mean,meanTotal:totals.length?totals.reduce((a,b)=>a+b,0)/totals.length:null,
+            tieDays:path.filter(p=>p.centers.length>1).length,total:totals.reduce((a,b)=>a+b,0),late:path.reduce((a,b)=>a+b.late,0),secondLong:path.filter(p=>p.second&&p.second.duration>p.first.duration).length,
+            within:!!path.length&&sd(totals)<=60+1e-7&&center.sd<=30+1e-7};
+    }
+    function settings(raw={}){return {base:510,gap:10,maxTotal:960,firstEarliest:'08:00',firstLatest:'18:00',secondEarliest:'12:00',secondLatest:'01:00',preferredSecond:'23:30',longRule:'any',...raw};}
+    function validateSettings(s){
+        if(![510,660].includes(Number(s.base)))throw new Error('请选择有效的满分时长口径');
+        if(!Number.isFinite(Number(s.gap))||s.gap<0||s.gap>240)throw new Error('两觉间隔须为0–240分钟');
+        if(!Number.isFinite(Number(s.maxTotal))||s.maxTotal<180||s.maxTotal>1440)throw new Error('每日总计时上限须为3–24小时');
+        for(const key of ['firstEarliest','firstLatest','secondEarliest','secondLatest','preferredSecond'])if(gameClock(s[key])==null)throw new Error('时间偏好须填写完整');
+        if(gameClock(s.firstEarliest)>gameClock(s.firstLatest)||gameClock(s.secondEarliest)>gameClock(s.secondLatest))throw new Error('允许时段的最晚时间不能早于最早时间；00:00–03:59表示游戏日的次日凌晨');
+    }
+    function durationRange(wanted,remaining,s){
+        if(wanted==null)return [MIN,MAX];
+        if(!Number.isInteger(wanted)||wanted<0||wanted>remaining)return null;
+        if(wanted===remaining){for(let n=MIN;n<=MAX;n++)if(Math.min(remaining,score(n,s.base))===wanted)return [n,MAX];return null;}
+        const ok=[];for(let n=MIN;n<=MAX;n++)if(score(n,s.base)===wanted)ok.push(n);
+        return ok.length?[ok[0],ok[ok.length-1]]:null;
+    }
+    function matchDuration(duration,wanted,remaining,s){return wanted==null || Math.min(remaining,score(duration,s.base))===wanted;}
+    function endMatches(session,start,duration){return !session?.end || Math.round((start+duration)%DAY)===clock(session.end);}
+    function starts(session,duration,early,late,anchors=[]){
+        const exact=gameClock(session?.start);if(exact!=null)return exact>=early&&exact<=late&&endMatches(session,exact,duration)?[exact]:[];
+        if(session?.end){const end=clock(session.end);return [end,end+DAY,end+DAY*2].map(n=>n-duration).filter(n=>n>=early&&n<=late);}
+        const list=[early,late,...anchors];for(let n=Math.ceil(early/60)*60;n<=late;n+=60)list.push(n);
+        return [...new Set(list.map(Math.round))].filter(n=>n>=early&&n<=late);
+    }
+    function candidate(first,second,index,s,actual=false){
+        const total=first.duration+(second?.duration||0),long=second&&second.duration>first.duration?second:first;
+        const centers=[(long.start+long.duration/2)%DAY];
+        if(second&&second.duration===first.duration)centers.push((second.start+second.duration/2)%DAY);
+        const firstScore=score(first.duration,s.base),secondScore=second?Math.min(100-firstScore,score(second.duration,s.base)):0;
+        return {day:index,first,second,total,centers,firstScore,secondScore,actual,late:second?Math.max(0,second.start-gameClock(s.preferredSecond)):0,
+            absoluteStart:index*DAY+first.start,absoluteEnd:index*DAY+(second?.end||first.end)};
+    }
+    function validateSession(session,label){
+        if(session?.status==='actual'&&(!session.start||!session.end))throw new Error(`${label}已设为实际完成，请填写开始和结束时间`);
+        for(const key of ['start','end'])if(session?.[key]&&clock(session[key])==null)throw new Error(`${label}时间无效`);
+        const f=fixed(session);if(f&&(f.duration<MIN||f.duration>MAX))throw new Error(`${label}有效时长须为90分钟至13小时；请核对跨日时间`);
+        return f;
+    }
+    function dayOptions(row,index,s,anchors){
+        const firstRaw=row.first||{},secondRaw=row.second||{},one=row.mode==='one',g1=goal(row.score1),g2=goal(row.score2);
+        const active=g1!=null||g2!=null||firstRaw.start||firstRaw.end||secondRaw.start||secondRaw.end||firstRaw.status==='actual'||secondRaw.status==='actual';
+        if(!active)return {pending:true,options:[]};
+        if(one&&secondRaw.status==='actual'&&(secondRaw.start||secondRaw.end))throw new Error('已有实际二觉，不能直接切成仅一觉；请先确认并修改实际记录');
+        const f1=validateSession(firstRaw,'一觉'),f2=one?null:validateSession(secondRaw,'二觉');
+        const actual1=firstRaw.status==='actual',actual2=!one&&secondRaw.status==='actual';
+        if(actual2&&!f1)throw new Error('二觉已完成，请先补齐一觉的实际或固定时间');
+        if(g1==null&&!f1)throw new Error('请填一觉目标分数，或给出一觉完整时间；不会替你猜分数');
+        if(g1!=null&&(!Number.isInteger(g1)||g1<0||g1>100))throw new Error('一觉分数须为0–100的整数');
+        if(g2!=null&&(!Number.isInteger(g2)||g2<0||g2>100))throw new Error('二觉分数须为0–100的整数');
+        if(one&&g2!=null&&g2!==0)throw new Error('仅一觉时二觉目标应留空或填0');
+        if(g1!=null&&g2!=null&&g1+g2>100)throw new Error('两觉目标分数之和不能超过100');
+        const range1=durationRange(g1,100,s);
+        if(!f1&&!range1)throw new Error('一觉目标低于最短有效计时所能取得的分数，不能用二觉的封顶规则套一觉');
+        let d1s=f1?[f1.duration]:[range1[0],range1[1],Math.max(range1[0],Math.min(range1[1],Math.round(g1*s.base/100)))];
+        // 一觉100分允许更长计时；仅一觉也可以利用时长空间调整周评。
+        if(range1&&range1[1]===MAX&&!f1)d1s.push(...anchors.totals.filter(n=>n>=range1[0]&&n<=MAX));
+        const result=[],dedupe=new Set();
+        for(const d1 of [...new Set(d1s)]){
+            if(!actual1&&!matchDuration(d1,g1,100,s))continue;
+            const score1=score(d1,s.base),wanted2=g2==null?Math.max(0,100-score1):g2;
+            const range2=one?null:durationRange(wanted2,100-score1,s);
+            if(!one&&!actual2&&!range2)continue;
+            const totals=[...anchors.totals,d1+MIN,...(range2?[d1+range2[0],d1+range2[1]]:[]),...(f2?[d1+f2.duration]:[])];
+            const d2s=one?[0]:f2?[f2.duration]:[...new Set(totals.map(n=>Math.round(n-d1)))].filter(n=>range2&&n>=range2[0]&&n<=range2[1]);
+            for(const d2 of d2s){
+                if(!one&&!actual2&&!matchDuration(d2,wanted2,100-score1,s))continue;
+                if(d1+d2>s.maxTotal&&!(actual1&&(one||actual2)))continue;
+                if(!one&&s.longRule==='requireSecond'&&d2<=d1&&!actual2)continue;
+                const firstStarts=f1?[f1.start]:starts(firstRaw,d1,gameClock(s.firstEarliest),gameClock(s.firstLatest),anchors.centers.map(c=>c-d1/2).flatMap(n=>[n,n+DAY]));
+                for(const start1 of firstStarts){
+                    if(!actual1&&(start1<gameClock(s.firstEarliest)||start1>gameClock(s.firstLatest)))continue;
+                    if(!actual1&&!endMatches(firstRaw,start1,d1))continue;
+                    const first={start:start1,end:start1+d1,duration:d1,status:actual1?'actual':'planned'};
+                    const earliest=one?0:Math.max(first.end+Number(s.gap),gameClock(s.secondEarliest));
+                    const secondStarts=one?[0]:f2?[f2.start]:starts(secondRaw,d2,earliest,gameClock(s.secondLatest),[earliest,gameClock(s.preferredSecond),...anchors.centers.flatMap(c=>[c-d2/2,c+DAY-d2/2])]);
+                    for(const start2 of secondStarts){
+                        if(!one&&start2<first.end+(actual1&&actual2?0:Number(s.gap)))continue;
+                        if(!one&&!actual2&&(start2<gameClock(s.secondEarliest)||start2>gameClock(s.secondLatest)))continue;
+                        if(!one&&!actual2&&!endMatches(secondRaw,start2,d2))continue;
+                        const second=one?null:{start:start2,end:start2+d2,duration:d2,status:actual2?'actual':'planned'};
+                        const key=[start1,d1,start2,d2].join(':');if(dedupe.has(key))continue;dedupe.add(key);
+                        result.push(candidate(first,second,index,s,actual1&&(one||actual2)));
+                    }
+                }
+            }
+        }
+        if(!result.length)throw new Error('目标分数、固定时间、最晚入睡、两觉顺序或总计时上限互相冲突。请调整要求；系统不会偷偷放宽硬限制');
+        // 按总时长、长觉中心、长觉归属保留不同形状，避免候选全挤在同一作息附近。
+        const groups=new Map();
+        for(const c of result){const key=[Math.round(c.total/30),Math.round(c.centers[0]/30),c.second&&c.second.duration>c.first.duration?2:1].join(':');
+            const old=groups.get(key);const penalty=c.late*3+(c.second?.start||0)*.001;if(!old||penalty<old.penalty)groups.set(key,{candidate:c,penalty});}
+        const options=[...groups.values()].map(x=>x.candidate);
+        // 有限网格搜索；极端配置时按时间中心轮流保留，最多720种日方案。
+        options.sort((a,b)=>a.centers[0]-b.centers[0]||a.total-b.total);
+        const capped=options.length<=720?options:Array.from({length:720},(_,i)=>options[Math.floor(i*options.length/720)]);
+        return {pending:false,options:capped,generated:result.length};
+    }
+    function rank(path,mode,s){
+        const m=metrics(path),over=Math.max(0,(m.durationSD||0)/60-1)+Math.max(0,(m.centerSD||0)/30-1),nonSecond=path.filter(c=>c.second&&c.second.duration<=c.first.duration).length;
+        const preference=s.longRule==='preferSecond'?nonSecond*300:0;
+        const secondary=mode==='early'?m.late*10+path.reduce((n,c)=>n+(c.second?.start||0),0)*.05+m.total*.01+preference
+            :mode==='second'?nonSecond*1000+m.late*2+m.total*.01+preference
+            :m.total+m.late*.2+preference;
+        return [over>1e-8?1:0,over,secondary,(m.durationSD||0)+(m.centerSD||0)*2+m.tieDays*15];
+    }
+    function compare(a,b,mode,s){const x=rank(a,mode,s),y=rank(b,mode,s);for(let i=0;i<x.length;i++)if(Math.abs(x[i]-y[i])>1e-7)return x[i]-y[i];return 0;}
+    function sortPaths(paths,mode,s){const ranks=new Map(paths.map(path=>[path,rank(path,mode,s)]));paths.sort((a,b)=>{const x=ranks.get(a),y=ranks.get(b);for(let i=0;i<x.length;i++)if(Math.abs(x[i]-y[i])>1e-7)return x[i]-y[i];return 0;});}
+    async function plan(rows,rawSettings={},progress=()=>{}){
+        const s=settings(rawSettings);validateSettings(s);
+        const totals=[];for(let n=510;n<=s.maxTotal;n+=30)totals.push(n);totals.push(Number(s.maxTotal));
+        const centers=[];for(let n=0;n<DAY;n+=30)centers.push(n);
+        for(const row of rows){const a=fixed(row.first),b=fixed(row.second);if(a){centers.push((a.start+a.duration/2)%DAY);if(row.mode==='one')totals.push(a.duration);}if(b)centers.push((b.start+b.duration/2)%DAY);if(a&&b)totals.push(a.duration+b.duration);const g=goal(row.score1);if(g!=null&&Number.isFinite(g)){const nominal=Math.round(g*s.base/100);totals.push(nominal+MIN,nominal*2+2);const start=gameClock(row.first?.start);if(start!=null)centers.push((start+nominal/2)%DAY);}}
+        const anchors={totals:[...new Set(totals)],centers:[...new Set(centers)]},days=[],errors=[],pending=[];
+        for(let i=0;i<rows.length;i++)try{const d=dayOptions(rows[i],i,s,anchors);if(d.pending)pending.push(i);else days.push({index:i,...d});progress({stage:'日候选',step:i+1,total:rows.length});await new Promise(r=>setTimeout(r,0));}catch(error){errors.push({index:i,message:error.message});}
+        if(errors.length)return {errors,pending,plans:[],settings:s};
+        if(!days.length)return {errors:[],pending,plans:[],settings:s};
+        const modes=[['early','早睡优先'],['second','二觉较长优先'],['short','总计时较短']],plans=[];
+        for(const [mode,label]of modes){
+            let beam=[[]];
+            for(let j=0;j<days.length;j++){
+                const next=[];
+                for(const path of beam)for(const c of days[j].options){const last=path[path.length-1];if(last&&last.absoluteEnd+Number(s.gap)>c.absoluteStart)continue;next.push([...path,c]);}
+                sortPaths(next,mode,s);
+                const seen=new Set();beam=[];
+                // 保留不同的中心/总时长形状，帮助后续日与已完成事实对齐。
+                for(const path of next){const m=metrics(path),last=path[path.length-1],signature=[Math.round(m.meanTotal/20),Math.round(m.centerMean/20),Math.round(last.absoluteEnd/30)].join(':');if(seen.has(signature))continue;seen.add(signature);beam.push(path);if(beam.length>=24)break;}
+                progress({stage:label,step:j+1,total:days.length});await new Promise(r=>setTimeout(r,0));
+                if(!beam.length){errors.push({index:days[j].index,message:'与上一已确定日的睡眠发生跨日重叠，无法衔接'});break;}
+            }
+            if(beam.length&&!errors.length){beam.sort((a,b)=>compare(a,b,mode,s));const path=beam[0];plans.push({mode,label,path,metrics:metrics(path,true)});}
+        }
+        const observed=[];
+        rows.forEach((row,index)=>{if(row.first?.status!=='actual'||(row.mode!=='one'&&row.second?.status!=='actual'))return;const f=fixed(row.first),b=row.mode==='one'?null:fixed(row.second);if(f&&(row.mode==='one'||b))observed.push(candidate({...f,status:'actual'},b?{...b,status:'actual'}:null,index,s,true));});
+        return {plans,errors,pending,settings:s,observed:metrics(observed,true),knownDays:days.length,approximate:true};
+    }
+    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,sd,circular,metrics,settings,dayOptions,plan};
+}
+
+var WeeklyRhythmPlanner=(()=>{
+    const core=createWeeklyRhythmCore(),TYPE='sleep_week_rhythm_state',PREFIX='sleep_week_rhythm_v1_',weekLabels=['周一','周二','周三','周四','周五','周六','周日'];
+    let state=null,week='',owner='',saveTimer=null,calcTimer=null,worker=null,url=null,generation=0;
+    const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const draftKey=()=>`sleep_week_rhythm_draft_${currentCloudUser?.id||'guest'}`;
+    const duration=n=>n==null?'—':`${Math.floor(n/60)}小时${Math.round(n%60)}分`;
+    const freshSession=()=>({status:'planned',start:'',end:''});
+    function fresh(w){return {version:1,week:w,settings:core.settings(),selected:'early',days:Array.from({length:7},()=>({mode:'two',score1:'',score2:'',autoSecond:false,first:freshSession(),second:freshSession()})),updatedAt:''};}
+    function normalize(raw,w){const d=fresh(w);return {...d,...raw,week:w,settings:core.settings(raw?.settings),days:d.days.map((day,i)=>({...day,...raw?.days?.[i],first:{...day.first,...raw?.days?.[i]?.first},second:{...day.second,...raw?.days?.[i]?.second}}))};}
+    function load(w){
+        const id=PREFIX+w;let draft=null;try{draft=JSON.parse(localStorage.getItem(draftKey())||'null');}catch(_){}
+        const record=(historyLogs||[]).filter(row=>row.type===TYPE&&row.id===id).reduce((best,row)=>(Date.parse(row.updatedAt)||0)>(Date.parse(best?.updatedAt)||0)?row:best,null);
+        const local=draft?.week===w?draft:null,remote=record?.state;
+        state=normalize((Date.parse(local?.updatedAt)||0)>(Date.parse(remote?.updatedAt)||0)?local:remote,w);week=w;owner=currentCloudUser?.id||'guest';
+    }
+    function draft(){if(!state||(currentCloudUser?.id||'guest')!==owner)return;state.updatedAt=new Date().toISOString();try{localStorage.setItem(draftKey(),JSON.stringify(state));const n=document.getElementById('wr-save-status');if(n)n.textContent='输入已暂存本机';}catch(_){showToast('本机草稿暂存失败，请及时保存账号数据');}}
+    function persist(){
+        if(!state||(currentCloudUser?.id||'guest')!==owner)return;
+        clearTimeout(saveTimer);draft();const id=PREFIX+week,now=state.updatedAt,old=(historyLogs||[]).find(row=>row.id===id&&row.type===TYPE);
+        historyLogs=mergeHistoryLogs([], [...(historyLogs||[]).filter(row=>!(row.id===id&&row.type===TYPE)),{id,type:TYPE,state:JSON.parse(JSON.stringify(state)),createdAt:old?.createdAt||now,updatedAt:now}]);
+        saveHistoryToLocal();const status=document.getElementById('wr-save-status');if(status)status.textContent=currentCloudUser?'输入已保存，已加入账号同步队列':'输入已保存本机';
+    }
+    function cancel(){generation++;clearTimeout(calcTimer);if(worker)worker.terminate();if(url)URL.revokeObjectURL(url);worker=null;url=null;}
+    function close(){clearTimeout(saveTimer);persist();cancel();document.getElementById('weekly-rhythm-planner-modal')?.remove();}
+    async function open(){
+        if(document.getElementById('weekly-rhythm-planner-modal')){close();}
+        if(currentCloudUser){try{await loadHistoryFromCloud();}catch(_){showToast('云端读取失败，暂用本机数据');}}else loadHistoryFromLocal();
+        load(core.monday(core.gameDate()));const modal=document.createElement('div');modal.id='weekly-rhythm-planner-modal';modal.style.cssText='position:fixed;inset:0;z-index:78;background:#0f172ab8;display:flex;align-items:center;justify-content:center;padding:10px;';document.body.appendChild(modal);render();
+    }
+    function sessionFields(day,index,key,label){const r=day[key];return `<div class="wr-session"><label>${label}<select onchange="WeeklyRhythmPlanner.change(${index},'${key}.status',this.value,true)"><option value="planned" ${r.status!=='actual'?'selected':''}>未完成／时间要求</option><option value="actual" ${r.status==='actual'?'selected':''}>实际已完成（锁定）</option></select></label><div class="wr-time-pair"><label>有效入睡<input type="time" value="${esc(r.start)}" oninput="WeeklyRhythmPlanner.change(${index},'${key}.start',this.value)" onchange="WeeklyRhythmPlanner.commit()"></label><label>有效结束<input type="time" value="${esc(r.end)}" oninput="WeeklyRhythmPlanner.change(${index},'${key}.end',this.value)" onchange="WeeklyRhythmPlanner.commit()"></label></div></div>`;}
+    function render(){
+        const modal=document.getElementById('weekly-rhythm-planner-modal');if(!modal)return;
+        const s=state.settings;
+        modal.innerHTML=`<style>
+        #weekly-rhythm-planner-modal .wr-shell{width:100%;max-width:1120px;max-height:94vh;background:white;border-radius:22px;overflow:hidden;display:flex;flex-direction:column;color:#334155;box-shadow:0 20px 60px #0003}#weekly-rhythm-planner-modal .wr-head{padding:16px 22px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(110deg,#0f766e,#2563eb);color:white}#weekly-rhythm-planner-modal .wr-head h3{font-weight:900;font-size:20px}#weekly-rhythm-planner-modal .wr-body{padding:18px;overflow:auto}#weekly-rhythm-planner-modal .wr-info{font-size:12px;color:#64748b;line-height:1.8}#weekly-rhythm-planner-modal .wr-warn{font-size:12px;line-height:1.8;padding:12px;border-radius:12px;background:#fffbeb;color:#92400e;margin:10px 0}#weekly-rhythm-planner-modal .wr-panel{padding:15px;border:1px solid #cbd5e1;border-radius:16px;margin:12px 0}#weekly-rhythm-planner-modal .wr-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}#weekly-rhythm-planner-modal input,#weekly-rhythm-planner-modal select{min-width:0;border:1px solid #cbd5e1;border-radius:8px;padding:8px;background:white;color:#334155;font-size:14px}#weekly-rhythm-planner-modal label{font-size:12px;font-weight:700;display:block}#weekly-rhythm-planner-modal label input,#weekly-rhythm-planner-modal label select{display:block;width:100%;margin-top:4px}#weekly-rhythm-planner-modal .wr-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}#weekly-rhythm-planner-modal .wr-button{padding:8px 12px;border:1px solid #99f6e4;border-radius:10px;background:#f0fdfa;color:#0f766e;font-size:13px;font-weight:700;cursor:pointer}#weekly-rhythm-planner-modal .wr-primary{background:#0f766e;color:white}#weekly-rhythm-planner-modal .wr-day{border:1px solid #e2e8f0;border-radius:12px;padding:12px;margin:10px 0}#weekly-rhythm-planner-modal .wr-day-grid{display:grid;grid-template-columns:170px 1fr 1fr;gap:12px}#weekly-rhythm-planner-modal .wr-time-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}#weekly-rhythm-planner-modal .wr-score-pair{display:grid;grid-template-columns:1fr 1fr;gap:6px}#weekly-rhythm-planner-modal h4{font-size:16px;font-weight:800}#weekly-rhythm-planner-modal details{margin:12px 0}#weekly-rhythm-planner-modal summary{cursor:pointer;font-size:14px;font-weight:700;color:#0f766e}#weekly-rhythm-planner-modal table{width:100%;border-collapse:collapse;font-size:12px}#weekly-rhythm-planner-modal td,#weekly-rhythm-planner-modal th{padding:10px 7px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top;white-space:nowrap}#weekly-rhythm-planner-modal small{display:block;color:#64748b;margin-top:3px}#weekly-rhythm-planner-modal .wr-ok{color:#047857}#weekly-rhythm-planner-modal .wr-bad{color:#b45309}#weekly-rhythm-planner-modal .wr-selected{border:2px solid #0d9488;background:#f0fdfa}@media(max-width:700px){#weekly-rhythm-planner-modal .wr-body{padding:10px}#weekly-rhythm-planner-modal .wr-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#weekly-rhythm-planner-modal .wr-day-grid{grid-template-columns:1fr 1fr}#weekly-rhythm-planner-modal .wr-score-block{grid-column:1/-1}#weekly-rhythm-planner-modal input,#weekly-rhythm-planner-modal select{font-size:16px}#weekly-rhythm-planner-modal .wr-time-pair{grid-template-columns:1fr}#weekly-rhythm-planner-modal .wr-day-grid{gap:8px}}
+        </style><div class="wr-shell"><div class="wr-head"><div><h3>周评作息规划 · 试用</h3><p style="font-size:12px;opacity:.85">每天逐步确定 · 多方案选择 · 实际记录锁定</p></div><button aria-label="关闭周评作息规划" style="font-size:26px;padding:5px" onclick="WeeklyRhythmPlanner.close()">×</button></div><div class="wr-body">
+        <div class="wr-tools"><button class="wr-button" onclick="WeeklyRhythmPlanner.moveWeek(-7)">上周</button><label>游戏周一日期<input id="wr-week" type="date" value="${week}" onchange="WeeklyRhythmPlanner.pickWeek(this.value)"></label><button class="wr-button" onclick="WeeklyRhythmPlanner.moveWeek(7)">下周</button><span class="wr-info">${week} ～ ${core.shift(week,6)}</span></div>
+        <p class="wr-info">这里独立规划具体时间，不修改原“睡眠类型规划”、睡眠研究或捕捉数据。每天只填已确定的分数；空白日保留未定。填写的时间均指游戏记录的有效睡眠，不含按开始后等待入睡的时间。</p>
+        <div class="wr-warn">目标是提高周评S的可行性，不保证S。社区参考线：每日总时长标准差≤60分钟、每日长觉中心标准差≤30分钟。二觉分数受每日100分封顶，但总时长不按8.5小时截断。方案可能需要很长计时，只是游戏约束的数学解，不建议为游戏强行延长实际睡眠。</div>
+        <details><summary>个人时间要求与偏好</summary><div class="wr-grid">${[['firstEarliest','一觉最早开始'],['firstLatest','一觉最晚开始'],['secondEarliest','二觉最早开始'],['secondLatest','二觉硬性最晚开始'],['preferredSecond','二觉最好在此时之前开始']].map(([key,label])=>`<label>${label}<input type="time" value="${esc(s[key])}" onchange="WeeklyRhythmPlanner.setting('${key}',this.value)"></label>`).join('')}<label>长觉偏好<select onchange="WeeklyRhythmPlanner.setting('longRule',this.value)">${[['any','一觉／二觉都可较长'],['preferSecond','尽量二觉更长'],['requireSecond','未完成日必须二觉更长']].map(([v,label])=>`<option value="${v}" ${s.longRule===v?'selected':''}>${label}</option>`).join('')}</select></label><label>每日总计时上限（小时）<input type="number" min="3" max="24" step="0.5" value="${s.maxTotal/60}" onchange="WeeklyRhythmPlanner.setting('maxTotal',Number(this.value)*60)"></label><label>两觉至少间隔（分钟）<input type="number" min="0" max="240" value="${s.gap}" onchange="WeeklyRhythmPlanner.setting('gap',Number(this.value))"></label><label>满分时长口径<select onchange="WeeklyRhythmPlanner.setting('base',Number(this.value))"><option value="510" ${Number(s.base)===510?'selected':''}>8小时30分＝100分</option><option value="660" ${Number(s.base)===660?'selected':''}>11小时＝100分</option></select></label></div><p class="wr-info">时间按本设备当地时区。00:00～03:59是该游戏日的次日凌晨；每觉开始必须属于同一游戏日（04:00切换），结束可跨过次日04:00。硬性时段只约束未完成的觉，实际事实不会被改动。</p></details>
+        <section class="wr-panel"><h4>本周逐日输入</h4><p class="wr-info">填一觉目标后离开输入框，空白二觉会补为剩余分数；不是把13分当作只睡66分钟。未完成日填写的开始／结束时间属于硬要求，可以只填一个。实际已完成的觉必须填齐两项，自动规划不会改它。</p>
+        ${state.days.map((day,i)=>`<div class="wr-day"><div class="wr-tools" style="margin-top:0"><strong>${weekLabels[i]} · ${core.shift(week,i)}</strong><select aria-label="${weekLabels[i]}觉次数" onchange="WeeklyRhythmPlanner.change(${i},'mode',this.value,true)"><option value="two" ${day.mode!=='one'?'selected':''}>两觉</option><option value="one" ${day.mode==='one'?'selected':''}>仅一觉</option></select><button class="wr-button" onclick="WeeklyRhythmPlanner.clearDay(${i})">清除此日输入</button></div><div class="wr-day-grid"><div class="wr-score-block"><div class="wr-score-pair"><label>一觉目标分<input id="wr-score-${i}-1" type="number" min="0" max="100" step="1" value="${esc(day.score1)}" placeholder="未定" oninput="WeeklyRhythmPlanner.change(${i},'score1',this.value)" onblur="WeeklyRhythmPlanner.completeScore(${i})"></label><label>二觉目标分<input id="wr-score-${i}-2" type="number" min="0" max="100" step="1" value="${esc(day.score2)}" placeholder="剩余／未定" oninput="WeeklyRhythmPlanner.change(${i},'score2',this.value)" onchange="WeeklyRhythmPlanner.commit()"></label></div><p class="wr-info">已完成时，以实际时长算出的分数为准；目标不一致会提示。</p></div>${sessionFields(day,i,'first','一觉')}${sessionFields(day,i,'second','二觉')}</div></div>`).join('')}
+        <div class="wr-tools"><button class="wr-button wr-primary" onclick="WeeklyRhythmPlanner.commit()">保存并生成／更新方案</button><span id="wr-save-status" class="wr-info">仅保存输入和设置，不累计保存模拟方案</span></div></section>
+        <section class="wr-panel"><h4>候选方案</h4><p id="wr-progress" class="wr-info">等待输入…</p><div id="wr-results"></div></section>
+        <details><summary>计算口径与试用限制</summary><p class="wr-info">得分按有效分钟÷满分分钟×100四舍五入，并限制两觉之和≤100。每觉按至少90分钟、至多13小时规划；两觉不得重叠，跨日也要给下一已确定日留出间隔。总时长按两觉实际和计算。长觉中心使用24小时时钟最小展开离散度，23:59与00:01不会算作相差一整天；两觉等长时同时检查两种可能中心，并提示判定不确定。网格候选＋有限Beam Search仅作近似，不保证最优；未填分数的日期不被伪造，必须在后续确定后重算。参考：<a href="https://wikiwiki.jp/poke_sleep/睡眠計測の仕様" target="_blank" rel="noopener" style="color:#0f766e">社区睡眠计测与周评研究</a>。阈值和等长处理均不能替代游戏实际结算。</p></details>
+        </div></div>`;
+        void calculate();
+    }
+    function change(index,path,value,commitNow=false){cancel();lastResult=null;const zone=document.getElementById('wr-results');if(zone)zone.innerHTML='<p class="wr-info">输入已改变；离开输入框或点击生成后更新方案。</p>';const parts=path.split('.');if(parts.length===2)state.days[index][parts[0]][parts[1]]=value;else state.days[index][path]=value;if(path==='score2')state.days[index].autoSecond=false;draft();if(commitNow)commit();}
+    function completeScore(index){const row=state.days[index],n=Number(row.score1);if(row.score1!==''&&Number.isInteger(n)&&n>=0&&n<=100&&(row.score2===''||row.autoSecond)){row.score2=String(row.mode==='one'?0:100-n);row.autoSecond=true;const el=document.getElementById(`wr-score-${index}-2`);if(el)el.value=row.score2;}draft();commit();}
+    function setting(key,value){state.settings[key]=value;draft();commit();}
+    function commit(){clearTimeout(saveTimer);persist();cancel();lastResult=null;const progress=document.getElementById('wr-progress');if(progress)progress.textContent='准备重新计算…';calcTimer=setTimeout(()=>void calculate(),180);}
+    function pickWeek(value){if(!core.validDate(value)){showToast('请选择有效日期');return;}persist();cancel();load(core.monday(value));render();}
+    function moveWeek(delta){pickWeek(core.shift(week,delta));}
+    function clearDay(index){if(!confirm('清除此日的目标和本工具内的实际时间？其他睡眠研究、捕捉记录不会删除。'))return;state.days[index]=fresh(week).days[index];persist();render();}
+    function sessionText(session,date){if(!session)return '—';const dayOffset=Math.floor(session.start/1440),endOffset=Math.floor(session.end/1440);return `${dayOffset?'次日 ':''}${core.format(session.start)}～${endOffset?'次日 ':''}${core.format(session.end)}<small>${duration(session.duration)} · ${session.status==='actual'?'实际锁定':'建议／固定要求'}</small>`;}
+    function show(result){
+        const zone=document.getElementById('wr-results'),progress=document.getElementById('wr-progress');if(!zone)return;
+        if(progress)progress.textContent='计算完成（近似候选搜索）';
+        if(result.errors.length){zone.innerHTML=result.errors.map(e=>`<p class="wr-warn">${e.index==null?'':weekLabels[e.index]+'：'}${esc(e.message)}</p>`).join('');return;}
+        if(!result.plans.length){zone.innerHTML='<p class="wr-info">先填今天已确定的分数和时间要求即可，其他日期可以继续留空。</p>';return;}
+        const known=result.knownDays,observed=result.observed;
+        zone.innerHTML=`<p class="wr-warn">目前仅${known}/7天有足够条件。${known<7?'其余日期保留未定，下面的稳定性不代表整周一定S；每天补充分数后重新规划。':'七天均纳入，但仍以游戏实际结算为准。'}${observed?.count?` 已完整记录实际时间${observed.count}天：总时长标准差${observed.durationSD?.toFixed(1)}分钟，长觉中心标准差${observed.centerSD?.toFixed(1)}分钟。`:''}</p>
+        ${result.plans.map(p=>`<section class="wr-panel ${state.selected===p.mode?'wr-selected':''}"><div class="wr-tools"><h4>${p.label}</h4><button class="wr-button ${state.selected===p.mode?'wr-primary':''}" data-mode="${p.mode}" onclick="WeeklyRhythmPlanner.select(this.dataset.mode)">${state.selected===p.mode?'当前参考':'选作当前参考'}</button></div><p class="wr-info ${p.metrics.within?'wr-ok':'wr-bad'}">按已确定${known}天计算：${p.metrics.within?'两项均在社区S参考线内':'至少一项超出社区S参考线，需要调整或接受风险'}。总时长标准差 ${p.metrics.durationSD?.toFixed(1)}分钟；长觉中心标准差 ${p.metrics.centerSD?.toFixed(1)}分钟；平均总计时 ${duration(p.metrics.meanTotal)}；二觉较长 ${p.metrics.secondLong}天。</p>
+        ${p.metrics.within&&(p.metrics.durationSD>50||p.metrics.centerSD>25)?'<p class="wr-warn">此候选接近社区参考边界。实际入睡／起床偏差可能让结果越线，建议选余量更大的方案。</p>':''}${p.metrics.tieDays?'<p class="wr-warn">含两觉等长日：已按两种可能中心取最不利离散度；游戏具体取哪觉尚未确认，不以此保证S。</p>':''}${p.path.some(row=>row.total>720)?'<p class="wr-info">此方案含超过12小时的日总计时，请权衡计时成本；它不是健康作息建议。</p>':''}
+        <div style="overflow:auto"><table><thead><tr><th>游戏日</th><th>一觉</th><th>二觉</th><th>得分／日总时长</th><th>长觉中心／操作</th></tr></thead><tbody>${state.days.map((day,i)=>{const row=p.path.find(r=>r.day===i);if(!row)return `<tr><td>${weekLabels[i]} ${core.shift(week,i)}</td><td colspan="4">分配未定，暂不安排。新比例输入后再规划。</td></tr>`;const mismatch=(core.score?((day.score1!==''&&Number(day.score1)!==row.firstScore)||(day.mode!=='one'&&day.score2!==''&&Number(day.score2)!==row.secondScore)):false);return `<tr><td>${weekLabels[i]} ${core.shift(week,i)}</td><td>${sessionText(row.first)}</td><td>${sessionText(row.second)}</td><td>${row.firstScore}＋${row.secondScore}<small>总时长 ${duration(row.total)}</small>${mismatch?'<small class="wr-bad">实际得分与目标不一致，实际记录未被改动</small>':''}</td><td>${row.centers.map(core.format).join(' 或 ')}<small>${row.second&&row.second.duration>row.first.duration?'二觉较长':row.second&&row.second.duration===row.first.duration?'两觉等长':'一觉较长'}</small>${!row.actual?`<button class="wr-button" data-mode="${p.mode}" data-day="${i}" onclick="WeeklyRhythmPlanner.fixDay(this.dataset.mode,Number(this.dataset.day))">固定此日建议</button>`:''}</td></tr>`;}).join('')}</tbody></table></div></section>`).join('')}
+        <p class="wr-info">“选作参考”不会把预测记成事实。“固定此日建议”只锁定未完成的时间要求；已完成记录保持原样。若几种方案相同，说明当前约束下尚未找到有意义的其他形状，不会为了凑数量伪造差异。</p>`;
+        lastResult=result;
+    }
+    let lastResult=null;
+    async function calculate(){
+        cancel();const token=generation,progress=document.getElementById('wr-progress');if(!progress)return;
+        progress.textContent='正在后台生成候选，不改动实际记录…';const input=JSON.parse(JSON.stringify(state));
+        const report=p=>{if(token===generation){const el=document.getElementById('wr-progress');if(el)el.textContent=`${p.stage} ${p.step}/${p.total}`;}};
+        try{
+            if(typeof Worker!=='undefined'){
+                const source=`const core=(${createWeeklyRhythmCore.toString()})();onmessage=async event=>{try{const r=await core.plan(event.data.days,event.data.settings,p=>postMessage({progress:p}));postMessage({result:r});}catch(error){postMessage({error:error.message});}};`;
+                try{url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));worker=new Worker(url);}catch(_){if(url)URL.revokeObjectURL(url);url=null;worker=null;}
+                if(worker){worker.onmessage=e=>{if(token!==generation)return;if(e.data.progress)report(e.data.progress);else{worker.terminate();worker=null;URL.revokeObjectURL(url);url=null;if(e.data.error)show({errors:[{message:e.data.error}],plans:[]});else show(e.data.result);}};worker.onerror=()=>{if(token===generation){if(worker)worker.terminate();worker=null;if(url)URL.revokeObjectURL(url);url=null;progress.textContent='后台计算失败，输入已保留，请重试';}};worker.postMessage(input);return;}
+            }
+            const result=await core.plan(input.days,input.settings,p=>{if(token!==generation)throw new Error('cancelled');report(p);});if(token===generation)show(result);
+        }catch(error){if(token===generation&&error.message!=='cancelled')show({errors:[{message:error.message}],plans:[]});}
+    }
+    function select(mode){state.selected=mode;persist();if(lastResult)show(lastResult);}
+    function fixDay(mode,index){const row=lastResult?.plans.find(p=>p.mode===mode)?.path.find(p=>p.day===index);if(!row)return;if(!confirm('将这一天未完成的建议时间固定为要求？不会记为实际已完成。'))return;for(const key of ['first','second'])if(row[key]&&state.days[index][key].status!=='actual'){state.days[index][key].start=core.format(row[key].start);state.days[index][key].end=core.format(row[key].end);}persist();render();}
+    return {open,close,change,completeScore,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay};
+})();
+function openWeeklyRhythmPlannerModal(){return WeeklyRhythmPlanner.open();}
+
 function openSleepSplitPlannerModal() {
     closeSleepSplitPlannerModal();
     let saved={}; try { saved=JSON.parse(localStorage.getItem('sleep_split_planner_inputs_v1')||'{}')||{}; } catch(_) {}
@@ -31953,6 +32215,7 @@ function openSleepSplitPlannerModal() {
         { id: 'ideal', group: 'cooking', label: '理论最优策略', desc: '料理、树果与技能理想解', icon: 'fa-brain', tone: 'bg-cyan-50 text-cyan-800', action: 'openIdealStrategyModal' },
 
         { id: 'sleepType', group: 'sleep', label: '睡眠类型规划', desc: '记录比例并规划下一觉', icon: 'fa-moon', tone: 'bg-violet-50 text-violet-700', action: 'openSleepTypePlannerModal' },
+        { id: 'weeklyRhythm', group: 'sleep', label: '周评作息规划', desc: '逐日拆觉与多方案周评规划', icon: 'fa-calendar-days', tone: 'bg-cyan-50 text-cyan-800', action: 'openWeeklyRhythmPlannerModal' },
         { id: 'sleepSplit', group: 'sleep', label: '拆觉规划', desc: '当前能量拆法与 x+y 数轴', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', action: 'openSleepSplitPlannerModal' },
         { id: 'sleepEncounter', group: 'sleep', label: '宝可梦狙击', desc: '遇见期望、岛屿与能量曲线', icon: 'fa-binoculars', tone: 'bg-teal-50 text-teal-800', action: 'openSleepEncounterPlannerModal' },
         { id: 'dailyReward', group: 'sleep', label: '每日奖励打卡', desc: '小日历查漏与快速补录', icon: 'fa-gift', tone: 'bg-amber-50 text-amber-800', action: 'openDailyRewardQuickModal' },
