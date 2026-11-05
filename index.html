@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.03.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.05.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -31914,12 +31914,13 @@ function createWeeklyRhythmCore() {
     function monday(date){const d=new Date(date+'T12:00:00');return shift(date,-((d.getDay()+6)%7));}
     function score(duration,base=510){return Math.min(100,Math.round(duration/base*100));}
     function goal(value){return value===''||value==null?null:Number(value);}
+    function delay(session){return session?.startMode==='measurement'?5:0;}
     function fixed(session){
         if(!session?.start||!session?.end)return null;
         const start=gameClock(session.start),endClock=clock(session.end);
         if(start==null||endClock==null)return null;
         let end=endClock;while(end<=start)end+=DAY;
-        return {start,end,duration:end-start};
+        return {start,end,effectiveStart:start+delay(session),startMode:session?.startMode||'effective',duration:end-start-delay(session)};
     }
     function sd(values){if(!values.length)return null;const avg=values.reduce((a,b)=>a+b,0)/values.length;return Math.sqrt(Math.max(0,values.reduce((sum,n)=>sum+(n-avg)**2,0)/values.length));}
     function circular(values){
@@ -31976,8 +31977,8 @@ function createWeeklyRhythmCore() {
     }
     function candidate(first,second,index,s,actual=false){
         const total=first.duration+(second?.duration||0),long=second&&second.duration>first.duration?second:first;
-        const centers=[(long.start+long.duration/2)%DAY];
-        if(second&&second.duration===first.duration)centers.push((second.start+second.duration/2)%DAY);
+        const centers=[(long.start+delay(long)+long.duration/2)%DAY];
+        if(second&&second.duration===first.duration)centers.push((second.start+delay(second)+second.duration/2)%DAY);
         const firstScore=score(first.duration,s.base),secondScore=second?Math.min(100-firstScore,score(second.duration,s.base)):0;
         return {day:index,first,second,total,centers,firstScore,secondScore,actual,late:second&&gameClock(s.preferredSecond)!=null?Math.max(0,second.start-gameClock(s.preferredSecond)):0,
             absoluteStart:index*DAY+first.start,absoluteEnd:index*DAY+(second?.end||first.end)};
@@ -31989,6 +31990,7 @@ function createWeeklyRhythmCore() {
     }
     function dayOptions(row,index,s,anchors){
         const firstRaw=row.first||{},secondRaw=row.second||{},one=row.mode==='one',given1=goal(row.score1),g2=goal(row.score2),warnings=[];
+        const wait1=delay(firstRaw),wait2=delay(secondRaw);
         for(const [key,label]of [['first','一觉'],['second','二觉']])if(!(one&&key==='second')&&row[key]?.status==='actual'&&!fixed(row[key]))warnings.push(`${label}标为已完成但时间未齐：缺失部分仅作预估，不计入实际完成日，也不会回填实际时间`);
         const active=given1!=null||g2!=null||firstRaw.start||firstRaw.end||secondRaw.start||secondRaw.end;
         if(!active)return {pending:true,options:[],warnings};
@@ -32033,20 +32035,20 @@ function createWeeklyRhythmCore() {
                 if(!one&&!actual2&&!matchDuration(d2,wanted2,100-score1,s))continue;
                 if(d1+d2>s.maxTotal&&!(actual1&&(one||actual2))){rejections.add(`每日总计时超过设定上限${s.maxTotal}分钟`);continue;}
                 if(!one&&s.longRule==='requireSecond'&&d2<=d1&&!actual2){rejections.add('不满足“未完成日必须二觉更长”的要求');continue;}
-                const firstStarts=f1?[f1.start]:starts(firstRaw,d1,started1?gameClock(firstRaw.start):bound(s,'firstEarliest'),started1?gameClock(firstRaw.start):bound(s,'firstLatest'),anchors.centers.map(c=>c-d1/2).flatMap(n=>[n,n+DAY]));
+                const firstStarts=f1?[f1.start]:starts(firstRaw,d1+wait1,started1?gameClock(firstRaw.start):bound(s,'firstEarliest'),started1?gameClock(firstRaw.start):bound(s,'firstLatest'),anchors.centers.map(c=>c-wait1-d1/2).flatMap(n=>[n,n+DAY]));
                 for(const start1 of firstStarts){
                     if(!actual1&&!started1&&(start1<bound(s,'firstEarliest')||start1>bound(s,'firstLatest')))continue;
-                    if(!actual1&&!endMatches(firstRaw,start1,d1))continue;
-                    const first={start:start1,end:start1+d1,duration:d1,status:actual1?'actual':started1?'started':'planned'};
+                    if(!actual1&&!endMatches(firstRaw,start1,d1+wait1))continue;
+                    const first={start:start1,effectiveStart:start1+wait1,startMode:firstRaw.startMode||'effective',end:start1+wait1+d1,duration:d1,status:actual1?'actual':started1?'started':'planned'};
                     const earliest=one?0:Math.max(first.end+Number(s.gap),started2?gameClock(secondRaw.start):bound(s,'secondEarliest'));
                     const latest=started2?gameClock(secondRaw.start):bound(s,'secondLatest');
                     if(!one&&earliest>latest)rejections.add(`一觉结束后还需间隔${s.gap}分钟，无法赶上二觉${started2?'已开始时间'+secondRaw.start:'最晚开始'+format(latest)}`);
-                    const secondStarts=one?[0]:f2?[f2.start]:starts(secondRaw,d2,earliest,latest,[earliest,...(gameClock(s.preferredSecond)==null?[]:[gameClock(s.preferredSecond)]),...anchors.centers.flatMap(c=>[c-d2/2,c+DAY-d2/2])]);
+                    const secondStarts=one?[0]:f2?[f2.start]:starts(secondRaw,d2+wait2,earliest,latest,[earliest,...(gameClock(s.preferredSecond)==null?[]:[gameClock(s.preferredSecond)]),...anchors.centers.flatMap(c=>[c-wait2-d2/2,c+DAY-wait2-d2/2])]);
                     for(const start2 of secondStarts){
                         if(!one&&start2<first.end+(actual1&&actual2?0:Number(s.gap))){rejections.add(`两觉时间重叠或间隔不足${s.gap}分钟`);continue;}
                         if(!one&&!actual2&&!started2&&(start2<bound(s,'secondEarliest')||start2>bound(s,'secondLatest')))continue;
-                        if(!one&&!actual2&&!endMatches(secondRaw,start2,d2))continue;
-                        const second=one?null:{start:start2,end:start2+d2,duration:d2,status:actual2?'actual':started2?'started':'planned'};
+                        if(!one&&!actual2&&!endMatches(secondRaw,start2,d2+wait2))continue;
+                        const second=one?null:{start:start2,effectiveStart:start2+wait2,startMode:secondRaw.startMode||'effective',end:start2+wait2+d2,duration:d2,status:actual2?'actual':started2?'started':'planned'};
                         const key=[start1,d1,start2,d2].join(':');if(dedupe.has(key))continue;dedupe.add(key);
                         result.push({...candidate(first,second,index,s,actual1&&(one||actual2)),provisionalScores:given1==null&&!f1,incompleteActual:(!actual1&&firstRaw.status==='actual')||(!one&&!actual2&&secondRaw.status==='actual')});
                     }
@@ -32078,7 +32080,7 @@ function createWeeklyRhythmCore() {
         const s=settings(rawSettings);validateSettings(s);
         const totals=[];for(let n=510;n<=s.maxTotal;n+=30)totals.push(n);totals.push(Number(s.maxTotal));
         const centers=[];for(let n=0;n<DAY;n+=30)centers.push(n);
-        for(const row of rows){const a=fixed(row.first),b=fixed(row.second);if(a){centers.push((a.start+a.duration/2)%DAY);if(row.mode==='one')totals.push(a.duration);}if(b)centers.push((b.start+b.duration/2)%DAY);if(a&&b)totals.push(a.duration+b.duration);const g=goal(row.score1);if(g!=null&&Number.isFinite(g)){const nominal=Math.round(g*s.base/100);totals.push(nominal+MIN,nominal*2+2);const start=gameClock(row.first?.start);if(start!=null)centers.push((start+nominal/2)%DAY);}}
+        for(const row of rows){const a=fixed(row.first),b=fixed(row.second);if(a){centers.push((a.start+delay(a)+a.duration/2)%DAY);if(row.mode==='one')totals.push(a.duration);}if(b)centers.push((b.start+delay(b)+b.duration/2)%DAY);if(a&&b)totals.push(a.duration+b.duration);const g=goal(row.score1);if(g!=null&&Number.isFinite(g)){const nominal=Math.round(g*s.base/100);totals.push(nominal+MIN,nominal*2+2);const start=gameClock(row.first?.start);if(start!=null)centers.push((start+delay(row.first)+nominal/2)%DAY);}}
         const anchors={totals:[...new Set(totals)],centers:[...new Set(centers)]},days=[],errors=[],pending=[],warnings=[];
         for(let i=0;i<rows.length;i++)try{const d=dayOptions(rows[i],i,s,anchors);warnings.push(...(d.warnings||[]).map(message=>({index:i,message})));if(d.pending)pending.push(i);else days.push({index:i,...d});progress({stage:'日候选',step:i+1,total:rows.length});await new Promise(r=>setTimeout(r,0));}catch(error){errors.push({index:i,message:error.message});}
         if(errors.length)return {errors,pending,warnings,plans:[],settings:s};
@@ -32117,11 +32119,11 @@ function createWeeklyRhythmCore() {
         const capped=isSecond&&remaining!=null&&wanted===remaining;
         const nominal=Math.max(range[0],Math.min(range[1],Math.round(wanted*s.base/100)));
         const d=capped?range[0]:nominal,start=gameClock(r.start),end=clock(r.end);
-        if(start!=null)return {kind:'end',time:start+d,duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
-        if(end!=null)return {kind:'start',time:((end-d)%DAY+DAY)%DAY,duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
+        if(start!=null)return {kind:'end',time:start+delay(r)+d,duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
+        if(end!=null)return {kind:'start',time:((end-d-delay(r))%DAY+DAY)%DAY,duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
         return {kind:'duration',duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
     }
-    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,sd,circular,circularRange,metrics,settings,dayOptions,estimate,plan};
+    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,delay,sd,circular,circularRange,metrics,settings,dayOptions,estimate,plan};
 }
 
 var WeeklyRhythmPlanner=(()=>{
@@ -32130,9 +32132,10 @@ var WeeklyRhythmPlanner=(()=>{
     const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const draftKey=()=>`sleep_week_rhythm_draft_${currentCloudUser?.id||'guest'}`;
     const duration=n=>n==null?'—':`${Math.floor(n/60)}小时${Math.round(n%60)}分`;
-    const freshSession=()=>({status:'planned',start:'',end:''});
+    const freshSession=()=>({status:'planned',start:'',end:'',startMode:'measurement'});
+    function normalizeSession(raw){return {...freshSession(),...raw,startMode:raw?.startMode==='measurement'?'measurement':raw?.startMode==='effective'||raw?.start||raw?.end?'effective':'measurement'};}
     function fresh(w){return {version:1,week:w,settings:core.settings(),selected:'early',days:Array.from({length:7},()=>({mode:'two',score1:'',score2:'',autoSecond:false,first:freshSession(),second:freshSession()})),updatedAt:''};}
-    function normalize(raw,w){const d=fresh(w);return {...d,...raw,week:w,settings:core.settings(raw?.settings),days:d.days.map((day,i)=>({...day,...raw?.days?.[i],first:{...day.first,...raw?.days?.[i]?.first},second:{...day.second,...raw?.days?.[i]?.second}}))};}
+    function normalize(raw,w){const d=fresh(w);return {...d,...raw,week:w,settings:core.settings(raw?.settings),days:d.days.map((day,i)=>({...day,...raw?.days?.[i],first:normalizeSession(raw?.days?.[i]?.first),second:normalizeSession(raw?.days?.[i]?.second)}))};}
     function load(w){
         const id=PREFIX+w;let draft=null;try{draft=JSON.parse(localStorage.getItem(draftKey())||'null');}catch(_){}
         const record=(historyLogs||[]).filter(row=>row.type===TYPE&&row.id===id).reduce((best,row)=>(Date.parse(row.updatedAt)||0)>(Date.parse(best?.updatedAt)||0)?row:best,null);
@@ -32156,14 +32159,14 @@ var WeeklyRhythmPlanner=(()=>{
     function estimateHtml(day,key){
         const e=core.estimate(day,key,state.settings);
         if(e.kind==='none'||e.kind==='invalid')return '<span class="'+(e.kind==='invalid'?'wr-bad':'')+'">'+esc(e.text)+'</span>';
-        if(e.kind==='actual'||e.kind==='fixed')return esc(e.text)+' · '+duration(e.duration)+' · '+e.points+'分';
+        if(e.kind==='actual'||e.kind==='fixed')return esc(e.text)+' · 有效'+duration(e.duration)+' · '+e.points+'分'+(day[key]?.startMode==='measurement'?'（已扣除5分钟入睡等待）':'（有效入睡口径，不再扣除）');
         const timing=e.kind==='end'?'预计结束 '+(e.time>=1440?'次日 ':'')+core.format(e.time):e.kind==='start'?'预计开始 '+core.format(e.time):'预计时长';
-        return '<strong style="color:#0f766e">'+timing+'</strong> · '+duration(e.duration)+'（'+e.points+'分）'+(e.capped?'<br>按最短有效计时估算；此觉受剩余分数封顶，可继续延长，结束时间不是唯一。':'<br>按目标分数的常用时长估算，四舍五入允许几分钟浮动。')+(e.pendingActual?'<br><span class="wr-bad">实际时间未填齐，以上只是预估，不计作已完成。</span>':'');
+        return '<strong style="color:#0f766e">'+timing+'</strong> · 有效'+duration(e.duration)+'（'+e.points+'分）'+(day[key]?.startMode==='measurement'?' · 计测含5分钟等待':'')+(e.capped?'<br>按最短有效计时估算；此觉受剩余分数封顶，可继续延长，结束时间不是唯一。':'<br>按目标分数的常用时长估算，四舍五入允许几分钟浮动。')+(e.pendingActual?'<br><span class="wr-bad">实际时间未填齐，以上只是预估，不计作已完成。</span>':'');
     }
     function updateEstimates(index){for(const key of ['first','second']){const node=document.getElementById('wr-estimate-'+index+'-'+key);if(node)node.innerHTML=estimateHtml(state.days[index],key);}}
     function sessionFields(day,index,key,label){
         const r=day[key],data=' data-index="'+index+'" data-session="'+key+'"';
-        return '<div class="wr-session"><label>'+label+'<select'+data+' data-path="'+key+'.status" onchange="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value,true)"><option value="planned" '+(!['actual','started'].includes(r.status)?'selected':'')+'>未完成／时间要求</option><option value="started" '+(r.status==='started'?'selected':'')+'>已开始／预计结束</option><option value="actual" '+(r.status==='actual'?'selected':'')+'>实际已完成（填齐后锁定）</option></select></label><div class="wr-time-pair"><label>有效入睡／选填<input type="time"'+data+' data-path="'+key+'.start" value="'+esc(r.start)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label><label>有效结束／选填<input type="time"'+data+' data-path="'+key+'.end" value="'+esc(r.end)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label></div><div id="wr-estimate-'+index+'-'+key+'" class="wr-info" style="margin-top:8px;background:#f0fdfa;border-radius:8px;padding:8px">'+estimateHtml(day,key)+'</div><button class="wr-button"'+data+' style="margin-top:5px" onclick="WeeklyRhythmPlanner.useEstimate(Number(this.dataset.index),this.dataset.session)">采用预计时间为要求</button></div>';
+        return '<div class="wr-session"><label>'+label+'<select'+data+' data-path="'+key+'.status" onchange="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value,true)"><option value="planned" '+(!['actual','started'].includes(r.status)?'selected':'')+'>未完成／时间要求</option><option value="started" '+(r.status==='started'?'selected':'')+'>已开始／预计结束</option><option value="actual" '+(r.status==='actual'?'selected':'')+'>实际已完成（填齐后锁定）</option></select></label><label style="margin-top:6px">开始时间口径<select'+data+' onchange="WeeklyRhythmPlanner.changeStartMode(Number(this.dataset.index),this.dataset.session,this.value)"><option value="measurement" '+(r.startMode==='measurement'?'selected':'')+'>开始计测（前5分钟不计入）</option><option value="effective" '+(r.startMode!=='measurement'?'selected':'')+'>有效入睡（旧记录，不再扣除）</option></select></label><div class="wr-time-pair"><label>'+(r.startMode==='measurement'?'开始计测／选填':'有效入睡／旧口径')+'<input type="time"'+data+' data-path="'+key+'.start" value="'+esc(r.start)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label><label>有效结束／选填<input type="time"'+data+' data-path="'+key+'.end" value="'+esc(r.end)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label></div><div id="wr-estimate-'+index+'-'+key+'" class="wr-info" style="margin-top:8px;background:#f0fdfa;border-radius:8px;padding:8px">'+estimateHtml(day,key)+'</div><button class="wr-button"'+data+' style="margin-top:5px" onclick="WeeklyRhythmPlanner.useEstimate(Number(this.dataset.index),this.dataset.session)">采用预计时间为要求</button></div>';
     }
     function render(){
         const modal=document.getElementById('weekly-rhythm-planner-modal');if(!modal)return;
@@ -32172,18 +32175,30 @@ var WeeklyRhythmPlanner=(()=>{
         #weekly-rhythm-planner-modal .wr-shell{width:100%;max-width:1120px;max-height:94vh;background:white;border-radius:22px;overflow:hidden;display:flex;flex-direction:column;color:#334155;box-shadow:0 20px 60px #0003}#weekly-rhythm-planner-modal .wr-head{padding:16px 22px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(110deg,#0f766e,#2563eb);color:white}#weekly-rhythm-planner-modal .wr-head h3{font-weight:900;font-size:20px}#weekly-rhythm-planner-modal .wr-body{padding:18px;overflow:auto}#weekly-rhythm-planner-modal .wr-info{font-size:12px;color:#64748b;line-height:1.8}#weekly-rhythm-planner-modal .wr-warn{font-size:12px;line-height:1.8;padding:12px;border-radius:12px;background:#fffbeb;color:#92400e;margin:10px 0}#weekly-rhythm-planner-modal .wr-panel{padding:15px;border:1px solid #cbd5e1;border-radius:16px;margin:12px 0}#weekly-rhythm-planner-modal .wr-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}#weekly-rhythm-planner-modal input,#weekly-rhythm-planner-modal select{min-width:0;border:1px solid #cbd5e1;border-radius:8px;padding:8px;background:white;color:#334155;font-size:14px}#weekly-rhythm-planner-modal label{font-size:12px;font-weight:700;display:block}#weekly-rhythm-planner-modal label input,#weekly-rhythm-planner-modal label select{display:block;width:100%;margin-top:4px}#weekly-rhythm-planner-modal .wr-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}#weekly-rhythm-planner-modal .wr-button{padding:8px 12px;border:1px solid #99f6e4;border-radius:10px;background:#f0fdfa;color:#0f766e;font-size:13px;font-weight:700;cursor:pointer}#weekly-rhythm-planner-modal .wr-primary{background:#0f766e;color:white}#weekly-rhythm-planner-modal .wr-day{border:1px solid #e2e8f0;border-radius:12px;padding:12px;margin:10px 0}#weekly-rhythm-planner-modal .wr-day-grid{display:grid;grid-template-columns:170px 1fr 1fr;gap:12px}#weekly-rhythm-planner-modal .wr-time-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}#weekly-rhythm-planner-modal .wr-score-pair{display:grid;grid-template-columns:1fr 1fr;gap:6px}#weekly-rhythm-planner-modal h4{font-size:16px;font-weight:800}#weekly-rhythm-planner-modal details{margin:12px 0}#weekly-rhythm-planner-modal summary{cursor:pointer;font-size:14px;font-weight:700;color:#0f766e}#weekly-rhythm-planner-modal table{width:100%;border-collapse:collapse;font-size:12px}#weekly-rhythm-planner-modal td,#weekly-rhythm-planner-modal th{padding:10px 7px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top;white-space:nowrap}#weekly-rhythm-planner-modal small{display:block;color:#64748b;margin-top:3px}#weekly-rhythm-planner-modal .wr-ok{color:#047857}#weekly-rhythm-planner-modal .wr-bad{color:#b45309}#weekly-rhythm-planner-modal .wr-selected{border:2px solid #0d9488;background:#f0fdfa}@media(max-width:700px){#weekly-rhythm-planner-modal .wr-body{padding:10px}#weekly-rhythm-planner-modal .wr-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#weekly-rhythm-planner-modal .wr-day-grid{grid-template-columns:1fr 1fr}#weekly-rhythm-planner-modal .wr-score-block{grid-column:1/-1}#weekly-rhythm-planner-modal input,#weekly-rhythm-planner-modal select{font-size:16px}#weekly-rhythm-planner-modal .wr-time-pair{grid-template-columns:1fr}#weekly-rhythm-planner-modal .wr-day-grid{gap:8px}}
         </style><div class="wr-shell"><div class="wr-head"><div><h3>周评作息规划 · 试用</h3><p style="font-size:12px;opacity:.85">每天逐步确定 · 多方案选择 · 实际记录锁定</p></div><button aria-label="关闭周评作息规划" style="font-size:26px;padding:5px" onclick="WeeklyRhythmPlanner.close()">×</button></div><div class="wr-body">
         <div class="wr-tools"><button class="wr-button" onclick="WeeklyRhythmPlanner.moveWeek(-7)">上周</button><label>游戏周一日期<input id="wr-week" type="date" value="${week}" onchange="WeeklyRhythmPlanner.pickWeek(this.value)"></label><button class="wr-button" onclick="WeeklyRhythmPlanner.moveWeek(7)">下周</button><span class="wr-info">${week} ～ ${core.shift(week,6)}</span></div>
-        <p class="wr-info">这里独立规划具体时间，不修改原“睡眠类型规划”、睡眠研究或捕捉数据。每天只填已确定的分数；空白日保留未定。填写的时间均指游戏记录的有效睡眠，不含按开始后等待入睡的时间。</p>
+        <p class="wr-info">这里独立规划具体时间，不修改原“睡眠类型规划”、睡眠研究或捕捉数据。每天只填已确定的分数；空白日保留未定。新录入填写开始计测时间，系统将前5分钟作为入睡等待，不计入有效时长、得分或长觉中心；结束时间不变。旧记录保留有效入睡口径，不重复扣除。</p>
         <div class="wr-warn">目标是提高周评S的可行性，不保证S。本工具按最大差值规划：每日总时长最长减最短、每日长觉中心最短跨日覆盖范围，默认均≤60分钟，可在下方分别调整；这是自定义约束，不是游戏S评级的官方阈值。二觉分数受每日100分封顶，但总时长不按8.5小时截断。方案可能需要很长计时，只是游戏约束的数学解，不建议为游戏强行延长实际睡眠。</div>
         <details><summary>个人时间要求与偏好</summary><div class="wr-grid">${[['firstEarliest','一觉最早开始'],['firstLatest','一觉最晚开始'],['secondEarliest','二觉最早开始'],['secondLatest','二觉硬性最晚开始'],['preferredSecond','二觉最好在此时之前开始']].map(([key,label])=>`<label>${label}<input type="time" value="${esc(s[key])}" onchange="WeeklyRhythmPlanner.setting('${key}',this.value)"></label>`).join('')}<label>长觉偏好<select onchange="WeeklyRhythmPlanner.setting('longRule',this.value)">${[['any','一觉／二觉都可较长'],['preferSecond','尽量二觉更长'],['requireSecond','未完成日必须二觉更长']].map(([v,label])=>`<option value="${v}" ${s.longRule===v?'selected':''}>${label}</option>`).join('')}</select></label><label>日总时长最大差值（分钟）<input type="number" min="0" max="1440" step="1" value="${s.maxDurationRange}" onchange="WeeklyRhythmPlanner.setting('maxDurationRange',Number(this.value))"></label><label>长觉中心最大差值（分钟）<input type="number" min="0" max="1440" step="1" value="${s.maxCenterRange}" onchange="WeeklyRhythmPlanner.setting('maxCenterRange',Number(this.value))"></label><label>每日总计时上限（小时）<input type="number" min="3" max="26" step="0.5" value="${s.maxTotal===''?'':s.maxTotal/60}" onchange="WeeklyRhythmPlanner.setting('maxTotal',this.value===''?'':Number(this.value)*60)"></label><label>两觉至少间隔（分钟）<input type="number" min="0" max="240" value="${s.gap}" onchange="WeeklyRhythmPlanner.setting('gap',Number(this.value))"></label><label>满分时长口径<select onchange="WeeklyRhythmPlanner.setting('base',Number(this.value))"><option value="510" ${Number(s.base)===510?'selected':''}>8小时30分＝100分</option><option value="660" ${Number(s.base)===660?'selected':''}>11小时＝100分</option></select></label></div><p class="wr-info">时间按本设备当地时区。00:00～03:59是该游戏日的次日凌晨；每觉开始必须属于同一游戏日（04:00切换），结束可跨过次日04:00。允许时段可留空（该方向不额外限制），最好入睡时间也可留空；总计时上限留空时只受两觉各13小时的计时规则限制。已开始且填写了入睡时间时，该时间优先于通用允许开始时段；预计结束仍受目标分数、两觉顺序、间隔和总计时上限约束。完整实际时间不会被改动。</p></details>
         <section class="wr-panel"><h4>本周逐日输入</h4><p class="wr-info">填一觉目标后离开输入框，空白二觉会补为剩余分数；不是把13分当作只睡66分钟。开始、结束都可留空，也可以只填一个；分数＋开始会即时显示预计结束。实际时间填齐后才锁定；尚未结束或缺一项也可试算，但预测绝不算成实际完成。</p>
         ${state.days.map((day,i)=>`<div class="wr-day"><div class="wr-tools" style="margin-top:0"><strong>${weekLabels[i]} · ${core.shift(week,i)}</strong><select aria-label="${weekLabels[i]}觉次数" onchange="WeeklyRhythmPlanner.change(${i},'mode',this.value,true)"><option value="two" ${day.mode!=='one'?'selected':''}>两觉</option><option value="one" ${day.mode==='one'?'selected':''}>仅一觉</option></select><button class="wr-button" onclick="WeeklyRhythmPlanner.clearDay(${i})">清除此日输入</button></div><div class="wr-day-grid"><div class="wr-score-block"><div class="wr-score-pair"><label>一觉目标分<input id="wr-score-${i}-1" type="number" min="0" max="100" step="1" value="${esc(day.score1)}" placeholder="未定" oninput="WeeklyRhythmPlanner.change(${i},'score1',this.value)" onblur="WeeklyRhythmPlanner.completeScore(${i})"></label><label>二觉目标分<input id="wr-score-${i}-2" type="number" min="0" max="100" step="1" value="${esc(day.score2)}" placeholder="剩余／未定" oninput="WeeklyRhythmPlanner.change(${i},'score2',this.value)" onblur="WeeklyRhythmPlanner.completeScore(${i},'second')"></label></div><p class="wr-info">已完成时，以实际时长算出的分数为准；目标不一致会提示。</p></div>${sessionFields(day,i,'first','一觉')}${sessionFields(day,i,'second','二觉')}</div></div>`).join('')}
         <div class="wr-tools"><button class="wr-button wr-primary" onclick="WeeklyRhythmPlanner.commit()">保存并生成／更新方案</button><span id="wr-save-status" class="wr-info">仅保存输入和设置，不累计保存模拟方案</span></div></section>
         <section class="wr-panel"><h4>候选方案</h4><p id="wr-progress" class="wr-info">等待输入…</p><div id="wr-results"></div></section>
-        <details><summary>计算口径与试用限制</summary><p class="wr-info">得分按有效分钟÷满分分钟×100四舍五入，并限制两觉之和≤100。每觉按至少90分钟、至多13小时规划；两觉不得重叠，跨日也要给下一已确定日留出间隔。总时长按两觉实际和计算。最大差值为主要约束：总时长取最长减最短；长觉中心取24小时时钟能覆盖全部中心的最短范围，23:59与00:01只差2分钟；标准差仅辅助展示，不参与达标判断。先尽量减少超限，再尽量缩小两项差值，最后比较早睡／二觉长短等偏好。两觉等长时同时检查两种可能中心，并提示判定不确定。网格候选＋有限Beam Search仅作近似，不保证最优；未填分数的日期不被伪造，必须在后续确定后重算。参考：<a href="https://wikiwiki.jp/poke_sleep/睡眠計測の仕様" target="_blank" rel="noopener" style="color:#0f766e">社区睡眠计测与周评研究</a>。阈值和等长处理均不能替代游戏实际结算。</p></details>
+        <details><summary>计算口径与试用限制</summary><p class="wr-info">得分按有效分钟÷满分分钟×100四舍五入，并限制两觉之和≤100。每觉按至少90分钟、至多13小时规划；两觉不得重叠，跨日也要给下一已确定日留出间隔。总时长按两觉有效时长之和计算，计测开始后各扣除5分钟；长觉按有效时长判断，中心取有效入睡到结束的中点。旧记录按有效入睡口径，不再扣除。最大差值为主要约束：总时长取最长减最短；长觉中心取24小时时钟能覆盖全部中心的最短范围，23:59与00:01只差2分钟；标准差仅辅助展示，不参与达标判断。先尽量减少超限，再尽量缩小两项差值，最后比较早睡／二觉长短等偏好。两觉等长时同时检查两种可能中心，并提示判定不确定。网格候选＋有限Beam Search仅作近似，不保证最优；未填分数的日期不被伪造，必须在后续确定后重算。参考：<a href="https://wikiwiki.jp/poke_sleep/睡眠計測の仕様" target="_blank" rel="noopener" style="color:#0f766e">社区睡眠计测与周评研究</a>。阈值和等长处理均不能替代游戏实际结算。</p></details>
         </div></div>`;
         void calculate();
     }
     function change(index,path,value,commitNow=false){cancel();lastResult=null;const zone=document.getElementById('wr-results');if(zone)zone.innerHTML='<p class="wr-info">输入已改变；离开输入框或点击生成后更新方案。</p>';const parts=path.split('.');if(parts.length===2)state.days[index][parts[0]][parts[1]]=value;else state.days[index][path]=value;if(path==='score2')state.days[index].autoSecond=false;if(path==='score1')state.days[index].autoFirst=false;updateEstimates(index);draft();if(commitNow)commit();}
+    function changeStartMode(index,key,mode){
+        if(!['measurement','effective'].includes(mode))return;
+        const r=state.days[index][key],old=r.startMode||'effective';if(old===mode)return;
+        const start=core.gameClock(r.start),adjust=(old==='measurement'?5:0)-(mode==='measurement'?5:0);
+        if(start!=null){
+            const next=start+adjust;
+            if(core.gameClock(core.format(next))!==next){showToast('切换口径会跨过04:00游戏日边界，请核对日期后重新录入');render();return;}
+            if(!confirm('切换时间口径时会换算开始时间，保持原有效睡眠区间和结束时间不变。继续吗？')){render();return;}
+            r.start=core.format(next);
+        }
+        r.startMode=mode;persist();render();
+    }
     function completeScore(index,edited='first'){const row=state.days[index],source=edited==='second'?'score2':'score1',target=edited==='second'?'score1':'score2',auto=edited==='second'?'autoFirst':'autoSecond',n=Number(row[source]);if(row[source]!==''&&Number.isInteger(n)&&n>=0&&n<=100&&(row[target]===''||row[auto])&&!(target==='score1'&&row.first.status==='actual'&&core.fixed(row.first))){row[target]=String(row.mode==='one'&&target==='score2'?0:100-n);row[auto]=true;const el=document.getElementById(`wr-score-${index}-${target==='score1'?1:2}`);if(el)el.value=row[target];}updateEstimates(index);draft();commit();}
     function useEstimate(index,key){const row=state.days[index],e=core.estimate(row,key,state.settings);if(!['start','end'].includes(e.kind)){showToast('请先填分数和开始／结束中的一项；完整实际时间不会覆盖');return;}if(row[key].status==='actual'&&!confirm('这只是预计时间，采用后此觉将改为“已开始／预计结束”，不会记为实际完成。继续吗？'))return;row[key][e.kind==='end'?'end':'start']=core.format(e.time);if(row[key].status==='actual')row[key].status='started';persist();render();}
     function setting(key,value){state.settings[key]=value;state.days.forEach((_,i)=>updateEstimates(i));draft();commit();}
@@ -32191,7 +32206,7 @@ var WeeklyRhythmPlanner=(()=>{
     function pickWeek(value){if(!core.validDate(value)){showToast('请选择有效日期');return;}persist();cancel();load(core.monday(value));render();}
     function moveWeek(delta){pickWeek(core.shift(week,delta));}
     function clearDay(index){if(!confirm('清除此日的目标和本工具内的实际时间？其他睡眠研究、捕捉记录不会删除。'))return;state.days[index]=fresh(week).days[index];persist();render();}
-    function sessionText(session,date){if(!session)return '—';const dayOffset=Math.floor(session.start/1440),endOffset=Math.floor(session.end/1440);return `${dayOffset?'次日 ':''}${core.format(session.start)}～${endOffset?'次日 ':''}${core.format(session.end)}<small>${duration(session.duration)} · ${session.status==='actual'?'实际锁定':session.status==='started'?'已开始／结束为预计':'建议／固定要求'}</small>`;}
+    function sessionText(session,date){if(!session)return '—';const dayOffset=Math.floor(session.start/1440),endOffset=Math.floor(session.end/1440);return `${dayOffset?'次日 ':''}${core.format(session.start)}～${endOffset?'次日 ':''}${core.format(session.end)}<small>有效${duration(session.duration)} · ${session.startMode==='measurement'?'计测后5分钟入睡':'有效入睡（旧口径）'} · ${session.status==='actual'?'实际锁定':session.status==='started'?'已开始／结束为预计':'建议／固定要求'}</small>`;}
     function show(result){
         const zone=document.getElementById('wr-results'),progress=document.getElementById('wr-progress');if(!zone)return;
         if(progress)progress.textContent='计算完成（近似候选搜索）';
@@ -32221,8 +32236,8 @@ var WeeklyRhythmPlanner=(()=>{
         }catch(error){if(token===generation&&error.message!=='cancelled')show({errors:[{message:error.message}],plans:[]});}
     }
     function select(mode){state.selected=mode;persist();if(lastResult)show(lastResult);}
-    function fixDay(mode,index){const row=lastResult?.plans.find(p=>p.mode===mode)?.path.find(p=>p.day===index);if(!row)return;if(!confirm('将这一天未完成的建议时间固定为要求？不会记为实际已完成。'))return;for(const key of ['first','second'])if(row[key]&&!(state.days[index][key].status==='actual'&&core.fixed(state.days[index][key]))){state.days[index][key].start=core.format(row[key].start);state.days[index][key].end=core.format(row[key].end);if(state.days[index][key].status==='actual')state.days[index][key].status='started';}persist();render();}
-    return {open,close,change,completeScore,useEstimate,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay};
+    function fixDay(mode,index){const row=lastResult?.plans.find(p=>p.mode===mode)?.path.find(p=>p.day===index);if(!row)return;if(!confirm('将这一天未完成的建议时间固定为要求？不会记为实际已完成。'))return;for(const key of ['first','second'])if(row[key]&&!(state.days[index][key].status==='actual'&&core.fixed(state.days[index][key]))){state.days[index][key].startMode=row[key].startMode||'effective';state.days[index][key].start=core.format(row[key].start);state.days[index][key].end=core.format(row[key].end);if(state.days[index][key].status==='actual')state.days[index][key].status='started';}persist();render();}
+    return {open,close,change,changeStartMode,completeScore,useEstimate,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay};
 })();
 function openWeeklyRhythmPlannerModal(){return WeeklyRhythmPlanner.open();}
 
