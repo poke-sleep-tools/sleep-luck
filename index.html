@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.05.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.07.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1015,6 +1015,7 @@
                     <button onclick="openSleepTypePlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200" title="记录最近30觉比例，管理睡眠方案并动态优化未来排程">
                         <i class="fa-solid fa-chart-line text-violet-600"></i> 🌙 睡眠类型规划
                     </button>
+                    <button onclick="openGraduationStageStatsModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-rose-100 text-rose-800 shadow-sm flex items-center gap-1 hover:bg-rose-200" title="本周、本月、最近一个月与自定义区间的毕业和断档统计"><i class="fa-solid fa-chart-column"></i> 📊 毕业断档与阶段统计</button>
                     <button onclick="openSleepSplitPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-blue-100 text-blue-800 shadow-sm flex items-center gap-1 hover:bg-blue-200" title="根据岛屿、当前能量与活动倍率计算两觉拆分，并反推各种 x+y 所需的最低能量">
                         <i class="fa-solid fa-chart-simple text-blue-600"></i> 🛏️ 拆觉规划
                     </button>
@@ -7195,8 +7196,57 @@ function hasRecordedTiedCount(p) {
 
 function canonicalPaldeanWooperName(name) {
     if (name == null) return name;
+    if (canonicalMimikyuName(name) === '谜拟Q') return '谜拟Q';
     const entry = getPokemonIngredientDexEntry(name);
     return entry?.id === '7054' ? '乌波(帕底亚的样子)' : name;
+}
+
+function canonicalMimikyuName(name) {
+    const key=String(name||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase();
+    return ['谜拟q','謎擬q','mimikyu'].includes(key)?'谜拟Q':name;
+}
+function mimikyuBoxRepairMetadata(rows) {
+    const sources={},covered={};
+    for(const row of rows){
+        const meta=row?._mimikyuIdentity778;
+        for(const [name,snapshots]of Object.entries(meta?.sources||{}))if(!Object.hasOwn(sources,name))sources[name]=JSON.parse(JSON.stringify(snapshots));
+        for(const [name,counts]of Object.entries(meta?.covered||{})){
+            covered[name]||={};for(const [key,value]of Object.entries(counts))covered[name][key]=Math.max(Number(covered[name][key])||0,Number(value)||0);
+        }
+    }
+    return {version:1,identity:'778',sources,covered};
+}
+function consolidateMimikyuBoxIdentity(box=[]) {
+    if(!Array.isArray(box))return [];
+    const group=box.filter(row=>canonicalMimikyuName(row?.name)==='谜拟Q');if(!group.length)return box;
+    for(const row of group)for(const alias of [row.name,...Object.keys(row._mimikyuIdentity778?.sources||{})])pokemonDictionary[alias]={...pokemonDictionary['谜拟Q'],standard:'谜拟Q',type:'special_skill'};
+    if(group.length===1&&group[0].name==='谜拟Q'&&!group[0]._mimikyuIdentity778)return box;
+    const merged=JSON.parse(JSON.stringify(group.find(row=>row.name==='谜拟Q')||group[0])),meta=mimikyuBoxRepairMetadata(group),totals={},legacy=new Map(),repaired=[];
+    for(const row of group){
+        const counts=wooperBoxCounterSnapshot(row);
+        if(row._mimikyuIdentity778){repaired.push({row,counts});continue;}
+        const name=String(row.name);if(!legacy.has(name))legacy.set(name,{counts:{},originals:[]});
+        const bucket=legacy.get(name);bucket.originals.push(JSON.parse(JSON.stringify(row)));
+        for(const [key,n]of Object.entries(counts))bucket.counts[key]=(bucket.counts[key]||0)+n;
+    }
+    // 不同设备可能只持有其中一个别名。按来源覆盖量取并集，再合并修复后的增减量。
+    for(const key of new Set(repaired.flatMap(x=>Object.keys(x.counts)))){
+        const baseline=Object.values(meta.covered).reduce((sum,c)=>sum+(Number(c[key])||0),0);
+        const delta=Math.max(...repaired.map(x=>x.counts[key]-Object.values(x.row._mimikyuIdentity778.covered||{}).reduce((sum,c)=>sum+(Number(c[key])||0),0)));
+        totals[key]=Math.max(0,baseline+delta);
+    }
+    for(const [name,bucket]of legacy){
+        const covered=meta.covered[name]||{};meta.covered[name]||={};
+        for(const [key,n]of Object.entries(bucket.counts)){totals[key]=(totals[key]||0)+Math.max(0,n-(Number(covered[key])||0));meta.covered[name][key]=Math.max(Number(covered[key])||0,n);}
+        if(!Object.hasOwn(meta.sources,name))meta.sources[name]=bucket.originals;
+    }
+    for(const [key,n]of Object.entries(totals)){
+        const parts=key.split(':');if(parts[0]!=='exclude')merged[key]=n;
+        else if(parts.length===2){merged.luckExcludeCounts||={};merged.luckExcludeCounts[parts[1]]=n;}
+        else{merged.luckExcludeTrackCounts||={};merged.luckExcludeTrackCounts[parts[1]]||={};merged.luckExcludeTrackCounts[parts[1]][parts[2]]=n;}
+    }
+    merged.name='谜拟Q';merged._mimikyuIdentity778=meta;
+    let inserted=false;return box.flatMap(row=>{if(!group.includes(row))return [row];if(inserted)return [];inserted=true;return [merged];});
 }
 
 function findCompatiblePokemonBoxIndex(name) {
@@ -7204,7 +7254,7 @@ function findCompatiblePokemonBoxIndex(name) {
     const exact = playerBox.findIndex(row => row.name === name);
     if (exact >= 0) return exact;
     const standard = canonicalPaldeanWooperName(name);
-    if (standard !== '乌波(帕底亚的样子)') return -1;
+    if (standard !== '乌波(帕底亚的样子)' && standard !== '谜拟Q') return -1;
     return playerBox.findIndex(row => canonicalPaldeanWooperName(row.name) === standard);
 }
 
@@ -7284,7 +7334,7 @@ function consolidateWooperBoxIdentity(box=[]) {
 }
 
 function normalizePlayerBox() {
-    playerBox = consolidateWooperBoxIdentity(playerBox);
+    playerBox = consolidateMimikyuBoxIdentity(consolidateWooperBoxIdentity(playerBox));
     playerBox.forEach(p => { 
         // 旧地区形态曾未被识别成食材型：先保留总数到轨道，再整理排除计分，避免先夹成0。
         if (canonicalPaldeanWooperName(p.name) === '乌波(帕底亚的样子)') {
@@ -7371,7 +7421,7 @@ function normalizePlayerBox() {
             60:[{code:'A',ingredientId:row[7][0],qty:row[7][3]},...(row[8]?[{code:'B',ingredientId:row[8][0],qty:row[8][2]}]:[]),...(row[9]?[{code:'C',ingredientId:row[9][0],qty:row[9][1]}]:[])]
         }}));
         const POKEMON_INGREDIENT_LOOKUP=new Map();
-        function normalizePokemonIngredientLookupName(value){return String(value||'').trim().toLowerCase().replace(/[（）]/g,ch=>ch==='（'?'(':')').replace(/[·・\s_-]+/g,'').replace(/的样子|的樣子/g,'');}
+        function normalizePokemonIngredientLookupName(value){return String(value||'').normalize('NFKC').trim().toLowerCase().replace(/[（）]/g,ch=>ch==='（'?'(':')').replace(/[·・\s_-]+/g,'').replace(/的样子|的樣子/g,'');}
         POKEMON_INGREDIENT_DEX.forEach(entry=>[entry.id,entry.name,entry.traditionalName,entry.englishName].forEach(alias=>{const key=normalizePokemonIngredientLookupName(alias);if(key)POKEMON_INGREDIENT_LOOKUP.set(key,entry);}));
         function getPokemonIngredientDexEntry(name){const raw=String(name||'').trim();const standard=(typeof pokemonDictionary!=='undefined'&&pokemonDictionary[raw]?.standard)||raw;return POKEMON_INGREDIENT_LOOKUP.get(normalizePokemonIngredientLookupName(standard))||POKEMON_INGREDIENT_LOOKUP.get(normalizePokemonIngredientLookupName(raw))||null;}
         function getPokemonIngredientSlotOptions(name,level){const entry=getPokemonIngredientDexEntry(name);return entry?(entry.slots?.[Number(level)]||[]).map(option=>Object.assign({},option)):[];}
@@ -7563,6 +7613,8 @@ function normalizePlayerBox() {
             '仙子伊布': { standard: '仙子伊布', type: 'special_skill', defaultLock: 'none' }
         };
 
+        // 全角／半角Q是同一个图鉴身份778，所有入口统一使用特殊技能型评分。
+        for(const alias of ['谜拟Q','谜拟Ｑ','谜拟q','謎擬Q','謎擬Ｑ','謎擬q','Mimikyu','mimikyu'])pokemonDictionary[alias]={...pokemonDictionary['谜拟Q'],standard:'谜拟Q',type:'special_skill',pokedexId:778,ingredientDataId:'778'};
         // 把资料库中新发布的宝可梦补进录入候选；已有评分字典条目绝不覆盖。
         POKEMON_INGREDIENT_DEX.forEach(entry => {
             const type = entry.specialty === 'ingredient' ? 'food' : (entry.specialty === 'berry' ? 'berry' : 'skill');
@@ -23036,6 +23088,102 @@ function filterHistoryResearchByDate() {
 }
 
 // ==========================================
+// 📊 独立阶段统计：只读取可见历史，不改写捕捉／研究／评分记录。
+function createGraduationStageCore(){
+    const DAY=86400000,results=['none','tied','grad','bigGrad','goldGrad'];
+    function valid(date){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(date)))return false;const d=new Date(date+'T12:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===date;}
+    function shift(date,n){return new Date(Date.parse(date+'T12:00:00Z')+n*DAY).toISOString().slice(0,10);}
+    function ordinal(date){return Math.floor(Date.parse(date+'T00:00:00Z')/DAY);}
+    function monthAgo(date){const d=new Date(date+'T12:00:00Z'),day=d.getUTCDate();d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()-1);const last=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).getUTCDate();d.setUTCDate(Math.min(day,last));return d.toISOString().slice(0,10);}
+    function range(mode,today,manual={}){
+        if(!valid(today))throw new Error('当前日期无效');
+        let start=today,end=today,startSession=1,endSession=2;
+        if(mode==='week'){const d=new Date(today+'T12:00:00Z');start=shift(today,-((d.getUTCDay()+6)%7));}
+        else if(mode==='month')start=today.slice(0,7)+'-01';
+        else if(mode==='rollingMonth')start=monthAgo(today);
+        else if(mode==='30days')start=shift(today,-29);
+        else if(mode==='custom'){start=manual.start;end=manual.end;startSession=Number(manual.startSession||1);endSession=Number(manual.endSession||2);}
+        else throw new Error('请选择有效统计区间');
+        if(!valid(start)||!valid(end))throw new Error('请填写有效的起止日期');
+        if(![1,2].includes(startSession)||![1,2].includes(endSession))throw new Error('请选择一觉或二觉作为边界');
+        if(end>today){end=today;endSession=2;}
+        if(start>end||(start===end&&startSession>endSession))throw new Error('起点不能晚于终点，也不能选择尚未发生的整个区间');
+        return {start,end,startSession,endSession};
+    }
+    function session(row){return /二|2/.test(String(row.session||''))?2:1;}
+    function key(row){return row.date+'|'+session(row);}
+    function inside(row,r){return valid(row?.date)&&row.date>=r.start&&row.date<=r.end&&(row.date!==r.start||session(row)>=r.startSession)&&(row.date!==r.end||session(row)<=r.endSession);}
+    function analyze(captures,researches,r,options={}){
+        const definition=options.definition||'gradPlus',includeShiny=options.includeShiny!==false;
+        const successSet=definition==='tiedPlus'?['tied','grad','bigGrad','goldGrad']:definition==='goldOnly'?['goldGrad']:['grad','bigGrad','goldGrad'];
+        const all=captures.filter(x=>inside(x,r)).slice().sort((a,b)=>a.date.localeCompare(b.date)||session(a)-session(b)||(Number(a.order)||0)-(Number(b.order)||0));
+        const selected=all.filter(x=>includeShiny||!x.isShiny),studies=researches.filter(x=>inside(x,r));
+        const sessions=new Map(),days=new Set();
+        for(const x of studies){sessions.set(key(x),{date:x.date,session:session(x),explicit:true,captures:[],successes:0});days.add(x.date);}
+        for(const x of all){if(!sessions.has(key(x)))sessions.set(key(x),{date:x.date,session:session(x),explicit:false,captures:[],successes:0});days.add(x.date);}
+        const counts=Object.fromEntries(results.map(x=>[x,0])),successes=[];
+        let current=0,longest=0,unknown=0;
+        for(const [index,x]of selected.entries()){
+            if(results.includes(x.result))counts[x.result]++;else unknown++;
+            const success=successSet.includes(x.result),s=sessions.get(key(x));s.captures.push(x);
+            if(success){s.successes++;successes.push({...x,position:index+1,precedingMisses:current});current=0;}else{current++;longest=Math.max(longest,current);}
+        }
+        const ordered=[...sessions.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.session-b.session);
+        let currentResearch=0,longestResearch=0;
+        for(const x of ordered){if(x.successes)currentResearch=0;else{currentResearch++;longestResearch=Math.max(longestResearch,currentResearch);}}
+        const byDate=new Map();for(const date of days)byDate.set(date,{date,captures:0,successes:0,researches:0});
+        for(const x of selected){const d=byDate.get(x.date);d.captures++;if(successSet.includes(x.result))d.successes++;}
+        for(const x of ordered)byDate.get(x.date).researches++;
+        const calendarDays=ordinal(r.end)-ordinal(r.start)+1,recordedDays=days.size;
+        return {range:r,counts,unknown,total:selected.length,allTotal:all.length,excludedShiny:all.length-selected.length,shiny:all.filter(x=>x.isShiny).length,successes,successCount:successes.length,
+            recordedDays,calendarDays,missingDays:Math.max(0,calendarDays-recordedDays),researchCount:ordered.length,explicitResearchCount:ordered.filter(x=>x.explicit).length,inferredResearchCount:ordered.filter(x=>!x.explicit).length,
+            averagePerDay:recordedDays?selected.length/recordedDays:null,successRate:selected.length?successes.length/selected.length:null,currentMisses:current,longestMisses:longest,currentResearch,longestResearch,
+            daily:[...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date))};
+    }
+    return {valid,shift,monthAgo,range,inside,analyze};
+}
+var GraduationStageStats=(()=>{
+    const core=createGraduationStageCore(),labels={none:'没货',tied:'自用和解',grad:'毕业',bigGrad:'大毕业',goldGrad:'金帮毕业'};
+    let state=null;
+    const esc=x=>escapeHtml(String(x??'')),storageKey=()=>`graduation_stage_settings_v1_${currentCloudUser?.id||'guest'}`;
+    function today(){return createWeeklyRhythmCore().gameDate();}
+    function defaults(){const date=today();return {mode:'week',start:date,end:date,startSession:1,endSession:2,definition:'gradPlus',includeShiny:true};}
+    function close(){document.getElementById('graduation-stage-modal')?.remove();state=null;}
+    function open(){
+        close();state=defaults();try{state={...state,...JSON.parse(localStorage.getItem(storageKey())||'{}')};}catch(_){}
+        if(!currentCloudUser)loadHistoryFromLocal();
+        const modal=document.createElement('div');modal.id='graduation-stage-modal';modal.className='fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-center justify-center z-[75] p-2 md:p-4';document.body.appendChild(modal);render();
+    }
+    function set(key,value){if(!state)return;state[key]=value;try{localStorage.setItem(storageKey(),JSON.stringify(state));}catch(_){}render();}
+    function render(){
+        const modal=document.getElementById('graduation-stage-modal');if(!modal||!state)return;
+        let r,error='';try{r=core.range(state.mode,today(),state);}catch(e){error=e.message;}
+        const opt=(value,label,current)=>`<option value="${value}" ${current===value?'selected':''}>${label}</option>`;
+        modal.innerHTML=`<style>#graduation-stage-modal .gs-shell{width:100%;max-width:1060px;max-height:94vh;overflow:auto;border-radius:22px;background:#f8fafc;color:#334155;box-shadow:0 20px 70px #0004}#graduation-stage-modal .gs-head{padding:20px;background:linear-gradient(110deg,#be123c,#ea580c);color:white;display:flex;justify-content:space-between;align-items:center}#graduation-stage-modal .gs-body{padding:18px}#graduation-stage-modal .gs-card{background:white;border:1px solid #e2e8f0;border-radius:16px;padding:16px;margin-bottom:14px}#graduation-stage-modal .gs-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}#graduation-stage-modal label{font-size:13px;font-weight:700;display:block}#graduation-stage-modal input,#graduation-stage-modal select{font-size:16px;border:1px solid #cbd5e1;border-radius:10px;padding:9px;background:white;width:100%;margin-top:5px;min-width:0}#graduation-stage-modal input[type=checkbox]{width:auto}#graduation-stage-modal .gs-note{font-size:12px;line-height:1.8;color:#64748b;margin:8px 0}#graduation-stage-modal .gs-number{font-size:26px;font-weight:900;color:#9f1239}#graduation-stage-modal table{width:100%;font-size:13px;border-collapse:collapse}#graduation-stage-modal th,#graduation-stage-modal td{text-align:left;padding:10px;border-bottom:1px solid #e2e8f0;white-space:nowrap}#graduation-stage-modal button{font-weight:700;border-radius:10px;padding:9px 13px;background:#fff;color:#9f1239;border:1px solid #fecdd3}#graduation-stage-modal h4{font-size:17px;font-weight:900;margin-bottom:10px}@media(max-width:680px){#graduation-stage-modal .gs-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#graduation-stage-modal .gs-body{padding:10px}}</style>
+        <div class="gs-shell"><div class="gs-head"><div><h3 style="font-size:21px;font-weight:900">毕业断档与阶段统计</h3><p style="font-size:12px;margin-top:5px">周／月／自定义阶段 · 按已录入日期计算日均</p></div><button aria-label="关闭阶段统计" onclick="GraduationStageStats.close()">×</button></div><div class="gs-body">
+        <section class="gs-card"><div class="gs-grid"><label>统计区间<select onchange="GraduationStageStats.set('mode',this.value)">${[['week','本周（周一一觉起）'],['month','本月（1日起）'],['rollingMonth','最近一个月（上月同日）'],['30days','最近30天'],['custom','自定义起止区间']].map(([v,l])=>opt(v,l,state.mode)).join('')}</select></label><label>毕业定义<select onchange="GraduationStageStats.set('definition',this.value)">${[['gradPlus','毕业及以上'],['tiedPlus','和解及以上'],['goldOnly','只看金帮毕业']].map(([v,l])=>opt(v,l,state.definition)).join('')}</select></label><label style="align-self:center"><input type="checkbox" ${state.includeShiny?'checked':''} onchange="GraduationStageStats.set('includeShiny',this.checked)"> 纳入闪光捕捉样本</label><button onclick="GraduationStageStats.render()">刷新本机最新记录</button></div>
+        ${state.mode==='custom'?`<div class="gs-grid" style="margin-top:12px"><label>起始日期<input type="date" value="${esc(state.start)}" onchange="GraduationStageStats.set('start',this.value)"></label><label>从哪觉起（含）<select onchange="GraduationStageStats.set('startSession',Number(this.value))">${opt(1,'一觉',Number(state.startSession))}${opt(2,'二觉',Number(state.startSession))}</select></label><label>结束日期<input type="date" value="${esc(state.end)}" onchange="GraduationStageStats.set('end',this.value)"></label><label>到哪觉止（含）<select onchange="GraduationStageStats.set('endSession',Number(this.value))">${opt(1,'一觉',Number(state.endSession))}${opt(2,'二觉',Number(state.endSession))}</select></label></div>`:''}
+        <p class="gs-note">${r?`范围：${r.start} ${r.startSession===1?'一':'二'}觉 ～ ${r.end} ${r.endSession===1?'一':'二'}觉（两端均包含，仅统计已录入记录）。`:esc(error)} 日期按游戏日（04:00切日）。闪光仅按实际判定是否毕业，不会因为闪光自动算毕业。所有选项只影响此分析。</p>
+        <button onclick="GraduationStageStats.openLegacy()">从某次毕业开始／原断档概率分析</button><p class="gs-note">保留原历史起点、毕业库起点、失败样本补正、概率分析和总结图片功能。</p></section><div id="graduation-stage-result"></div></div></div>`;
+        if(error){document.getElementById('graduation-stage-result').innerHTML=`<p class="gs-card" role="alert">${esc(error)}</p>`;return;}
+        const captures=getDrySpellCaptureLogs().map((x,order)=>({...x,order}));
+        const summary=core.analyze(captures,getVisibleSleepResearchLogs(historyLogs),r,state);
+        document.getElementById('graduation-stage-result').innerHTML=resultHtml(summary);
+    }
+    function resultHtml(s){
+        const card=(title,value,note='')=>`<div class="gs-card"><div style="font-size:12px;color:#64748b">${title}</div><div class="gs-number">${value}</div><p class="gs-note">${note}</p></div>`;
+        const pct=x=>x==null?'—':(100*x).toFixed(1)+'%';
+        return `<section class="gs-card"><h4>阶段概览</h4><div class="gs-grid">${card('纳入捕捉',s.total+'只',s.excludedShiny?`已排除${s.excludedShiny}只闪光`: `其中闪光${s.shiny}只`)}${card('研究次数',s.researchCount+'次',`明确研究${s.explicitResearchCount}次；由捕捉推定${s.inferredResearchCount}次`)}${card('有记录天数',s.recordedDays+'天',`区间已到日期共${s.calendarDays}天`)}${card('日均捕捉',s.averagePerDay==null?'—':s.averagePerDay.toFixed(2)+'只',`分母为${s.recordedDays}个有记录日期，抓0只但有研究的日期计入`)}</div>
+        <p class="gs-note">${s.missingDays?`有${s.missingDays}个日期没有研究或捕捉记录，可能漏录，未擅自按0只计入日均。`:'已到日期均有记录。'} 今天只统计已录入内容，后续录入会更新；不除以完整7天。结果不包含尚未同步到本机的记录。${s.unknown?'有'+s.unknown+'只缺少有效判定，纳入样本但未计作毕业。':''}</p>
+        <div class="gs-grid">${Object.entries(labels).map(([k,l])=>card(l,s.counts[k]+'只',pct(s.total?s.counts[k]/s.total:null))).join('')}${card('当前定义达线',s.successCount+'只',`样本达线比例${pct(s.successRate)}`)}</div></section>
+        <section class="gs-card"><h4>区间内断档</h4><div class="gs-grid">${card('区间尾部未毕业捕捉',s.currentMisses+'只')}${card('最长未毕业捕捉段',s.longestMisses+'只')}${card('区间尾部无毕业研究',s.currentResearch+'次')}${card('最长无毕业研究段',s.longestResearch+'次')}</div><p class="gs-note">全部仅限所选区间。若断档在区间前已经开始，此处只是区间内的长度，不是完整断档；未录入的研究无法推定。有明确研究但抓0只，也计入连续无毕业研究。排除闪光时，仅移除其捕捉样本，不移除当天研究。</p></section>
+        <section class="gs-card"><h4>毕业发生位置</h4>${s.successes.length?`<div style="overflow:auto;max-height:330px"><table><thead><tr><th>日期／觉次</th><th>宝可梦</th><th>判定</th><th>区间第几只</th><th>此前连续未毕业</th></tr></thead><tbody>${s.successes.map(x=>`<tr><td>${x.date} ${/二|2/.test(String(x.session))?'二觉':'一觉'}</td><td>${esc(x.name)}${x.isShiny?' ✨':''}</td><td>${labels[x.result]}</td><td>${x.position}</td><td>${x.precedingMisses}只</td></tr>`).join('')}</tbody></table></div>`:'<p class="gs-note">此区间暂无符合当前定义的毕业记录。</p>'}</section>
+        <section class="gs-card"><details><summary style="cursor:pointer;font-weight:800">逐日明细（含0捕捉研究日）</summary><div style="overflow:auto;max-height:330px"><table><thead><tr><th>日期</th><th>研究次数</th><th>纳入捕捉</th><th>达线数</th></tr></thead><tbody>${s.daily.map(x=>`<tr><td>${x.date}</td><td>${x.researches}</td><td>${x.captures}</td><td>${x.successes}</td></tr>`).join('')}</tbody></table></div></details></section>`;
+    }
+    return {open,close,set,render,openLegacy:()=>{close();openGraduationDrySpellModal();}};
+})();
+function openGraduationStageStatsModal(){GraduationStageStats.open();}
+
 // 📉 毕业断档分析：历史流水的一次性非洲检测
 // 设计原则：不实时演算；玩家确认断档起点与补正后，点击按钮才计算一次。
 // ==========================================
@@ -24115,8 +24263,8 @@ async function openHistoryModal(skipCloudRefresh = false) {
 
         <div data-history-sync-status class="${cloudRefreshPromise ? '' : 'hidden '}rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-center text-[9px] font-black text-sky-700" role="status" aria-live="polite"><i class="fa-solid fa-cloud-arrow-down mr-1"></i>本机完整记录已显示，正在后台合并云端最新记录；现在可以正常查看和修改。</div>
 
-        <button onclick="openGraduationDrySpellModal()" class="w-full bg-gradient-to-r from-rose-50 via-orange-50 to-rose-50 hover:from-rose-100 hover:via-orange-100 hover:to-rose-100 text-rose-700 border border-rose-100 font-black text-xs py-2.5 rounded-2xl transition flex items-center justify-center gap-2" title="基于历史抽卡库，点击后一次性分析距离上一个毕业宝后的断档情况">
-            <i class="fa-solid fa-cloud-rain"></i> 📉 毕业断档分析
+        <button onclick="openGraduationStageStatsModal()" class="w-full bg-gradient-to-r from-rose-50 via-orange-50 to-rose-50 hover:from-rose-100 hover:via-orange-100 hover:to-rose-100 text-rose-700 border border-rose-100 font-black text-xs py-2.5 rounded-2xl transition flex items-center justify-center gap-2" title="按本周、本月、最近一个月或自定义区间，分析毕业与断档情况">
+            <i class="fa-solid fa-cloud-rain"></i> 📊 毕业断档与阶段统计
         </button>
 
         <div class="grid grid-cols-2 gap-2">
@@ -25838,8 +25986,8 @@ let captureBundleCloudQueueV42 = Promise.resolve();
 
 function mergePlayerBoxForCaptureBundleV42(remoteBox = [], localBox = [], remoteHistory = [], localHistory = [], options = {}) {
     // 先各自整合身份，再沿用跨设备取最大值／流水增量，不能把两端汇总再次相加。
-    remoteBox = consolidateWooperBoxIdentity(remoteBox);
-    localBox = consolidateWooperBoxIdentity(localBox);
+    remoteBox = consolidateMimikyuBoxIdentity(consolidateWooperBoxIdentity(remoteBox));
+    localBox = consolidateMimikyuBoxIdentity(consolidateWooperBoxIdentity(localBox));
     const result = new Map();
     (Array.isArray(remoteBox) ? remoteBox : []).forEach(item => {
         if (!item?.name) return;
@@ -25890,6 +26038,15 @@ function mergePlayerBoxForCaptureBundleV42(remoteBox = [], localBox = [], remote
             }
         }
         const projected = JSON.parse(JSON.stringify(remoteItem));
+        if(name==='谜拟Q'&&(remoteItem._mimikyuIdentity778||localItem._mimikyuIdentity778)){
+            const repaired=consolidateMimikyuBoxIdentity([remoteItem,localItem])[0];
+            // 快照中的排除字段以冒号编码，只回写普通累计字段。
+            for(const [key,value]of Object.entries(wooperBoxCounterSnapshot(repaired)))if(!key.startsWith('exclude:'))merged[key]=value;
+            merged._mimikyuIdentity778=repaired._mimikyuIdentity778;
+            merged.luckExcludeTrackCounts=JSON.parse(JSON.stringify(repaired.luckExcludeTrackCounts||{}));
+            merged.luckExcludeCounts||={};
+            for(const result of ['tied','grad','bigGrad','goldGrad'])merged.luckExcludeCounts[result]=Number(repaired.luckExcludeCounts?.[result])||0;
+        }
         (localOnlyByName.get(name) || []).forEach(log => {
             projected.count = (Number(projected.count) || 0) + 1;
             const track = log.track || getCheckInTrackMode(name, log.foodCombo || 'ABB');
@@ -32278,7 +32435,7 @@ function openSleepSplitPlannerModal() {
         { id: 'history', group: 'luck', label: '历史抽卡库', desc: '睡眠研究与捕捉流水', icon: 'fa-clock-rotate-left', tone: 'bg-slate-100 text-slate-700', action: 'openHistoryModal' },
         { id: 'graduation', group: 'luck', label: '出货宝可梦库', desc: '查看已收录个体面板', icon: 'fa-trophy', tone: 'bg-amber-50 text-amber-700', action: 'openGraduationDexModal' },
         { id: 'efficiency', group: 'luck', label: '个体效率预览', desc: '当前与培养后产能对比', icon: 'fa-gauge-high', tone: 'bg-cyan-50 text-cyan-800', action: 'openPokemonEfficiencyModal' },
-        { id: 'drySpell', group: 'luck', label: '毕业断档分析', desc: '查看距离上次毕业数据', icon: 'fa-cloud-rain', tone: 'bg-rose-50 text-rose-700', action: 'openGraduationDrySpellModal' },
+        { id: 'drySpell', group: 'luck', label: '毕业断档与阶段统计', desc: '周／月／自定义区间与断档分析', icon: 'fa-chart-column', tone: 'bg-rose-50 text-rose-700', action: 'openGraduationStageStatsModal' },
         { id: 'calibration', group: 'luck', label: '总捕捉数校准', desc: '调整老玩家捕捉补正', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', custom: 'calibration' },
 
         { id: 'training', group: 'pokemon', label: '培养计算器', desc: '糖果、梦碎与午睡岛时间', icon: 'fa-candy-cane', tone: 'bg-indigo-50 text-indigo-700', action: 'openSingleTrainingCalculatorModal' },
