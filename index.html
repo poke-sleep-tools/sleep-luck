@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.07.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.08.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -18504,9 +18504,9 @@ var SleepTypeDynamics = (() => {
         historyLogs=mergeHistoryLogs([], [...(historyLogs||[]).filter(row=>!(row.type===TYPE && row.id===ID)),{id:ID,type:TYPE,state:JSON.parse(JSON.stringify(cfg)),createdAt:prior?.createdAt||now,updatedAt:now}]);
         saveHistoryToLocal();cache=null;
     }
-    function records(){
+    function records(visible=getVisibleSleepTypeRecords()){
         const rawById=new Map((historyLogs||[]).filter(row=>row.type==='sleep_type_record').map(row=>[String(row.id),row]));
-        return getVisibleSleepTypeRecords().map(row=>{
+        return visible.map(row=>{
             const raw=rawById.get(String(row.id))||row;
             return {id:row.id,date:row.date,session:row.session,result:row.result,percentages:row.percentages,updatedAt:row.updatedAt,
                 stageMinutes:raw.stageMinutes || raw.minutes};
@@ -18519,6 +18519,20 @@ var SleepTypeDynamics = (() => {
         return {startDate:core.dateShift(last.date,1),nextSession:1};
     }
     function effective(list){return {...cfg,...strategies.find(s=>s.id===cfg.strategy),...(cfg.autoStart?inferStart(list):{})};}
+    function analysisExport(visible){
+        const list=records(visible),stageMinutes=list.map(row=>row.stageMinutes);
+        if(!cfg||owner!==key())return {stageMinutes,settings:null};
+        const c=effective(list),date=value=>sleepNotebookValidDate(value)?value:null;
+        const plans=c.plans.map((p,i)=>({
+            id:`plan-${i+1}`,name:`方案${i+1}`,enabled:p?.enabled!==false,
+            percentages:Object.fromEntries(core.TYPES.map((k,j)=>[k,sleepTypeExportNumber(p?.percentages?.[k]??p?.p?.[j])])),
+            range:Array.isArray(p?.range?.min)&&Array.isArray(p?.range?.max)?{min:p.range.min.slice(0,3).map(sleepTypeExportNumber),max:p.range.max.slice(0,3).map(sleepTypeExportNumber)}:null
+        }));
+        return {stageMinutes,settings:{strategy:c.strategy,targetType:c.targetType,prioritySleep:c.prioritySleep,days:c.days,
+            minimumIncrease:c.minimumIncrease,minimumLead:c.minimumLead,secondSleep:c.secondSleep,autoStart:c.autoStart,
+            startDate:date(c.startDate),nextSession:c.nextSession,skipSecondDates:c.skipSecondDates.filter(date),
+            firstPlanId:plans[c.plans.findIndex(p=>p?.id===c.firstPlanId)]?.id||null,plans}};
+    }
     function cancel(){serial++;if(active){active.worker?.terminate();if(active.url)URL.revokeObjectURL(active.url);active.reject?.(new Error('cancelled'));active=null;}}
     async function compute(list,config,progress){
         if(typeof Worker==='undefined'){
@@ -18622,7 +18636,7 @@ var SleepTypeDynamics = (() => {
     }
     function filterMismatch(value){mismatchOnly=value;const node=document.getElementById('sd-backtest');if(node&&cache)node.innerHTML=backtestHtml(cache.result.backtest);}
     function refresh(){cache=null;mount();}
-    return {mount,setting,risk,manualStart,skip,edit,completePlan,savePlan,toggle,remove,record,compareRisks,filterMismatch,refresh,cancel};
+    return {mount,setting,risk,manualStart,skip,edit,completePlan,savePlan,toggle,remove,record,compareRisks,filterMismatch,refresh,cancel,analysisExport};
 })();
 
 // 睡眠类型记录本：独立界面，沿用原有睡眠比例记录与账号同步。
@@ -18705,6 +18719,35 @@ function sleepNotebookStats(records) {
         window, complete, missing: window.length - complete.length,
         averages: Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key, complete.length ? complete.reduce((sum,row) => sum+Number(row.percentages[key]),0)/complete.length : null]))
     };
+}
+function sleepTypeExportNumber(value){return value==null||value===''||!Number.isFinite(Number(value))?null:Number(value);}
+function buildSleepTypeAnalysisExport(records=getVisibleSleepTypeRecords(),now=new Date()){
+    const stats=sleepNotebookStats(records),dynamic=SleepTypeDynamics.analysisExport(records);
+    const {updatedAt,...plannerSettings}=normalizeSleepTypePlannerState(sleepTypePlannerState);
+    return {
+        format:'sleep-luck.sleep-type-analysis',schemaVersion:1,exportedAt:now.toISOString(),
+        labels:{...SLEEP_TYPE_RESULT_META},recordOrder:'newest-first',
+        recent30:{recordCount:stats.window.length,completeCount:stats.complete.length,missingCount:stats.missing,averagePercentages:stats.averages},
+        plannerSettings,dynamicSettings:dynamic.settings,
+        records:records.map((r,i)=>{
+            const minutes=dynamic.stageMinutes[i];
+            return {date:r.date,session:r.session,percentages:Object.fromEntries(SLEEP_TYPE_KEYS.map(k=>[k,sleepTypeExportNumber(r.percentages?.[k])])),
+                result:normalizeSleepTypeResult(r.result),measurementMode:r.measurementMode==='fake'?'fake':'normal',source:r.source==='research'?'research':'planner',
+                ...(minutes?{stageMinutes:Object.fromEntries(SLEEP_TYPE_KEYS.map(k=>[k,sleepTypeExportNumber(minutes[k])]))}:{})};
+        })
+    };
+}
+function downloadSleepTypeAnalysisExport(){
+    const records=getVisibleSleepTypeRecords();
+    if(!records.length){showToast('还没有已保存的睡眠类型记录可导出');return;}
+    let url,link;
+    try{
+        const data=buildSleepTypeAnalysisExport(records);
+        url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json;charset=utf-8'}));
+        link=document.createElement('a');link.href=url;link.download=`睡眠类型分析_${getTodayLocalDateString()}.json`;
+        document.body.appendChild(link);link.click();showToast(`已生成${records.length}条睡眠类型记录的分析文件`);
+    }catch(error){console.warn('睡眠类型分析导出失败：',error);showToast('导出失败，请重试');}
+    finally{link?.remove();if(url)setTimeout(()=>URL.revokeObjectURL(url),1000);}
 }
 function sleepNotebookResultOptions(value) {
     return Object.entries(SLEEP_TYPE_RESULT_META).map(([key,label]) => `<option value="${key}" ${key === value ? 'selected' : ''}>${label}</option>`).join('');
@@ -18900,6 +18943,7 @@ function renderSleepTypePlannerModal() {
             <p class="sn-muted">按睡眠日期与觉次取最近30条，不按录入顺序；不足30条按现有完整记录计算。最终判定不影响均值。漏录时，此处不等于游戏真实的最近30觉基准。</p>
             ${stats.missing ? `<p style="color:#b45309;font-size:12px;margin-top:6px">最近${stats.window.length}条中有${stats.missing}条缺少比例，目前仅按${stats.complete.length}条完整数据计算，不会用更早记录凑满30条。请在下方补齐。</p>` : ''}
             ${stats.window.some(row => row.measurementMode === 'fake') ? '<p class="sn-muted">含旧版标记为“假睡”的记录：按原来保存的比例纳入，不依据最终判定推算比例；可在历史记录中核对修改。</p>' : ''}
+            <div class="sn-tools"><button type="button" class="sn-button" onclick="downloadSleepTypeAnalysisExport()"><i class="fa-solid fa-download" aria-hidden="true"></i> 导出分析文件（JSON）</button><span class="sn-muted">包含全部已保存的比例记录、最近30觉统计和方案设置。保留睡眠日期与觉次，不含账号信息、笔记或未保存草稿。</span></div>
             <section id="sleep-type-dynamic-panel" class="sn-panel"></section>
             <section class="sn-panel">
                 <h4>录入真实睡眠记录</h4>
