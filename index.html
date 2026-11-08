@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.08.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.08.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -16250,6 +16250,7 @@ function normalizeSleepTypeRecord(raw = {}) {
         result: measurementMode === 'fake' ? 'balanced' : normalizeSleepTypeResult(raw.result),
         measurementMode,
         source: raw.source === 'research' ? 'research' : 'planner',
+        ...(raw.personalForecast?.version===1 ? {personalForecast:normalizeSleepPersonalForecast(raw.personalForecast)} : {}),
         createdAt: raw.createdAt || new Date().toISOString(),
         updatedAt: raw.updatedAt || raw.createdAt || new Date().toISOString()
     };
@@ -16330,6 +16331,7 @@ function upsertSleepTypeRecord(payload = {}, options = {}) {
         createdAt: existing?.createdAt || now,
         updatedAt: now
     }));
+    stampSleepPersonalForecasts([next]);
     const targetKey = getSleepTypeRecordKey(next.date, next.session);
     historyLogs = (Array.isArray(historyLogs) ? historyLogs : []).filter(log => !(
         isSleepTypeRecordLog(log) && getSleepTypeRecordKey(log.date, log.session) === targetKey
@@ -18533,6 +18535,13 @@ var SleepTypeDynamics = (() => {
             startDate:date(c.startDate),nextSession:c.nextSession,skipSecondDates:c.skipSecondDates.filter(date),
             firstPlanId:plans[c.plans.findIndex(p=>p?.id===c.firstPlanId)]?.id||null,plans}};
     }
+    function personalChoices(){
+        if(!cfg||owner!==key())return null;
+        const c=effective(viewRecords);
+        if(c.nextSession===2&&(!c.secondSleep||c.skipSecondDates.includes(c.startDate)))return null;
+        return {date:c.startDate,session:c.nextSession===2?'二觉':'一觉',target:c.targetType,fixed:c.nextSession===1?c.firstPlanId:null,
+            plans:c.plans.filter(p=>p&&p.enabled!==false)};
+    }
     function cancel(){serial++;if(active){active.worker?.terminate();if(active.url)URL.revokeObjectURL(active.url);active.reject?.(new Error('cancelled'));active=null;}}
     async function compute(list,config,progress){
         if(typeof Worker==='undefined'){
@@ -18636,10 +18645,130 @@ var SleepTypeDynamics = (() => {
     }
     function filterMismatch(value){mismatchOnly=value;const node=document.getElementById('sd-backtest');if(node&&cache)node.innerHTML=backtestHtml(cache.result.backtest);}
     function refresh(){cache=null;mount();}
-    return {mount,setting,risk,manualStart,skip,edit,completePlan,savePlan,toggle,remove,record,compareRisks,filterMismatch,refresh,cancel,analysisExport};
+    return {mount,setting,risk,manualStart,skip,edit,completePlan,savePlan,toggle,remove,record,compareRisks,filterMismatch,refresh,cancel,analysisExport,personalChoices};
 })();
 
 // 睡眠类型记录本：独立界面，沿用原有睡眠比例记录与账号同步。
+function createSleepPersonalCore(){
+    const types=['dozing','snoozing','slumbering','balanced'],variants=['similar','exposure','outcomes'],V=1;
+    const average=rows=>rows.reduce((a,b)=>a+b,0)/Math.max(1,rows.length);
+    const vector=r=>{const v=types.slice(0,3).map(k=>r?.percentages?.[k]);return v.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100)&&Math.abs(v.reduce((a,b)=>a+b,0)-100)<=.25?v:null;};
+    const key=r=>r.date+'|'+(r.session==='二觉'?2:1);
+    const maxIndex=v=>v.indexOf(Math.max(...v));
+    function features(prior,row){
+        const p=vector(row),window=prior.slice(-30);
+        if(!p||window.length<30)return null;
+        const values=window.map(vector);if(values.some(v=>!v))return null;
+        const means=[3,5,10,20,30].map(n=>[0,1,2].map(j=>average(values.slice(-n).map(v=>v[j]))));
+        const delta=p.map((n,j)=>n-means[4][j]),rank=delta.slice().sort((a,b)=>b-a),lead=rank[0]-rank[1];
+        const winner=rank[0]>1e-8&&lead>1e-8?maxIndex(delta):-1;
+        const exposure=[0,0,0],outcomes=[0,0,0,0],streak=[0,0,0];let mass=0,known=0;
+        window.forEach((r,i)=>{const w=.90**(29-i);if(r.measurementMode==='fake')return;mass+=w;values[i].forEach((v,j)=>{exposure[j]+=v*w;});const j=types.indexOf(r.result);if(j>=0){outcomes[j]+=w;known+=w;}});
+        for(let j=0;j<3;j++)for(let i=29;i>=0&&window[i].measurementMode!=='fake'&&values[i][j]>=80;i--)streak[j]++;
+        return {p,means,delta,lead,winner,session:row.session,exposure:exposure.map(n=>mass?n/mass:0),streak,outcomes:outcomes.map(n=>known?n/known:0),outcomesKnown:known>0};
+    }
+    function baseline(f,training){
+        const prior=f.winner<0?[.25,.25,.25,.25]:types.map((_,i)=>i===f.winner ? .7 : .1);
+        const votes=prior.map(n=>n*8);let mass=8;
+        for(const t of training)if(t.f.winner===f.winner){const w=1/(1+Math.abs(t.f.lead-f.lead)/6);votes[t.y]+=w;mass+=w;}
+        return votes.map(n=>n/mass);
+    }
+    const diff=(a,b)=>average(a.map((n,i)=>Math.abs(n-b[i])));
+    function neighbors(f,training,variant){
+        return training.map(t=>{
+            const g=t.f;let distance=diff(f.p,g.p)/12+diff(f.delta,g.delta)/10+Math.abs(f.lead-g.lead)/20+(f.session===g.session?0:.45);
+            if(variant==='exposure')distance+=diff(f.exposure,g.exposure)/18+diff(f.streak,g.streak)/14+diff(f.means[0],g.means[0])/32;
+            if(variant==='outcomes'&&f.outcomesKnown&&g.outcomesKnown)distance+=diff(f.outcomes,g.outcomes)*4;
+            return {t,distance};
+        }).filter(x=>x.distance<=3).sort((a,b)=>a.distance-b.distance).slice(0,12).map(x=>({...x,weight:Math.exp(-x.distance)}));
+    }
+    function local(f,training,variant,base){
+        const near=neighbors(f,training,variant),mass=near.reduce((s,x)=>s+x.weight,0),votes=base.map(n=>n*5);
+        for(const x of near)votes[x.t.y]+=x.weight;
+        return {p:votes.map(n=>n/(5+mass)),near,mass};
+    }
+    function loss(p,y){return {brier:p.reduce((s,n,i)=>s+(n-(i===y?1:0))**2,0),log:-Math.log(Math.max(1e-9,p[y]))};}
+    function weightModel(scores){
+        const recent=scores.slice(-60),half=Math.floor(recent.length/2);
+        const evidence=variants.map(id=>{
+            const gains=recent.map(r=>r.base.brier-r.models[id].brier),gain=average(gains),logGain=average(recent.map(r=>r.base.log-r.models[id].log));
+            const balanced=recent.filter(r=>r.y===3),balancedGain=average(balanced.map(r=>r.base.log-r.models[id].log));
+            const eligible=recent.length>=24&&average(gains.slice(0,half))>.002&&average(gains.slice(half))>.002&&logGain>0&&(!balanced.length||balancedGain>=-.025);
+            return {id,gain,logGain,eligible};
+        });
+        const best=evidence.filter(x=>x.eligible).sort((a,b)=>b.gain-a.gain)[0];
+        return {id:best?.id||null,weight:best?Math.min(.65,.15+best.gain*5):0,evidence,sample:recent.length};
+    }
+    function forecast(prior,row,training,scores){
+        const f=features(prior,row);if(!f)return null;
+        const base=baseline(f,training),models=Object.fromEntries(variants.map(id=>[id,local(f,training,id,base)]));
+        const choice=weightModel(scores),selected=models[choice.id||'similar'],weight=selected.mass>=2?choice.weight:0;
+        const p=base.map((n,i)=>n*(1-weight)+selected.p[i]*weight);
+        return {f,base,models,choice,weight,p,selected};
+    }
+    function replay(rows,onForecast=()=>{}){
+        const ordered=rows.slice().sort((a,b)=>key(a).localeCompare(key(b))),prior=[],training=[],scores=[],audit=[];
+        for(const row of ordered){
+            const f=row.measurementMode==='fake'?null:forecast(prior,row,training,scores);
+            // 先发出预测；当觉真实结果只用于随后打分和学习。
+            if(f){onForecast(row,f);const y=types.indexOf(row.result);if(y>=0){
+                scores.push({y,base:loss(f.base,y),models:Object.fromEntries(variants.map(id=>[id,loss(f.models[id].p,y)]))});if(scores.length>60)scores.shift();
+                audit.push({date:row.date,session:row.session,y,base:f.base,p:f.p,weight:f.weight});if(audit.length>60)audit.shift();
+                training.push({date:row.date,session:row.session,f:f.f,y});if(training.length>200)training.shift();
+            }}
+            prior.push(row);if(prior.length>30)prior.shift();
+        }
+        const metrics=field=>{
+            let hit=0,falseAlarm=0,miss=0,correct=0;
+            for(const row of audit){const top=Math.max(...row[field]),winners=row[field].map((p,i)=>Math.abs(p-top)<1e-9?i:-1).filter(i=>i>=0),pred=winners.length===1?winners[0]:-1;if(pred===row.y)correct++;if(row.y===3){if(pred===3)hit++;else miss++;}else if(pred===3)falseAlarm++;}
+            return {count:audit.length,brier:audit.length?average(audit.map(r=>loss(r[field],r.y).brier)):null,logLoss:audit.length?average(audit.map(r=>loss(r[field],r.y).log)):null,correct,balancedHit:hit,balancedMiss:miss,balancedFalseAlarm:falseAlarm};
+        };
+        return {version:V,trainingCount:training.length,choice:weightModel(scores),baseMetrics:metrics('base'),metrics:metrics('p'),predict:row=>forecast(prior,row,training,scores)};
+    }
+    return {types,key,replay};
+}
+function normalizeSleepPersonalForecast(raw){
+    const prob=v=>Array.isArray(v)&&v.length===4&&v.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1)&&Math.abs(v.reduce((a,b)=>a+b,0)-1)<.001?v.slice():null;
+    const base=prob(raw.base),probabilities=prob(raw.probabilities);
+    if(!base||!probabilities||!Array.isArray(raw.input)||raw.input.length!==3||!raw.input.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100))return null;
+    return {version:1,input:raw.input.slice(),base,probabilities,weight:Math.max(0,Math.min(.65,Number(raw.weight)||0)),
+        model:['similar','exposure','outcomes'].includes(raw.model)?raw.model:null,
+        capturedAt:/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(String(raw.capturedAt))?raw.capturedAt:null,backfill:raw.backfill===true};
+}
+function stampSleepPersonalForecasts(next,visible=getVisibleSleepTypeRecords()){
+    if(!next.some(r=>!r.personalForecast&&r.measurementMode!=='fake'))return;
+    try{
+        const core=createSleepPersonalCore(),keys=new Set(next.map(core.key)),newRows=new Set(next),latest=visible.length?visible.map(core.key).sort().at(-1):'',
+            last=next.map(core.key).sort().at(-1),first=next.map(core.key).sort()[0],now=new Date().toISOString();
+        const all=[...visible.filter(r=>!keys.has(core.key(r))&&core.key(r)<=last),...next].sort((a,b)=>core.key(a).localeCompare(core.key(b)));
+        const offset=all.findIndex(r=>core.key(r)>=first);
+        core.replay(all.slice(Math.max(0,offset-480)),(r,f)=>{
+            if(newRows.has(r)&&!r.personalForecast)r.personalForecast={version:1,input:f.f.p.slice(),base:f.base,probabilities:f.p,
+                weight:f.weight,model:f.weight?f.choice.id:null,capturedAt:now,backfill:core.key(r)<=latest};
+        });
+    }catch(error){console.warn('睡眠类型学习预测未保存，原睡眠记录照常保存',error);}
+}
+const SLEEP_PERSONAL_MODEL_LABELS={similar:'相近比例与前30觉差值',exposure:'加近期高占比与连续次数',outcomes:'加近期实际判定分布'};
+let sleepPersonalViewCache=null;
+function renderSleepPersonalLearning(records){
+    const zone=document.getElementById('sleep-type-personal-panel');if(!zone)return;
+    try{
+        const core=createSleepPersonalCore(),rows=records.slice(0,480),fingerprint=JSON.stringify(rows.map(r=>[r.date,r.session,r.percentages,r.result,r.measurementMode]));
+        if(sleepPersonalViewCache?.fingerprint!==fingerprint)sleepPersonalViewCache={fingerprint,model:core.replay(rows)};
+        const model=sleepPersonalViewCache.model,c=typeof SleepTypeDynamics!=='undefined'?SleepTypeDynamics.personalChoices():null;
+        const percent=n=>(n*100).toFixed(1)+'%',format=n=>n==null?'—':n.toFixed(3),labels=core.types.map(k=>SLEEP_TYPE_RESULT_META[k]);
+        const ptext=p=>p.map((v,i)=>labels[i]+' '+percent(v)).join('／');
+        const entries=c&&(!rows.length||core.key(c)>core.key(rows[0]))?c.plans.map(plan=>({plan,f:model.predict({date:c.date,session:c.session,percentages:Object.fromEntries(core.types.slice(0,3).map(k=>[k,sleepTypeExportNumber(plan.percentages?.[k])]))})})).filter(x=>x.f):[];
+        const t=c?core.types.indexOf(c.target):-1;
+        entries.sort((a,b)=>Number(!c.fixed||b.plan.id===c.fixed)-Number(!c.fixed||a.plan.id===c.fixed)||(b.f.p[t]??0)-(a.f.p[t]??0));
+        const example=entries.find(x=>!c.fixed||x.plan.id===c.fixed)||entries[0],saved=records.find(r=>r.personalForecast)?.personalForecast,stats=model.metrics,base=model.baseMetrics;
+        zone.innerHTML=`<h4>个人判定学习 <span class="sn-muted">试用 · 不改动动态排程</span></h4><p class="sn-muted">照常一次录入比例和最终判定。系统先用更早的历史和本觉比例做预测，再用真实判定打分并学习。以下概率是个人历史估计，不是游戏官方概率或睡前承诺。</p>
+        <p class="sn-muted">最近${stats.count}条可验证记录：基础规则 Brier ${format(base.brier)}／对数损失 ${format(base.logLoss)}；逐觉自适应 Brier ${format(stats.brier)}／对数损失 ${format(stats.logLoss)}（越低越好）。无特征：识别${stats.balancedHit}次、漏判${stats.balancedMiss}次、误报${stats.balancedFalseAlarm}次；基础规则识别${base.balancedHit}次、漏判${base.balancedMiss}次、误报${base.balancedFalseAlarm}次。</p>
+        <p class="sn-muted">${model.choice.id?`当前通过两段滚动验证的模型：${SLEEP_PERSONAL_MODEL_LABELS[model.choice.id]}，最多占${percent(model.choice.weight)}；相似样本不足时仍用基础规则。`:'个人模型尚未持续胜过基础规则，暂不增加权重。'} 从较早记录回放起步；新增、修正或删除后按日期与觉次重算，权重可升可降。</p>
+        ${entries.length?`<h4 style="margin-top:10px">下一觉的方案概率对照</h4><p class="sn-muted">${escapeHtml(c.date)} · ${c.session} · 目标${labels[t]||'—'}。按方案默认比例试算，不代表波动范围保证。${c.fixed?'第1觉仍按固定方案；其他方案仅供对照。':''}</p><div style="overflow:auto"><table class="sn-history"><thead><tr><th>方案</th>${labels.map(l=>`<th>${l}</th>`).join('')}<th>个人权重</th></tr></thead><tbody>${entries.map(({plan,f})=>`<tr><td>${escapeHtml(plan.name||'未命名方案')}${c.fixed&&c.fixed===plan.id?'（固定）':''}</td>${f.p.map(v=>`<td>${percent(v)}</td>`).join('')}<td>${percent(f.weight)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="sn-muted">暂无可试算的下一觉方案。需有连续最近30条完整比例，并启用有效方案、设定不与记录重叠的下一觉。</p>'}
+        <details style="margin-top:10px"><summary>为什么给出这个概率？</summary><p class="sn-muted">差值规则先用此前的实际判定估计四类概率；相似历史再做加权和平滑。“高占比”与“实际判成某类”分别验证，不预设它们一定增加无特征。</p>${example?`<p class="sn-muted">以 ${escapeHtml(example.plan.name||'未命名方案')} 为例：相对前30觉差值 ${example.f.f.delta.map(n=>n.toFixed(1)).join('／')} 个百分点；近期指数加权占比 ${example.f.f.exposure.map(n=>n.toFixed(1)).join('／')}%；末尾连续≥80%次数 ${example.f.f.streak.join('／')}（均按浅／安／深）。</p><p class="sn-muted">基础：${ptext(example.f.base)}。相似历史试算：${ptext(example.f.selected.p)}。相似证据权重合计 ${example.f.selected.mass.toFixed(1)}，不等于有效样本数或概率置信区间。</p><p class="sn-muted">参考：${example.f.selected.near.slice(0,5).map(x=>`${escapeHtml(x.t.date)} ${x.t.session}（${x.t.f.p.map(n=>n.toFixed(1)).join('/')} → ${labels[x.t.y]}）`).join('；')||'无足够相似记录'}</p>`:''}<p class="sn-muted">滚动比较：${model.choice.evidence.map(x=>`${SLEEP_PERSONAL_MODEL_LABELS[x.id]} · Brier 改善 ${format(x.gain)}${x.eligible?'（通过）':''}`).join('；')}。样本窗口上限：最近480条原始记录、200条训练、60条评分；旧版假睡不作为训练标签。</p>${saved?`<p class="sn-muted">最近一条保存时封存的预测${saved.backfill?'（补录／修正时按历史顺序生成）':''}：${ptext(saved.probabilities)}。它是录入比例后、读取判定前计算的，不是睡前预测。修改记录时保留原预测与原输入。</p>`:''}</details>`;
+    }catch(error){console.warn('个人判定学习暂不可用',error);zone.innerHTML='<p class="sn-muted">个人判定学习暂不可用，原录入与排程不受影响。</p>';}
+}
 let sleepNotebookDraft = null;
 let sleepNotebookDraftOwner = '';
 let sleepNotebookHistoryLimit = 60;
@@ -18733,7 +18862,8 @@ function buildSleepTypeAnalysisExport(records=getVisibleSleepTypeRecords(),now=n
             const minutes=dynamic.stageMinutes[i];
             return {date:r.date,session:r.session,percentages:Object.fromEntries(SLEEP_TYPE_KEYS.map(k=>[k,sleepTypeExportNumber(r.percentages?.[k])])),
                 result:normalizeSleepTypeResult(r.result),measurementMode:r.measurementMode==='fake'?'fake':'normal',source:r.source==='research'?'research':'planner',
-                ...(minutes?{stageMinutes:Object.fromEntries(SLEEP_TYPE_KEYS.map(k=>[k,sleepTypeExportNumber(minutes[k])]))}:{})};
+                ...(minutes?{stageMinutes:Object.fromEntries(SLEEP_TYPE_KEYS.map(k=>[k,sleepTypeExportNumber(minutes[k])]))}:{}),
+                ...(r.personalForecast?{personalForecast:normalizeSleepPersonalForecast(r.personalForecast)}:{})};
         })
     };
 }
@@ -18901,9 +19031,10 @@ function sleepNotebookSaveRows() {
         return normalizeSleepTypeRecord({
             id:old?.id, date:row.date, session:row.session,
             percentages:Object.fromEntries(SLEEP_TYPE_KEYS.map(key => [key,Number(row[key])])),
-            result:row.result, measurementMode:'normal', source:'planner', createdAt:old?.createdAt || now, updatedAt:now
+            result:row.result, measurementMode:'normal', source:'planner', personalForecast:old?.personalForecast, createdAt:old?.createdAt || now, updatedAt:now
         });
     });
+    stampSleepPersonalForecasts(next,existing);
     const keys = new Set(next.map(row => getSleepTypeRecordKey(row.date,row.session)));
     historyLogs = mergeHistoryLogs([], [...historyLogs.filter(log => !(isSleepTypeRecordLog(log) && keys.has(getSleepTypeRecordKey(log.date,log.session)))),...next]);
     saveHistoryToLocal();
@@ -18945,6 +19076,7 @@ function renderSleepTypePlannerModal() {
             ${stats.window.some(row => row.measurementMode === 'fake') ? '<p class="sn-muted">含旧版标记为“假睡”的记录：按原来保存的比例纳入，不依据最终判定推算比例；可在历史记录中核对修改。</p>' : ''}
             <div class="sn-tools"><button type="button" class="sn-button" onclick="downloadSleepTypeAnalysisExport()"><i class="fa-solid fa-download" aria-hidden="true"></i> 导出分析文件（JSON）</button><span class="sn-muted">包含全部已保存的比例记录、最近30觉统计和方案设置。保留睡眠日期与觉次，不含账号信息、笔记或未保存草稿。</span></div>
             <section id="sleep-type-dynamic-panel" class="sn-panel"></section>
+            <section id="sleep-type-personal-panel" class="sn-panel"></section>
             <section class="sn-panel">
                 <h4>录入真实睡眠记录</h4>
                 <div class="sn-tools"><button type="button" class="sn-button ${batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('batch')">批量表格录入</button><button type="button" class="sn-button ${!batch ? 'sn-primary' : ''}" onclick="sleepNotebookMode('single')">单次快速录入</button></div>
@@ -18961,6 +19093,7 @@ function renderSleepTypePlannerModal() {
         </div></div>`;
     sleepNotebookRenderRows();
     if (typeof SleepTypeDynamics !== 'undefined') SleepTypeDynamics.mount();
+    renderSleepPersonalLearning(records);
 }
 
 function renderSleepNotebookEditFields(prefix, record) {
