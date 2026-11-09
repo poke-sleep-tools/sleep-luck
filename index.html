@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.08.2</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.09.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1020,6 +1020,7 @@
                         <i class="fa-solid fa-chart-simple text-blue-600"></i> 🛏️ 拆觉规划
                     </button>
                     <button onclick="openWeeklyRhythmPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-cyan-100 text-cyan-800 shadow-sm flex items-center gap-1 hover:bg-cyan-200" title="逐日输入拆觉分数和时间要求，滚动比较多种周评作息方案"><i class="fa-solid fa-calendar-days"></i> 📅 周评作息规划</button>
+                    <button type="button" onclick="SnorlaxEnergyTimeline.open()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-100 text-emerald-800 shadow-sm flex items-center gap-1 hover:bg-emerald-200"><i class="fa-solid fa-chart-line"></i> ⚡ 能量时间轴</button>
                     <button onclick="openSleepEncounterPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-teal-100 text-teal-900 shadow-sm flex items-center gap-1 hover:bg-teal-200" title="按岛屿、能量、睡眠分数与类型计算各宝可梦的遇见期望，并分析目标宝可梦适合的岛屿和能量区间">
                         <i class="fa-solid fa-binoculars text-teal-700"></i> 🔭 宝可梦狙击
                     </button>
@@ -32575,6 +32576,127 @@ var WeeklyRhythmPlanner=(()=>{
 })();
 function openWeeklyRhythmPlannerModal(){return WeeklyRhythmPlanner.open();}
 
+function createSnorlaxEnergyTimelineCore(){
+    const MIN=60000,DAY=86400000,formatters=new Map();
+    function zone(value){try{const raw=String(value||'').trim();return raw?new Intl.DateTimeFormat('en',{timeZone:raw}).resolvedOptions().timeZone:null;}catch(_){return null;}}
+    function parts(time,z){
+        if(!formatters.has(z))formatters.set(z,new Intl.DateTimeFormat('en-CA',{timeZone:z,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}));
+        return Object.fromEntries(formatters.get(z).formatToParts(time).filter(p=>p.type!=='literal').map(p=>[p.type,p.value]));
+    }
+    function wall(time,z){const p=parts(time,z);return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;}
+    function parse(value,z,which='reject'){
+        z=zone(z);if(!z)throw Error('请选择有效时区，例如 Asia/Tokyo、Asia/Shanghai 或 UTC。');
+        const v=String(value||'');if(!/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?$/.test(v))throw Error('请填写完整日期和时间。');
+        const full=v.length===16?v+':00':v,naive=Date.parse(full+'Z');
+        if(!Number.isFinite(naive)||new Date(naive).toISOString().slice(0,19)!==full)throw Error('日期或时间无效。');
+        const offsets=new Set();for(const h of [-36,-12,0,12,36]){const t=naive+h*60*MIN;offsets.add(Date.parse(wall(t,z)+'Z')-t);}
+        const matches=[...offsets].map(offset=>naive-offset).filter(t=>wall(t,z)===full).sort((a,b)=>a-b);
+        if(!matches.length)throw Error('所选时区不存在这个当地时间（可能跨过夏令时跳时），请调整时间。');
+        if(matches.length>1&&!['earlier','later'].includes(which))throw Error('所选时区的这个时刻出现两次，请选择夏令时重叠的较早或较晚一次。');
+        return which==='later'?matches.at(-1):matches[0];
+    }
+    function shift(date,n){return new Date(Date.parse(date+'T00:00:00Z')+n*DAY).toISOString().slice(0,10);}
+    function weekFromDate(date,z){return {date,start:parse(date+'T04:00',z,'earlier'),end:parse(shift(date,7)+'T04:00',z,'earlier')};}
+    function week(time,z){
+        const text=wall(time,z),date=text.slice(0,10),day=text.slice(11,16)<'04:00'?shift(date,-1):date;
+        const weekday=new Date(day+'T00:00:00Z').getUTCDay();return weekFromDate(shift(day,-((weekday+6)%7)),z);
+    }
+    function energy(value){const s=String(value??'').trim();if(!/^[\d,，\s]+$/.test(s)||!/[0-9]/.test(s))throw Error('请输入非负整数能量，可带千位分隔符。');const n=Number(s.replace(/[,，\s]/g,''));if(!Number.isSafeInteger(n)||n<0)throw Error('能量超出可记录范围。');return n;}
+    function lookup(rows,time,z){const w=week(time,z);let best=null;for(const r of rows)if(r.time>=w.start&&r.time<=time&&(!best||r.time>best.time))best=r;return {week:w,record:best,gap:best?(time-best.time)/MIN:null};}
+    function rewind(wake,score,base=510,wait=5,basis='measurement'){
+        if(!Number.isFinite(wake)||!Number.isInteger(score)||score<1||score>100||![510,660].includes(base)||!Number.isInteger(wait)||wait<0||wait>180)throw Error('目标分数须为1–100整数，入睡等待须为0–180分钟。');
+        const minutes=Math.round(base*score/100),effective=wake-minutes*MIN,measurement=effective-wait*MIN;
+        return {wake,minutes,effective,measurement,target:basis==='effective'?effective:measurement};
+    }
+    return {MIN,zone,wall,parse,shift,week,weekFromDate,energy,lookup,rewind};
+}
+var SnorlaxEnergyTimeline=(()=>{
+    const core=createSnorlaxEnergyTimelineCore(),id='snorlax-energy-modal',storage=()=>`snorlax_energy_timeline_v1_${currentCloudUser?.id||'guest'}`;
+    const device=()=>core.zone(Intl.DateTimeFormat().resolvedOptions().timeZone)||'Asia/Tokyo';
+    const e=x=>escapeHtml(String(x??'')),get=k=>document.getElementById('energy-timeline-'+k),v=k=>get(k)?.value||'';
+    const now=()=>Date.now(),text=(t,z)=>core.wall(t,z).replace('T',' '),short=(t,z)=>core.wall(t,z).slice(5,16).replace('T',' ');
+    const fmt=n=>n.toLocaleString('zh-CN'),span=n=>{const m=Math.round(n);return `${m>=60?Math.floor(m/60)+'小时':''}${m%60}分钟`;};
+    let state,owner,viewDate,result,limit,timer;
+    function read(){
+        let raw;try{raw=JSON.parse(localStorage.getItem(owner)||'null');}catch(_){}
+        const map=new Map();for(const r of Array.isArray(raw?.rows)?raw.rows:[])if(Number.isSafeInteger(r?.time)&&Math.abs(r.time)<253402300799000&&Number.isSafeInteger(r.energy)&&r.energy>=0)map.set(r.time,{time:r.time,energy:r.energy,zone:core.zone(r.zone)||'UTC'});
+        return {zone:core.zone(raw?.zone)||device(),rows:[...map.values()].sort((a,b)=>a.time-b.time)};
+    }
+    function persist(next){if(storage()!==owner){close();throw Error('账号已切换，请重新打开能量时间轴。');}try{localStorage.setItem(owner,JSON.stringify(next));}catch(_){throw Error('本机存储写入失败，本次未保存。请检查浏览器存储空间。');}state=next;}
+    function close(){clearInterval(timer);document.getElementById(id)?.remove();result=null;}
+    function open(){
+        close();owner=storage();state=read();viewDate=null;limit=40;
+        const node=document.createElement('div');node.id=id;node.className='fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/65 p-2 sm:p-4 backdrop-blur-sm';document.body.appendChild(node);render();
+        timer=setInterval(()=>{if(!document.getElementById(id)||owner!==storage()){close();return;}if(!viewDate)renderWeek();},60000);
+    }
+    function zoneList(){let list=[];try{list=Intl.supportedValuesOf?.('timeZone')||[];}catch(_){}return [...new Set(['Asia/Tokyo','Asia/Shanghai','Asia/Hong_Kong','UTC',device(),...list])].map(z=>`<option value="${e(z)}"></option>`).join('');}
+    const overlap=()=>`<select id="energy-timeline-overlap" aria-label="夏令时重叠处理"><option value="reject">时刻重叠时询问</option><option value="earlier">重叠时取较早一次</option><option value="later">重叠时取较晚一次</option></select>`;
+    function render(){
+        const node=document.getElementById(id);if(!node)return;
+        const cls='rounded-2xl border border-slate-200 bg-white p-4',input='energy-timeline-',clock=core.wall(now(),state.zone).slice(0,16);
+        node.innerHTML=`<style>#${id} .et-inputs{display:flex;flex-wrap:wrap;gap:8px;align-items:end}#${id} label{font-size:12px;font-weight:700;display:grid;gap:4px}#${id} input,#${id} select{min-width:0;max-width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;background:white}#${id} button:not(.et-close){padding:8px 11px;border:1px solid #a7f3d0;border-radius:9px;color:#065f46;font-weight:750;font-size:13px;background:#ecfdf5}#${id} .et-note{font-size:12px;color:#64748b;line-height:1.7;margin:6px 0}#${id} summary{cursor:pointer;font-weight:800}#${id} h3{font-weight:900}#${id} table{width:100%;font-size:13px;border-collapse:collapse}#${id} td,#${id} th{padding:7px 5px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}</style>
+        <div role="dialog" aria-modal="true" aria-label="卡比兽能量时间轴" class="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-emerald-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">卡比兽能量时间轴</h2><p class="text-xs text-emerald-100">记录当时能量 · 回查外设拆觉参考</p></div><button class="et-close text-2xl" type="button" aria-label="关闭能量时间轴" onclick="SnorlaxEnergyTimeline.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
+        <section class="${cls}"><datalist id="energy-timeline-zones">${zoneList()}</datalist><div class="et-inputs"><label>默认时区／周界线<input id="${input}zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.changeZone()">保存默认时区</button></div><p class="et-note">按默认时区每周一 04:00 分周，旧周记录保留。更改默认时区会按新时区重分周，不改变已保存的实际时刻。记录仅存在此浏览器的当前账号空间，不自动同步。</p></section>
+        <section class="${cls}"><h3>记录能量</h3><div class="et-inputs"><label>卡比兽能量<input id="${input}energy" type="text" inputmode="numeric" placeholder="例如 1,234,567" onkeydown="if(event.key==='Enter')SnorlaxEnergyTimeline.add(false)"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(false)">用当前时刻保存</button></div><details class="mt-3"><summary>手动补录日期、时间和时区</summary><div class="et-inputs mt-2"><label>记录时间<input id="${input}manual" type="datetime-local" step="1" value="${clock}"></label><label>这条记录的时区<input id="${input}manual-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(true)">补录</button></div><p class="et-note">使用上方填写的同一个能量数值。手动时区不改变默认时区。</p></details></section>
+        <section class="${cls}"><h3>找回当时的能量</h3><div class="et-inputs"><label>往前多少小时<input id="${input}hours" type="number" min="0" max="87600" step="1" value="2" style="width:8em"></label><label>再往前多少分钟<input id="${input}mins" type="number" min="0" max="59" step="1" value="0" style="width:8em"></label><button type="button" onclick="SnorlaxEnergyTimeline.search(false)">从现在回查</button></div>
+        <div class="mt-3 border-t border-slate-100 pt-3"><h3>按睡眠分数倒推</h3><div class="et-inputs"><label>目标睡眠分数<input id="${input}score" type="number" min="1" max="100" step="1" value="50" style="width:7em"></label><label>起床时间<select id="${input}wake-mode" onchange="document.getElementById('energy-timeline-custom-wake').hidden=this.value!=='custom'"><option value="now">现在起床</option><option value="custom">自定义起床时间</option></select></label><label>满分时长<select id="${input}base"><option value="510">8小时30分</option><option value="660">11小时</option></select></label><label>入睡等待（分钟）<input id="${input}wait" type="number" min="0" max="180" step="1" value="5" style="width:7em"></label><label>回查哪个时间点<select id="${input}basis"><option value="measurement">开始计测</option><option value="effective">有效入睡</option></select></label></div><div id="${input}custom-wake" hidden class="mt-2"><div class="et-inputs"><label>起床日期和时间<input id="${input}wake" type="datetime-local" step="1" value="${clock}"></label><label>起床时区<input id="${input}wake-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label></div></div><div class="et-inputs mt-2"><button type="button" onclick="SnorlaxEnergyTimeline.search(true)">倒推并回查能量</button></div><p class="et-note">用目标分数 × 满分时长 ÷ 100 估算有效睡眠。二觉被每日剩余分数封顶时，或实际计测有偏差时，分数不能唯一反推出入睡时间。</p></div><details><summary class="et-note">夏令时重复时刻（高级）</summary>${overlap()}</details><div id="${input}result" class="mt-2" aria-live="polite"></div></section>
+        <section class="${cls}"><div class="et-inputs"><h3>每周能量折线</h3><button type="button" onclick="SnorlaxEnergyTimeline.move(-7)">上周</button><button type="button" onclick="SnorlaxEnergyTimeline.move(0)">本周</button><button type="button" onclick="SnorlaxEnergyTimeline.move(7)">下周</button><label>跳到某周<input type="date" id="${input}jump" onchange="SnorlaxEnergyTimeline.jump(this.value)"></label></div><div id="${input}week"></div></section></div></div>`;
+        renderWeek();renderResult();
+    }
+    function changeZone(){try{const z=core.zone(v('zone'));if(!z)throw Error('请输入有效时区，例如 Asia/Tokyo 或 Asia/Shanghai。');persist({...state,zone:z});viewDate=null;render();}catch(error){showToast(error.message);}}
+    function add(manual){
+        try{
+            const z=manual?core.zone(v('manual-zone')):state.zone;if(!z)throw Error('请选择有效记录时区。');
+            const time=manual?core.parse(v('manual'),z,v('overlap')):Math.floor(now()/1000)*1000;
+            if(time>now())throw Error('实际能量不能记录到未来时间。');const energy=core.energy(v('energy'));
+            if(state.rows.some(r=>r.time===time)&&!confirm('该时刻已有一条记录，要替换能量吗？'))return;
+            persist({...state,rows:[...state.rows.filter(r=>r.time!==time),{time,energy,zone:z}].sort((a,b)=>a.time-b.time)});
+            viewDate=core.week(time,state.zone).date===core.week(now(),state.zone).date?null:core.week(time,state.zone).date;limit=40;
+            get('energy').value='';renderWeek();renderResult();showToast('已记录卡比兽能量');
+        }catch(error){showToast(error.message);}
+    }
+    function search(byScore){
+        try{
+            let target,calc=null;
+            if(byScore){
+                const wake=v('wake-mode')==='custom'?core.parse(v('wake'),v('wake-zone'),v('overlap')):now();
+                if(v('wait')==='')throw Error('请填写入睡等待分钟数，可填0。');
+                calc=core.rewind(wake,Number(v('score')),Number(v('base')),Number(v('wait')),v('basis'));target=calc.target;
+            }else{
+                const h=Number(v('hours')),m=Number(v('mins'));if((!v('hours')&&!v('mins'))||!Number.isInteger(h)||h<0||h>87600||!Number.isInteger(m)||m<0||m>59)throw Error('请输入有效的小时数和0–59分钟。');
+                target=now()-(h*60+m)*core.MIN;
+            }
+            if(target>now())throw Error('倒推的目标时刻尚未到达，不能查询未来能量。');
+            result={target,calc};viewDate=core.week(target,state.zone).date;limit=40;renderResult();renderWeek();
+        }catch(error){result=null;renderWeek();get('result').textContent=error.message;}
+    }
+    function renderResult(){
+        const out=get('result');if(!out)return;if(!result){out.innerHTML='';return;}
+        const {target,calc}=result,{record,gap,week}=core.lookup(state.rows,target,state.zone);
+        out.innerHTML=`<div class="rounded-xl bg-emerald-50 p-3"><div class="text-sm font-bold">查询时刻 ${e(text(target,state.zone))} · ${e(state.zone)}</div>${calc?`<p class="et-note">起床 ${e(text(calc.wake,state.zone))} · 有效睡眠约${span(calc.minutes)} · 有效入睡 ${e(text(calc.effective,state.zone))} · 开始计测 ${e(text(calc.measurement,state.zone))}${calc.minutes<90?'。倒推时长不足90分钟，请核对实际有效计测。':''}</p>`:''}${record?`<div class="text-xl font-black text-emerald-900">参考能量 ${fmt(record.energy)}</div><p class="et-note">取自 ${e(text(record.time,state.zone))}，${gap===0?'与目标同一时刻':`早于目标约${span(gap)}`}。这是当时或之前的最近记录，不代表目标时刻的精确能量。</p><button type="button" onclick="SnorlaxEnergyTimeline.carry()">用此能量拆觉</button>`:`<p class="et-note">${e(week.date)} 这一周内，目标时刻或之前没有记录；不会沿用上周或之后的能量。</p>`}</div>`;
+    }
+    function chart(rows,w){
+        if(!rows.length)return '<p class="et-note">这一周还没有能量记录。</p>';
+        const L=72,R=680,T=14,B=160,peak=rows.reduce((m,r)=>Math.max(m,r.energy),1),x=t=>L+(t-w.start)/(w.end-w.start)*(R-L),y=n=>B-(B-T)*n/peak;
+        const x0=x(rows[0].time),y0=y(rows[0].energy),end=Math.min(now(),w.end),d=`M${x0.toFixed(2)} ${y0.toFixed(2)}`+rows.slice(1).map(r=>` H${x(r.time).toFixed(2)} V${y(r.energy).toFixed(2)}`).join('')+` H${x(Math.max(rows.at(-1).time,end)).toFixed(2)}`;
+        const marks=rows.length>180?rows.filter((_,i)=>i%Math.ceil(rows.length/180)===0||i===rows.length-1):rows;
+        const q=result&&result.target>=w.start&&result.target<w.end?result.target:null,hit=q==null?null:core.lookup(rows,q,state.zone).record;
+        return `<svg role="img" aria-label="本周能量阶梯折线：圆点是实录，虚线为沿用最近一条记录的示意" viewBox="0 0 700 192" style="display:block;width:100%;height:auto"><title>本周实录与最近值模拟</title>${[0,.5,1].map(k=>`<line x1="${L}" x2="${R}" y1="${y(peak*k)}" y2="${y(peak*k)}" stroke="#e2e8f0"/><text x="${L-6}" y="${y(peak*k)+4}" text-anchor="end" font-size="11" fill="#475569">${new Intl.NumberFormat('zh-CN',{notation:'compact',maximumFractionDigits:1}).format(peak*k)}</text>`).join('')}${[0,1,2,3,4,5,6].map(i=>{const d=core.shift(w.date,i),xx=x(core.parse(d+'T04:00',state.zone,'earlier'));return `<text x="${xx}" y="181" text-anchor="middle" font-size="11" fill="#475569">${d.slice(5)}</text>`;}).join('')}<path d="${d}" fill="none" stroke="#0f766e" stroke-width="2" stroke-dasharray="5 4"/>${marks.map(r=>`<circle cx="${x(r.time)}" cy="${y(r.energy)}" r="3.5" fill="#0f766e"><title>${e(short(r.time,state.zone))}：${fmt(r.energy)}</title></circle>`).join('')}${q==null?'':`<line x1="${x(q)}" x2="${x(q)}" y1="${T}" y2="${B}" stroke="#b45309" stroke-width="2"/><text x="${Math.min(R-20,Math.max(L+20,x(q)))}" y="12" text-anchor="middle" fill="#92400e" font-size="11">查询</text>${hit?`<circle cx="${x(q)}" cy="${y(hit.energy)}" r="5" fill="#b45309"/>`:''}`}</svg>`;
+    }
+    function renderWeek(){
+        const out=get('week');if(!out)return;
+        const current=core.week(now(),state.zone),w=viewDate?core.weekFromDate(viewDate,state.zone):current;
+        const rows=state.rows.filter(r=>r.time>=w.start&&r.time<w.end),newest=rows.slice(-limit).reverse();get('jump').value=w.date;
+        out.innerHTML=`<p class="et-note">${w.date===current.date?'本周 · ':''}${e(text(w.start,state.zone))} 至 ${e(text(w.end,state.zone))}（不含终点） · ${rows.length}条</p>${chart(rows,w)}<p class="et-note">圆点是实录，虚线是在下一条实录前沿用最近值的示意；首条之前留空，不插值、不跨周延续。橙线标记查询时刻。</p>${rows.length?`<div style="overflow:auto"><table><thead><tr><th>时间（默认时区）</th><th>能量</th><th>录入时区</th><th>操作</th></tr></thead><tbody>${newest.map(r=>`<tr><td>${e(text(r.time,state.zone))}</td><td>${fmt(r.energy)}</td><td>${e(r.zone)}</td><td><button type="button" onclick="SnorlaxEnergyTimeline.remove(${r.time})">删除</button></td></tr>`).join('')}</tbody></table></div>${rows.length>limit?'<button type="button" onclick="SnorlaxEnergyTimeline.more()">加载更早记录</button>':''}`:''}`;
+    }
+    function move(delta){const current=core.week(now(),state.zone).date,next=delta?core.shift(viewDate||current,delta):current;if(next>current){showToast('还没有下一周的实录');return;}viewDate=next===current?null:next;limit=40;renderWeek();}
+    function jump(date){try{const current=core.week(now(),state.zone).date,w=core.week(core.parse(date+'T12:00',state.zone,'earlier'),state.zone).date;if(w>current)throw Error('请选择本周或更早的日期。');viewDate=w===current?null:w;limit=40;renderWeek();}catch(error){showToast(error.message);renderWeek();}}
+    function remove(time){if(!confirm('删除这条能量记录？其他日期与周记录不受影响。'))return;try{persist({...state,rows:state.rows.filter(r=>r.time!==time)});renderWeek();renderResult();}catch(error){showToast(error.message);}}
+    function carry(){if(!result||owner!==storage())return;const r=core.lookup(state.rows,result.target,state.zone).record;if(!r)return;close();openSleepSplitPlannerModal();const input=document.getElementById('sleep-split-energy');if(input){input.value=String(r.energy);renderSleepSplitPlanner();}}
+    return {open,close,changeZone,add,search,move,jump,remove,carry,more:()=>{limit+=40;renderWeek();}};
+})();
+function openSnorlaxEnergyTimelineModal(){SnorlaxEnergyTimeline.open();}
+
 function openSleepSplitPlannerModal() {
     closeSleepSplitPlannerModal();
     let saved={}; try { saved=JSON.parse(localStorage.getItem('sleep_split_planner_inputs_v1')||'{}')||{}; } catch(_) {}
@@ -32629,6 +32751,7 @@ function openSleepSplitPlannerModal() {
         { id: 'sleepType', group: 'sleep', label: '睡眠类型规划', desc: '记录比例并规划下一觉', icon: 'fa-moon', tone: 'bg-violet-50 text-violet-700', action: 'openSleepTypePlannerModal' },
         { id: 'weeklyRhythm', group: 'sleep', label: '周评作息规划', desc: '逐日拆觉与多方案周评规划', icon: 'fa-calendar-days', tone: 'bg-cyan-50 text-cyan-800', action: 'openWeeklyRhythmPlannerModal' },
         { id: 'sleepSplit', group: 'sleep', label: '拆觉规划', desc: '当前能量拆法与 x+y 数轴', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', action: 'openSleepSplitPlannerModal' },
+        { id: 'snorlaxEnergy', group: 'sleep', label: '能量时间轴', desc: '记录能量、按起床时间倒推、查每周折线', icon: 'fa-chart-line', tone: 'bg-emerald-50 text-emerald-700', action: 'openSnorlaxEnergyTimelineModal' },
         { id: 'sleepEncounter', group: 'sleep', label: '宝可梦狙击', desc: '遇见期望、岛屿与能量曲线', icon: 'fa-binoculars', tone: 'bg-teal-50 text-teal-800', action: 'openSleepEncounterPlannerModal' },
         { id: 'dailyReward', group: 'sleep', label: '每日奖励打卡', desc: '小日历查漏与快速补录', icon: 'fa-gift', tone: 'bg-amber-50 text-amber-800', action: 'openDailyRewardQuickModal' },
         { id: 'ballPlanner', group: 'sleep', label: '精灵球与每日奖励', desc: '库存、奖励和商店规划', icon: 'fa-baseball', tone: 'bg-sky-50 text-sky-700', action: 'openBallPlannerModal' },
