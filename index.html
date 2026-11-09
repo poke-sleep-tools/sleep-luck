@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.09.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.09.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1812,6 +1812,7 @@ function isHistorySystemLog(log) {
     return isSleepResearchLog(log) || isBallPlannerStateLog(log) || isDrySpellAnalysisStateLog(log) ||
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
+        log?.type === 'snorlax_energy_point' || log?.type === 'snorlax_energy_settings' ||
         !!(log && (log.type === 'sleep_week_rhythm_state' || log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
@@ -5304,6 +5305,7 @@ async function saveHistoryToDedicatedCloud(userId) {
                 .eq('user_id', userId)
                 .in('record_id', ids);
             if (readError) throw readError;
+            if (currentCloudUser?.id !== userId) return { ok: false, staleUser: true };
             const remoteMap = new Map((existingRows || []).map(row => [String(row.record_id), row.payload]));
             const rows = batch.map(item => {
                 const merged = chooseNewerHistoryLog(remoteMap.get(item.id), item.log);
@@ -5314,6 +5316,7 @@ async function saveHistoryToDedicatedCloud(userId) {
                 .upsert(rows, { onConflict: 'user_id,record_id' })
                 .select('record_id,payload,updated_at');
             if (writeError) throw writeError;
+            if (currentCloudUser?.id !== userId) return { ok: false, staleUser: true };
             (writtenRows || rows).forEach(row => {
                 if (!row?.record_id || !row?.payload) return;
                 historyDedicatedSyncedHashes.set(String(row.record_id), stableHistoryJson(row.payload));
@@ -5368,6 +5371,7 @@ async function performHistoryCloudSync(userId) {
                 .eq('user_id', userId)
                 .maybeSingle();
             if (verifyError) throw verifyError;
+            if (currentCloudUser?.id !== userId) return { ok: false, staleUser: true };
 
             const verifiedLogs = mergeHistoryLogs([], prepareEncounterStatisticsLogsForMerge(
                 verifyData && Array.isArray(verifyData.history_logs) ? verifyData.history_logs : []
@@ -32608,7 +32612,25 @@ function createSnorlaxEnergyTimelineCore(){
         const minutes=Math.round(base*score/100),effective=wake-minutes*MIN,measurement=effective-wait*MIN;
         return {wake,minutes,effective,measurement,target:basis==='effective'?effective:measurement};
     }
-    return {MIN,zone,wall,parse,shift,week,weekFromDate,energy,lookup,rewind};
+    const pointId=time=>`snorlax_energy_at_${time}`,settingsId='snorlax_energy_settings_v1',legacyAt='1970-01-01T00:00:00.001Z';
+    function clean(row){return Number.isSafeInteger(row?.time)&&Math.abs(row.time)<253402300799000&&Number.isSafeInteger(row.energy)&&row.energy>=0?{time:row.time,energy:row.energy,zone:zone(row.zone)||'UTC'}:null;}
+    function point(row,updatedAt){return {...row,id:pointId(row.time),type:'snorlax_energy_point',date:new Date(row.time).toISOString().slice(0,10),updatedAt};}
+    function settings(z,updatedAt){return {id:settingsId,type:'snorlax_energy_settings',zone:z,updatedAt};}
+    function legacy(raw){
+        const map=new Map();for(const r of Array.isArray(raw?.rows)?raw.rows:[]){const row=clean(r);if(row)map.set(row.time,point(row,legacyAt));}
+        const z=zone(raw?.zone);return [...map.values(),...(z?[settings(z,legacyAt)]:[])];
+    }
+    function fromHistory(logs,fallback){
+        const markers=getHistoryDeleteMarkerMap(logs),map=new Map();let pref;
+        for(const r of logs){
+            if(r?.type!=='snorlax_energy_point'&&r?.type!=='snorlax_energy_settings')continue;
+            if(isHistoryRecordDeletedByMarker(r,markers))continue;
+            if(r.type==='snorlax_energy_settings'&&r.id===settingsId&&zone(r.zone))pref=chooseNewerHistoryLog(pref,r);
+            else if(r.type==='snorlax_energy_point'&&r.id===pointId(r.time)&&clean(r))map.set(r.time,chooseNewerHistoryLog(map.get(r.time),r));
+        }
+        return {zone:zone(pref?.zone)||fallback,rows:[...map.values()].map(clean).sort((a,b)=>a.time-b.time)};
+    }
+    return {MIN,zone,wall,parse,shift,week,weekFromDate,energy,lookup,rewind,pointId,settingsId,point,settings,legacy,fromHistory};
 }
 var SnorlaxEnergyTimeline=(()=>{
     const core=createSnorlaxEnergyTimelineCore(),id='snorlax-energy-modal',storage=()=>`snorlax_energy_timeline_v1_${currentCloudUser?.id||'guest'}`;
@@ -32616,17 +32638,64 @@ var SnorlaxEnergyTimeline=(()=>{
     const e=x=>escapeHtml(String(x??'')),get=k=>document.getElementById('energy-timeline-'+k),v=k=>get(k)?.value||'';
     const now=()=>Date.now(),text=(t,z)=>core.wall(t,z).replace('T',' '),short=(t,z)=>core.wall(t,z).slice(5,16).replace('T',' ');
     const fmt=n=>n.toLocaleString('zh-CN'),span=n=>{const m=Math.round(n);return `${m>=60?Math.floor(m/60)+'小时':''}${m%60}分钟`;};
-    let state,owner,viewDate,result,limit,timer;
-    function read(){
-        let raw;try{raw=JSON.parse(localStorage.getItem(owner)||'null');}catch(_){}
-        const map=new Map();for(const r of Array.isArray(raw?.rows)?raw.rows:[])if(Number.isSafeInteger(r?.time)&&Math.abs(r.time)<253402300799000&&Number.isSafeInteger(r.energy)&&r.energy>=0)map.set(r.time,{time:r.time,energy:r.energy,zone:core.zone(r.zone)||'UTC'});
-        return {zone:core.zone(raw?.zone)||device(),rows:[...map.values()].sort((a,b)=>a.time-b.time)};
+    let state,owner,viewDate,result,limit,timer,generation=0,ready=Promise.resolve(),syncQueue=Promise.resolve();
+    function rawLocal(){try{return JSON.parse(localStorage.getItem(owner)||'null');}catch(_){return null;}}
+    function read(){const raw=rawLocal();return {zone:core.zone(raw?.zone)||device(),rows:core.legacy(raw).filter(r=>r.type==='snorlax_energy_point').map(({time,energy,zone})=>({time,energy,zone})).sort((a,b)=>a.time-b.time)};}
+    const active=token=>token===generation&&storage()===owner&&!!document.getElementById(id);
+    function status(message){const node=get('sync-status');if(node)node.textContent=message;}
+    function refreshState(){
+        const old=state.zone;state=core.fromHistory(historyLogs,device());
+        for(const k of ['zone','manual-zone','wake-zone']){const field=get(k);if(field&&field.value===old)field.value=state.zone;}
+        renderWeek();renderResult();
     }
-    function persist(next){if(storage()!==owner){close();throw Error('账号已切换，请重新打开能量时间轴。');}try{localStorage.setItem(owner,JSON.stringify(next));}catch(_){throw Error('本机存储写入失败，本次未保存。请检查浏览器存储空间。');}state=next;}
-    function close(){clearInterval(timer);document.getElementById(id)?.remove();result=null;}
+    async function localWrite(){saveHistoryToLocal({syncCloud:false});return waitForHistoryLargeStorageWrite();}
+    async function initialize(token){
+        loadHistoryFromLocal();const loaded=await ensureHistoryLargeStorageReady();
+        if(!active(token))return false;
+        if(!loaded?.ok){status('本机历史读取失败，请关闭后重试。旧记录未改动。');return false;}
+        const seeds=core.legacy(rawLocal()),keys=new Set(historyLogs.map(r=>String(r?.id))),markers=getHistoryDeleteMarkerMap(historyLogs);
+        const missing=seeds.filter(r=>!keys.has(r.id)&&!isHistoryRecordDeletedByMarker(r,markers));
+        if(missing.length){historyLogs=mergeHistoryLogs(historyLogs,missing);await localWrite();}
+        if(!active(token))return false;refreshState();return true;
+    }
+    function sync(pull=true){
+        if(!currentCloudUser)return Promise.resolve();
+        const token=generation,user=currentCloudUser.id,prepared=ready;
+        syncQueue=syncQueue.catch(()=>{}).then(async()=>{
+            if((pull&&!active(token))||currentCloudUser?.id!==user||!await prepared||currentCloudUser?.id!==user)return;
+            if(active(token))status('正在同步账号能量记录…');
+            try{
+                if(pull&&historyDedicatedCloudSupport!==false){
+                    const fetched=await loadHistoryFromDedicatedCloud(user);
+                    if(currentCloudUser?.id!==user)return;
+                    if(!fetched?.ok&&!fetched?.missingTable)throw fetched?.error||Error('读取失败');
+                }
+                const saved=await saveHistoryToCloudNow();
+                if(!active(token))return;
+                refreshState();status(saved?.ok?'账号同步完成 · 同账号另一端打开后可读取':'云端同步未完成，请稍后重试。');
+            }catch(error){if(active(token)){console.warn('能量时间轴同步失败',error);status('云端同步未完成，请稍后重试。');}}
+        });return syncQueue;
+    }
+    async function persist(next,op,token){
+        if(!active(token))throw Error('账号已切换或面板已关闭，请重新打开能量时间轴。');
+        if(!currentCloudUser){try{localStorage.setItem(owner,JSON.stringify(next));}catch(_){throw Error('本机存储写入失败，本次未保存。');}state=next;return true;}
+        const user=currentCloudUser.id;
+        const key=op.zone?core.settingsId:core.pointId(op.row?.time??op.remove);
+        if(op.remove!=null){replaceHistoryDeleteMarker(key);historyLogs=mergeHistoryLogs([],historyLogs);}
+        else{
+            const old=historyLogs.find(r=>r?.id===key),marker=getHistoryDeleteMarkerMap(historyLogs).get(key);
+            const at=new Date(Math.max(now(),getHistoryLogMergeTime(old)+1,getHistoryLogMergeTime(marker)+1)).toISOString();
+            historyLogs=mergeHistoryLogs(historyLogs,[op.zone?core.settings(op.zone,at):core.point(op.row,at)]);
+        }
+        refreshState();const ok=await localWrite();if(currentCloudUser?.id===user)void sync(false);if(active(token)&&!ok)status('本机写入未确认，正在尝试账号同步；请勿关闭页面。');return ok;
+    }
+    function close(){generation++;clearInterval(timer);document.getElementById(id)?.remove();result=null;}
     function open(){
-        close();owner=storage();state=read();viewDate=null;limit=40;
+        close();owner=storage();state=currentCloudUser?{zone:read().zone,rows:[]}:read();viewDate=null;limit=40;
         const node=document.createElement('div');node.id=id;node.className='fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/65 p-2 sm:p-4 backdrop-blur-sm';document.body.appendChild(node);render();
+        const token=generation;
+        ready=currentCloudUser?initialize(token).catch(error=>{console.warn('能量时间轴读取失败',error);if(active(token))status('本机历史读取失败，请关闭后重试。');return false;}):Promise.resolve(true);
+        if(currentCloudUser)void sync();
         timer=setInterval(()=>{if(!document.getElementById(id)||owner!==storage()){close();return;}if(!viewDate)renderWeek();},60000);
     }
     function zoneList(){let list=[];try{list=Intl.supportedValuesOf?.('timeZone')||[];}catch(_){}return [...new Set(['Asia/Tokyo','Asia/Shanghai','Asia/Hong_Kong','UTC',device(),...list])].map(z=>`<option value="${e(z)}"></option>`).join('');}
@@ -32636,23 +32705,26 @@ var SnorlaxEnergyTimeline=(()=>{
         const cls='rounded-2xl border border-slate-200 bg-white p-4',input='energy-timeline-',clock=core.wall(now(),state.zone).slice(0,16);
         node.innerHTML=`<style>#${id} .et-inputs{display:flex;flex-wrap:wrap;gap:8px;align-items:end}#${id} label{font-size:12px;font-weight:700;display:grid;gap:4px}#${id} input,#${id} select{min-width:0;max-width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;background:white}#${id} button:not(.et-close){padding:8px 11px;border:1px solid #a7f3d0;border-radius:9px;color:#065f46;font-weight:750;font-size:13px;background:#ecfdf5}#${id} .et-note{font-size:12px;color:#64748b;line-height:1.7;margin:6px 0}#${id} summary{cursor:pointer;font-weight:800}#${id} h3{font-weight:900}#${id} table{width:100%;font-size:13px;border-collapse:collapse}#${id} td,#${id} th{padding:7px 5px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}</style>
         <div role="dialog" aria-modal="true" aria-label="卡比兽能量时间轴" class="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-emerald-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">卡比兽能量时间轴</h2><p class="text-xs text-emerald-100">记录当时能量 · 回查外设拆觉参考</p></div><button class="et-close text-2xl" type="button" aria-label="关闭能量时间轴" onclick="SnorlaxEnergyTimeline.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
-        <section class="${cls}"><datalist id="energy-timeline-zones">${zoneList()}</datalist><div class="et-inputs"><label>默认时区／周界线<input id="${input}zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.changeZone()">保存默认时区</button></div><p class="et-note">按默认时区每周一 04:00 分周，旧周记录保留。更改默认时区会按新时区重分周，不改变已保存的实际时刻。记录仅存在此浏览器的当前账号空间，不自动同步。</p></section>
+        <section class="${cls}"><datalist id="energy-timeline-zones">${zoneList()}</datalist><div class="et-inputs"><label>默认时区／周界线<input id="${input}zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.changeZone()">保存默认时区</button>${currentCloudUser?'<button type="button" onclick="SnorlaxEnergyTimeline.sync()">立即同步</button>':''}</div><p id="${input}sync-status" class="et-note" aria-live="polite">${currentCloudUser?'正在读取本机账号记录…':'未登录：记录仅保存在本机访客空间。'}</p><p class="et-note">按默认时区每周一 04:00 分周，旧周记录保留。更改默认时区会按新时区重分周，不改变已保存的实际时刻。登录同一账号后，记录和默认时区可跨端同步。</p></section>
         <section class="${cls}"><h3>记录能量</h3><div class="et-inputs"><label>卡比兽能量<input id="${input}energy" type="text" inputmode="numeric" placeholder="例如 1,234,567" onkeydown="if(event.key==='Enter')SnorlaxEnergyTimeline.add(false)"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(false)">用当前时刻保存</button></div><details class="mt-3"><summary>手动补录日期、时间和时区</summary><div class="et-inputs mt-2"><label>记录时间<input id="${input}manual" type="datetime-local" step="1" value="${clock}"></label><label>这条记录的时区<input id="${input}manual-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(true)">补录</button></div><p class="et-note">使用上方填写的同一个能量数值。手动时区不改变默认时区。</p></details></section>
         <section class="${cls}"><h3>找回当时的能量</h3><div class="et-inputs"><label>往前多少小时<input id="${input}hours" type="number" min="0" max="87600" step="1" value="2" style="width:8em"></label><label>再往前多少分钟<input id="${input}mins" type="number" min="0" max="59" step="1" value="0" style="width:8em"></label><button type="button" onclick="SnorlaxEnergyTimeline.search(false)">从现在回查</button></div>
         <div class="mt-3 border-t border-slate-100 pt-3"><h3>按睡眠分数倒推</h3><div class="et-inputs"><label>目标睡眠分数<input id="${input}score" type="number" min="1" max="100" step="1" value="50" style="width:7em"></label><label>起床时间<select id="${input}wake-mode" onchange="document.getElementById('energy-timeline-custom-wake').hidden=this.value!=='custom'"><option value="now">现在起床</option><option value="custom">自定义起床时间</option></select></label><label>满分时长<select id="${input}base"><option value="510">8小时30分</option><option value="660">11小时</option></select></label><label>入睡等待（分钟）<input id="${input}wait" type="number" min="0" max="180" step="1" value="5" style="width:7em"></label><label>回查哪个时间点<select id="${input}basis"><option value="measurement">开始计测</option><option value="effective">有效入睡</option></select></label></div><div id="${input}custom-wake" hidden class="mt-2"><div class="et-inputs"><label>起床日期和时间<input id="${input}wake" type="datetime-local" step="1" value="${clock}"></label><label>起床时区<input id="${input}wake-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label></div></div><div class="et-inputs mt-2"><button type="button" onclick="SnorlaxEnergyTimeline.search(true)">倒推并回查能量</button></div><p class="et-note">用目标分数 × 满分时长 ÷ 100 估算有效睡眠。二觉被每日剩余分数封顶时，或实际计测有偏差时，分数不能唯一反推出入睡时间。</p></div><details><summary class="et-note">夏令时重复时刻（高级）</summary>${overlap()}</details><div id="${input}result" class="mt-2" aria-live="polite"></div></section>
         <section class="${cls}"><div class="et-inputs"><h3>每周能量折线</h3><button type="button" onclick="SnorlaxEnergyTimeline.move(-7)">上周</button><button type="button" onclick="SnorlaxEnergyTimeline.move(0)">本周</button><button type="button" onclick="SnorlaxEnergyTimeline.move(7)">下周</button><label>跳到某周<input type="date" id="${input}jump" onchange="SnorlaxEnergyTimeline.jump(this.value)"></label></div><div id="${input}week"></div></section></div></div>`;
         renderWeek();renderResult();
     }
-    function changeZone(){try{const z=core.zone(v('zone'));if(!z)throw Error('请输入有效时区，例如 Asia/Tokyo 或 Asia/Shanghai。');persist({...state,zone:z});viewDate=null;render();}catch(error){showToast(error.message);}}
-    function add(manual){
+    async function changeZone(){const token=generation;try{const z=core.zone(v('zone'));if(!z)throw Error('请输入有效时区，例如 Asia/Tokyo 或 Asia/Shanghai。');if(!await ready||!active(token))return;viewDate=null;await persist({...state,zone:z},{zone:z},token);if(active(token)&&!currentCloudUser)render();}catch(error){showToast(error.message);}}
+    async function add(manual){
+        const token=generation;
         try{
             const z=manual?core.zone(v('manual-zone')):state.zone;if(!z)throw Error('请选择有效记录时区。');
             const time=manual?core.parse(v('manual'),z,v('overlap')):Math.floor(now()/1000)*1000;
             if(time>now())throw Error('实际能量不能记录到未来时间。');const energy=core.energy(v('energy'));
+            if(!await ready||!active(token))return;
             if(state.rows.some(r=>r.time===time)&&!confirm('该时刻已有一条记录，要替换能量吗？'))return;
-            persist({...state,rows:[...state.rows.filter(r=>r.time!==time),{time,energy,zone:z}].sort((a,b)=>a.time-b.time)});
+            const row={time,energy,zone:z},ok=await persist({...state,rows:[...state.rows.filter(r=>r.time!==time),row].sort((a,b)=>a.time-b.time)},{row},token);
+            if(!active(token))return;
             viewDate=core.week(time,state.zone).date===core.week(now(),state.zone).date?null:core.week(time,state.zone).date;limit=40;
-            get('energy').value='';renderWeek();renderResult();showToast('已记录卡比兽能量');
+            if(ok)get('energy').value='';renderWeek();renderResult();showToast(ok?'已记录卡比兽能量':'本机写入未确认，请查看同步状态');
         }catch(error){showToast(error.message);}
     }
     function search(byScore){
@@ -32691,9 +32763,9 @@ var SnorlaxEnergyTimeline=(()=>{
     }
     function move(delta){const current=core.week(now(),state.zone).date,next=delta?core.shift(viewDate||current,delta):current;if(next>current){showToast('还没有下一周的实录');return;}viewDate=next===current?null:next;limit=40;renderWeek();}
     function jump(date){try{const current=core.week(now(),state.zone).date,w=core.week(core.parse(date+'T12:00',state.zone,'earlier'),state.zone).date;if(w>current)throw Error('请选择本周或更早的日期。');viewDate=w===current?null:w;limit=40;renderWeek();}catch(error){showToast(error.message);renderWeek();}}
-    function remove(time){if(!confirm('删除这条能量记录？其他日期与周记录不受影响。'))return;try{persist({...state,rows:state.rows.filter(r=>r.time!==time)});renderWeek();renderResult();}catch(error){showToast(error.message);}}
+    async function remove(time){const token=generation;if(!confirm('删除这条能量记录？同账号的其他设备也会删除这条记录。'))return;try{if(!await ready||!active(token))return;await persist({...state,rows:state.rows.filter(r=>r.time!==time)},{remove:time},token);if(active(token)){renderWeek();renderResult();}}catch(error){showToast(error.message);}}
     function carry(){if(!result||owner!==storage())return;const r=core.lookup(state.rows,result.target,state.zone).record;if(!r)return;close();openSleepSplitPlannerModal();const input=document.getElementById('sleep-split-energy');if(input){input.value=String(r.energy);renderSleepSplitPlanner();}}
-    return {open,close,changeZone,add,search,move,jump,remove,carry,more:()=>{limit+=40;renderWeek();}};
+    return {open,close,changeZone,add,search,move,jump,remove,carry,sync,more:()=>{limit+=40;renderWeek();}};
 })();
 function openSnorlaxEnergyTimelineModal(){SnorlaxEnergyTimeline.open();}
 
