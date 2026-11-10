@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.09.2</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.10.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1021,6 +1021,7 @@
                     </button>
                     <button onclick="openWeeklyRhythmPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-cyan-100 text-cyan-800 shadow-sm flex items-center gap-1 hover:bg-cyan-200" title="逐日输入拆觉分数和时间要求，滚动比较多种周评作息方案"><i class="fa-solid fa-calendar-days"></i> 📅 周评作息规划</button>
                     <button type="button" onclick="SnorlaxEnergyTimeline.open()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-emerald-100 text-emerald-800 shadow-sm flex items-center gap-1 hover:bg-emerald-200"><i class="fa-solid fa-chart-line"></i> ⚡ 能量时间轴</button>
+                    <button type="button" onclick="openWeeklySleepRewardsModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-violet-100 text-violet-800 shadow-sm flex items-center gap-1 hover:bg-violet-200"><i class="fa-solid fa-gem"></i> 每周梦碎与研究经验</button>
                     <button onclick="openSleepEncounterPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-teal-100 text-teal-900 shadow-sm flex items-center gap-1 hover:bg-teal-200" title="按岛屿、能量、睡眠分数与类型计算各宝可梦的遇见期望，并分析目标宝可梦适合的岛屿和能量区间">
                         <i class="fa-solid fa-binoculars text-teal-700"></i> 🔭 宝可梦狙击
                     </button>
@@ -1813,6 +1814,7 @@ function isHistorySystemLog(log) {
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
         log?.type === 'snorlax_energy_point' || log?.type === 'snorlax_energy_settings' ||
+        log?.type === 'weekly_sleep_reward' ||
         !!(log && (log.type === 'sleep_week_rhythm_state' || log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
@@ -32769,6 +32771,108 @@ var SnorlaxEnergyTimeline=(()=>{
 })();
 function openSnorlaxEnergyTimelineModal(){SnorlaxEnergyTimeline.open();}
 
+function createWeeklySleepRewardsCore(){
+    const type='weekly_sleep_reward',max=Math.floor(Number.MAX_SAFE_INTEGER/14);
+    function valid(date){if(typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date))return false;const t=Date.parse(date+'T12:00:00Z');return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===date;}
+    function shift(date,n){return new Date(Date.parse(date+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);}
+    function today(now=new Date()){const d=new Date(now);d.setDate(d.getDate()-(d.getHours()<4?1:0));return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+    function week(date){return shift(date,-((new Date(date+'T12:00:00Z').getUTCDay()+6)%7));}
+    const id=(date,session)=>`weekly_sleep_reward_${date}_${session}`;
+    const quantity=n=>Number.isSafeInteger(n)&&n>=0&&n<=max;
+    function number(value,optional=false){
+        const s=String(value??'').trim();if(!s&&optional)return null;
+        if(!/^\d+(?:[,，\s]+\d+)*$/.test(s)||!quantity(Number(s.replace(/[,，\s]/g,''))))throw Error(optional?'研究经验请留空或填写非负整数。':'请填写非负整数梦碎；没有获得时填0。');
+        return Number(s.replace(/[,，\s]/g,''));
+    }
+    function clean(r){return r?.type===type&&valid(r.date)&&[1,2].includes(r.session)&&r.id===id(r.date,r.session)&&quantity(r.shards)&&(r.exp==null||quantity(r.exp));}
+    function records(logs){
+        const markers=getHistoryDeleteMarkerMap(logs),byId=new Map();for(const row of logs)if(clean(row)&&!isHistoryRecordDeletedByMarker(row,markers))byId.set(row.id,chooseNewerHistoryLog(byId.get(row.id),row));return byId;
+    }
+    function analyze(records,start){
+        const rows=Array.from({length:7},(_,i)=>{const date=shift(start,i),first=records.get(id(date,1)),second=records.get(id(date,2)),sessions=[first,second].filter(Boolean),withExp=sessions.filter(r=>r.exp!=null);
+            return {date,first,second,count:sessions.length,expCount:withExp.length,shards:sessions.length?sessions.reduce((a,r)=>a+r.shards,0):null,exp:withExp.length?withExp.reduce((a,r)=>a+r.exp,0):null};});
+        function summarize(field){const days=rows.filter(r=>r[field]!=null),total=days.reduce((a,r)=>a+r[field],0);return {days:days.length,total:days.length?total:null,average:days.length?total/days.length:null,first:days[0]||null,last:days.at(-1)||null};}
+        return {rows,shards:summarize('shards'),exp:summarize('exp'),count:rows.reduce((a,r)=>a+r.count,0),expCount:rows.reduce((a,r)=>a+r.expCount,0)};
+    }
+    return {type,valid,shift,today,week,id,number,records,analyze};
+}
+var WeeklySleepRewards=(()=>{
+    const c=createWeeklySleepRewardsCore(),modalId='weekly-sleep-rewards-modal',get=k=>document.getElementById('weekly-rewards-'+k),val=k=>get(k)?.value??'',e=x=>escapeHtml(String(x??''));
+    const days=['周一','周二','周三','周四','周五','周六','周日'],fmt=n=>n==null?'—':n.toLocaleString('zh-CN',{maximumFractionDigits:2});
+    let generation=0,owner='',week='',rows=new Map(),ready=Promise.resolve(false),queue=Promise.resolve();
+    const user=()=>currentCloudUser?.id||'guest';
+    const active=t=>t===generation&&owner===user()&&!!document.getElementById(modalId);
+    function status(s){if(get('status'))get('status').textContent=s;}
+    function close(){generation++;document.getElementById(modalId)?.remove();}
+    function sync(pull=true){
+        if(!currentCloudUser)return Promise.resolve();
+        const t=generation,uid=currentCloudUser.id,prepared=ready;
+        queue=queue.catch(()=>{}).then(async()=>{
+            if((pull&&!active(t))||currentCloudUser?.id!==uid||!await prepared||currentCloudUser?.id!==uid)return;
+            if(active(t))status('正在同步账号记录…');
+            try{
+                if(pull&&historyDedicatedCloudSupport!==false){const r=await loadHistoryFromDedicatedCloud(uid);if(currentCloudUser?.id!==uid)return;if(!r?.ok&&!r?.missingTable)throw r?.error||Error('读取云端失败');}
+                const r=await saveHistoryToCloudNow();if(active(t)){refresh();status(r?.ok?'账号同步完成':'云端同步未完成，请稍后重试。');}
+            }catch(error){if(active(t)){console.warn('每周睡眠收益同步失败',error);status('云端同步未完成，本机记录保留。');}}
+        });return queue;
+    }
+    function open(){
+        close();owner=user();week=c.week(c.today());rows=new Map();
+        const modal=document.createElement('div');modal.id=modalId;modal.className='fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/65 p-2 sm:p-4 backdrop-blur-sm';document.body.appendChild(modal);render();
+        const t=generation;
+        ready=(async()=>{loadHistoryFromLocal();const result=await ensureHistoryLargeStorageReady();if(!active(t))return false;if(!result?.ok)throw result?.error||Error('读取本机历史失败');refresh();status(currentCloudUser?'本机记录已加载':'访客记录只保存在本机。');return true;})().catch(error=>{if(active(t)){console.warn(error);status('本机记录读取失败，请关闭后重试。');}return false;});
+        if(currentCloudUser)void sync();
+    }
+    function pick(date,session,focus=false){if(!c.valid(date)||![1,2].includes(session))return;get('date').value=date;get('session').value=String(session);const old=rows.get(c.id(date,session));get('shards').value=old?.shards??'';get('exp').value=old?.exp??'';get('delete').hidden=!old;if(focus)get('shards').focus();}
+    async function save(remove=false){
+        const t=generation,uid=user();
+        try{
+            const date=val('date'),session=Number(val('session'));if(!c.valid(date)||date>c.today()||![1,2].includes(session))throw Error('请选择有效的游戏日期和一觉／二觉，不能录入未来。');
+            const shards=remove?null:c.number(val('shards')),exp=remove?null:c.number(val('exp'),true);
+            if(!await ready||!active(t))return;const id=c.id(date,session);
+            if(remove){if(!rows.has(id)||!confirm('删除这一觉的梦碎和研究经验记录？睡眠研究与捕捉历史不受影响。'))return;replaceHistoryDeleteMarker(id);historyLogs=mergeHistoryLogs([],historyLogs);}
+            else{
+                const marker=getHistoryDeleteMarkerMap(historyLogs).get(id),old=rows.get(id),at=new Date(Math.max(Date.now(),getHistoryLogMergeTime(marker)+1,getHistoryLogMergeTime(old)+1)).toISOString();
+                historyLogs=mergeHistoryLogs(historyLogs,[{id,type:c.type,date,session,shards,exp,updatedAt:at}]);
+            }
+            week=c.week(date);refresh();pick(date,session);saveHistoryToLocal({syncCloud:false});const ok=await waitForHistoryLargeStorageWrite();
+            if(currentCloudUser?.id===uid)void sync(false);
+            if(active(t))showToast(ok?(remove?'已删除这觉收益':'已保存这觉收益'):'本机写入未确认，请检查存储或账号同步状态。');
+        }catch(error){if(active(t))showToast(error.message);}
+    }
+    function move(delta){const w=delta?c.shift(week,delta):c.week(c.today());if(w>c.week(c.today())){showToast('还没有未来一周的实录');return;}week=w;renderWeek();}
+    function refresh(){
+        const date=val('date'),session=Number(val('session')),id=c.id(date,session),old=rows.get(id);
+        const untouched=val('shards')===String(old?.shards??'')&&val('exp')===String(old?.exp??'');
+        rows=c.records(historyLogs);renderWeek();if(untouched)pick(date,session);else if(get('delete'))get('delete').hidden=!rows.has(id);
+    }
+    function render(){
+        const modal=document.getElementById(modalId),card='rounded-2xl border border-violet-100 bg-white p-4',p='weekly-rewards-';
+        modal.innerHTML=`<style>#${modalId} .rw-flex{display:flex;gap:9px;align-items:end;flex-wrap:wrap}#${modalId} label{display:grid;gap:5px;font-size:12px;font-weight:700}#${modalId} input,#${modalId} select{border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-size:16px;max-width:100%;min-width:0;background:#fff}#${modalId} button:not(.rw-close){border:1px solid #ddd6fe;color:#5b21b6;background:#f5f3ff;border-radius:9px;font-size:13px;font-weight:700;padding:8px 11px}#${modalId} .rw-note{font-size:12px;color:#64748b;line-height:1.7;margin:7px 0}#${modalId} table{width:100%;border-collapse:collapse;font-size:13px}#${modalId} td,#${modalId} th{padding:8px 5px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}#${modalId} h3{font-weight:900}#${modalId} [hidden]{display:none!important}</style>
+        <div role="dialog" aria-modal="true" aria-label="每周梦碎与研究经验" class="flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-violet-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">每周梦碎与研究经验</h2><p class="text-xs text-violet-100">按觉记录 · 周累计 · 每日变化</p></div><button type="button" class="rw-close text-2xl" aria-label="关闭" onclick="WeeklySleepRewards.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
+        <section class="${card}"><h3>录入单觉收益</h3><p class="rw-note">填这一次睡眠研究获得的数值。没有二觉就不填；梦碎为零请填0，研究经验可留空。不会改动原睡眠研究。</p><div class="rw-flex"><label>游戏日期<input id="${p}date" type="date" value="${c.today()}" max="${c.today()}" onchange="WeeklySleepRewards.loadSlot()"></label><label>觉次<select id="${p}session" onchange="WeeklySleepRewards.loadSlot()"><option value="1">一觉</option><option value="2">二觉</option></select></label><label>梦碎<input id="${p}shards" inputmode="numeric" placeholder="必填" style="width:9em"></label><label>研究经验<input id="${p}exp" inputmode="numeric" placeholder="选填" style="width:9em"></label><button type="button" onclick="WeeklySleepRewards.save()">保存这觉</button><button type="button" id="${p}delete" hidden onclick="WeeklySleepRewards.save(true)">删除这觉收益</button></div><div class="rw-flex"><p id="${p}status" class="rw-note" aria-live="polite">正在读取本机记录…</p>${currentCloudUser?'<button type="button" onclick="WeeklySleepRewards.sync()">立即同步</button>':''}</div></section>
+        <section class="${card}"><div class="rw-flex"><h3>每周统计</h3><button type="button" onclick="WeeklySleepRewards.move(-7)">上周</button><button type="button" onclick="WeeklySleepRewards.move(0)">本周</button><button type="button" onclick="WeeklySleepRewards.move(7)">下周</button><label>跳转到日期<input id="${p}jump" type="date" max="${c.today()}" onchange="WeeklySleepRewards.jump(this.value)"></label></div><div id="${p}week"></div></section>
+        <section class="${card}"><div class="rw-flex"><h3>每日收益趋势</h3><label>查看指标<select id="${p}metric" onchange="WeeklySleepRewards.renderWeek()"><option value="shards">梦碎</option><option value="exp">研究经验</option></select></label></div><div id="${p}chart"></div></section></div></div>`;
+        renderWeek();
+    }
+    function chart(summary,field){
+        const points=summary.rows.map(r=>r[field]),peak=Math.max(1,...points.filter(x=>x!=null)),L=64,R=610,T=16,B=137,x=i=>L+(R-L)*i/6,y=n=>B-(B-T)*n/peak;
+        if(points.every(n=>n==null))return '<p class="rw-note">这周还没有该指标的记录。</p>';
+        const lines=points.map((n,i)=>n!=null&&i>0&&points[i-1]!=null?`<line x1="${x(i-1)}" y1="${y(points[i-1])}" x2="${x(i)}" y2="${y(n)}" stroke="#7c3aed" stroke-width="2"/>`:'').join('');
+        const s=summary[field],delta=s.days>1?s.last[field]-s.first[field]:null;
+        return `<svg role="img" aria-label="本周每日已录入收益折线，缺失日期断开" viewBox="0 0 650 164" style="width:100%;height:auto"><title>每日已录入收益</title>${[0,.5,1].map(f=>`<line x1="${L}" x2="${R}" y1="${y(f*peak)}" y2="${y(f*peak)}" stroke="#e2e8f0"/><text x="${L-6}" y="${y(f*peak)+4}" text-anchor="end" font-size="11" fill="#475569">${new Intl.NumberFormat('zh-CN',{notation:'compact',maximumFractionDigits:1}).format(f*peak)}</text>`).join('')}${lines}${points.map((n,i)=>n==null?'':`<circle cx="${x(i)}" cy="${y(n)}" r="4" fill="#7c3aed"><title>${days[i]} ${fmt(n)}</title></circle>`).join('')}${days.map((d,i)=>`<text x="${x(i)}" y="156" text-anchor="middle" font-size="12" fill="#475569">${d}</text>`).join('')}</svg><p class="rw-note">${delta==null?'至少记录两天后才显示首末对比。':`最早与最近有记录的日期（${s.first.date.slice(5)} → ${s.last.date.slice(5)}）：${fmt(s.first[field])} → ${fmt(s.last[field])}，${delta===0?'持平':`相差 ${delta>0?'+':''}${fmt(delta)}`}。`}只显示已录入收益，未录入的日期断开；部分录入日的数值不代表全天。</p>`;
+    }
+    function renderWeek(){
+        if(!get('week'))return;const s=c.analyze(rows,week);get('jump').value=week;
+        const slot=(r,d,n)=>`<button type="button" data-date="${d}" onclick="WeeklySleepRewards.pick(this.dataset.date,${n},true)">${r?`梦碎 ${fmt(r.shards)}${r.exp==null?'':' · 经验 '+fmt(r.exp)}`:'＋ 录入'}</button>`;
+        get('week').innerHTML=`<p class="rw-note">${week} ～ ${c.shift(week,6)} · 已录 ${s.count} 觉／${s.shards.days} 天。按游戏日期周一至周日汇总，旧周保留。</p><div class="grid grid-cols-2 gap-2 sm:grid-cols-4">${[['梦碎累计',s.shards.total],['日均梦碎',s.shards.average],['研究经验累计',s.exp.total],['日均研究经验',s.exp.average]].map(([label,n])=>`<div class="rounded-xl bg-violet-50 p-3"><div class="text-xs text-slate-600">${label}</div><div class="text-lg font-black text-violet-900">${fmt(n)}</div></div>`).join('')}</div><p class="rw-note">梦碎日均按 ${s.shards.days} 个有梦碎记录的日期，研究经验日均按 ${s.exp.days} 个填了研究经验的日期（${s.expCount} 觉）。已填0计入，空白不当0；没有二觉不用补录。</p><div style="overflow:auto"><table><thead><tr><th>游戏日</th><th>一觉</th><th>二觉</th><th>当日梦碎／经验</th></tr></thead><tbody>${s.rows.map((r,i)=>`<tr><td>${days[i]} ${r.date.slice(5)}</td><td>${r.date<=c.today()?slot(r.first,r.date,1):'—'}</td><td>${r.date<=c.today()?slot(r.second,r.date,2):'—'}</td><td>${fmt(r.shards)}／${fmt(r.exp)}</td></tr>`).join('')}</tbody></table></div>`;
+        if(get('chart'))get('chart').innerHTML=chart(s,val('metric')==='exp'?'exp':'shards');
+    }
+    function jump(d){if(!c.valid(d)||c.week(d)>c.week(c.today())){showToast('请选择本周或更早的日期。');renderWeek();return;}week=c.week(d);renderWeek();}
+    return {open,close,pick,save,sync,move,jump,renderWeek,loadSlot:()=>pick(val('date'),Number(val('session')))};
+})();
+function openWeeklySleepRewardsModal(){WeeklySleepRewards.open();}
+
 function openSleepSplitPlannerModal() {
     closeSleepSplitPlannerModal();
     let saved={}; try { saved=JSON.parse(localStorage.getItem('sleep_split_planner_inputs_v1')||'{}')||{}; } catch(_) {}
@@ -32824,6 +32928,7 @@ function openSleepSplitPlannerModal() {
         { id: 'weeklyRhythm', group: 'sleep', label: '周评作息规划', desc: '逐日拆觉与多方案周评规划', icon: 'fa-calendar-days', tone: 'bg-cyan-50 text-cyan-800', action: 'openWeeklyRhythmPlannerModal' },
         { id: 'sleepSplit', group: 'sleep', label: '拆觉规划', desc: '当前能量拆法与 x+y 数轴', icon: 'fa-chart-simple', tone: 'bg-blue-50 text-blue-700', action: 'openSleepSplitPlannerModal' },
         { id: 'snorlaxEnergy', group: 'sleep', label: '能量时间轴', desc: '记录能量、按起床时间倒推、查每周折线', icon: 'fa-chart-line', tone: 'bg-emerald-50 text-emerald-700', action: 'openSnorlaxEnergyTimelineModal' },
+        { id: 'weeklySleepRewards', group: 'sleep', label: '每周梦碎与研究经验', desc: '按觉记录梦碎与经验、查看周累计和趋势', icon: 'fa-gem', tone: 'bg-violet-50 text-violet-700', action: 'openWeeklySleepRewardsModal' },
         { id: 'sleepEncounter', group: 'sleep', label: '宝可梦狙击', desc: '遇见期望、岛屿与能量曲线', icon: 'fa-binoculars', tone: 'bg-teal-50 text-teal-800', action: 'openSleepEncounterPlannerModal' },
         { id: 'dailyReward', group: 'sleep', label: '每日奖励打卡', desc: '小日历查漏与快速补录', icon: 'fa-gift', tone: 'bg-amber-50 text-amber-800', action: 'openDailyRewardQuickModal' },
         { id: 'ballPlanner', group: 'sleep', label: '精灵球与每日奖励', desc: '库存、奖励和商店规划', icon: 'fa-baseball', tone: 'bg-sky-50 text-sky-700', action: 'openBallPlannerModal' },
