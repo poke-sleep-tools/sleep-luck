@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.13.3</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.13.5</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -32584,7 +32584,12 @@ function createWeeklyRhythmCore() {
         if(end!=null)return {kind:'start',time:((end-d-delay(r))%DAY+DAY)%DAY,duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
         return {kind:'duration',duration:d,capped,range,points:wanted,pendingActual:r.status==='actual'};
     }
-    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,delay,sd,circular,circularRange,metrics,settings,dayOptions,estimate,plan};
+    function estimateEnd(row,key,rawSettings={}){
+        if(!['first','second'].includes(key)||clock(row[key]?.start)==null)return {kind:'invalid',text:'请先填写有效的开始时间和目标分数'};
+        // 只在临时副本中忽略这觉的旧结束时间，不改变另一觉或实际完成状态。
+        return estimate({...row,[key]:{...row[key],end:'',status:'planned'}},key,rawSettings);
+    }
+    return {clock,gameClock,format,shift,validDate,gameDate,monday,score,fixed,delay,sd,circular,circularRange,metrics,settings,dayOptions,estimate,estimateEnd,plan};
 }
 
 var WeeklyRhythmPlanner=(()=>{
@@ -32629,7 +32634,7 @@ var WeeklyRhythmPlanner=(()=>{
     function updateEstimates(index){for(const key of ['first','second']){const node=document.getElementById('wr-estimate-'+index+'-'+key);if(node)node.innerHTML=estimateHtml(state.days[index],key);}}
     function sessionFields(day,index,key,label){
         const r=day[key],data=' data-index="'+index+'" data-session="'+key+'"';
-        return '<div class="wr-session"><label>'+label+'<select'+data+' data-path="'+key+'.status" onchange="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value,true)"><option value="planned" '+(!['actual','started'].includes(r.status)?'selected':'')+'>未完成／时间要求</option><option value="started" '+(r.status==='started'?'selected':'')+'>已开始／预计结束</option><option value="actual" '+(r.status==='actual'?'selected':'')+'>实际已完成（填齐后锁定）</option></select></label><label style="margin-top:6px">录入时区（UTC时差从小到大）<select'+data+' onchange="WeeklyRhythmPlanner.changeTimeZone(Number(this.dataset.index),this.dataset.session,this.value)">'+sleepTimeZoneOptions(r.timeZone,core.shift(week,index),true)+'</select></label><label style="margin-top:6px">开始时间口径<select'+data+' onchange="WeeklyRhythmPlanner.changeStartMode(Number(this.dataset.index),this.dataset.session,this.value)"><option value="measurement" '+(r.startMode==='measurement'?'selected':'')+'>开始计测（前5分钟不计入）</option><option value="effective" '+(r.startMode!=='measurement'?'selected':'')+'>有效入睡（旧记录，不再扣除）</option></select></label><div class="wr-time-pair"><label>'+(r.startMode==='measurement'?'开始计测／选填':'有效入睡／旧口径')+'<input type="time"'+data+' data-path="'+key+'.start" value="'+esc(r.start)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label><label>有效结束／选填<input type="time"'+data+' data-path="'+key+'.end" value="'+esc(r.end)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label></div><div id="wr-estimate-'+index+'-'+key+'" class="wr-info" style="margin-top:8px;background:#f0fdfa;border-radius:8px;padding:8px">'+estimateHtml(day,key)+'</div><button class="wr-button"'+data+' style="margin-top:5px" onclick="WeeklyRhythmPlanner.useEstimate(Number(this.dataset.index),this.dataset.session)">采用预计时间为要求</button></div>';
+        return '<div class="wr-session"><label>'+label+'<select'+data+' data-path="'+key+'.status" onchange="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value,true)"><option value="planned" '+(!['actual','started'].includes(r.status)?'selected':'')+'>未完成／时间要求</option><option value="started" '+(r.status==='started'?'selected':'')+'>已开始／预计结束</option><option value="actual" '+(r.status==='actual'?'selected':'')+'>实际已完成（填齐后锁定）</option></select></label><label style="margin-top:6px">录入时区（UTC时差从小到大）<select'+data+' onchange="WeeklyRhythmPlanner.changeTimeZone(Number(this.dataset.index),this.dataset.session,this.value)">'+sleepTimeZoneOptions(r.timeZone,core.shift(week,index),true)+'</select></label><label style="margin-top:6px">开始时间口径<select'+data+' onchange="WeeklyRhythmPlanner.changeStartMode(Number(this.dataset.index),this.dataset.session,this.value)"><option value="measurement" '+(r.startMode==='measurement'?'selected':'')+'>开始计测（前5分钟不计入）</option><option value="effective" '+(r.startMode!=='measurement'?'selected':'')+'>有效入睡（旧记录，不再扣除）</option></select></label><div class="wr-time-pair"><label>'+(r.startMode==='measurement'?'开始计测／选填':'有效入睡／旧口径')+'<input type="time"'+data+' data-path="'+key+'.start" value="'+esc(r.start)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label><label>有效结束／选填<input type="time"'+data+' data-path="'+key+'.end" value="'+esc(r.end)+'" oninput="WeeklyRhythmPlanner.change(Number(this.dataset.index),this.dataset.path,this.value)" onchange="WeeklyRhythmPlanner.commit()"></label></div><div id="wr-estimate-'+index+'-'+key+'" class="wr-info" style="margin-top:8px;background:#f0fdfa;border-radius:8px;padding:8px">'+estimateHtml(day,key)+'</div><button class="wr-button"'+data+' style="margin-top:5px" onclick="WeeklyRhythmPlanner.useEstimate(Number(this.dataset.index),this.dataset.session)">采用预计时间为要求</button><button type="button" class="wr-button"'+data+' style="margin-top:5px;margin-left:5px" onclick="WeeklyRhythmPlanner.recalculateEnd(Number(this.dataset.index),this.dataset.session)">按目标分数重算结束</button><div class="wr-info">改完开始时间后点“重算结束”，会替换旧结束时间；分数封顶时按最短有效时长计算，结束仍可延长。</div></div>';
     }
     function changeTimeZone(index,key,value){if(value&&!validZone(value)){showToast('请输入有效时区，例如 Asia/Tokyo、Asia/Shanghai 或 UTC');return;}const r=state.days[index][key];if(r.timeZone&&r.timeZone!==value&&(r.start||r.end)&&!confirm('将更改这觉的时区标记，不自动换算钟面时间；用于联动的实际时刻会改变。确认该时区是录入时的时区吗？')){render();return;}change(index,key+'.timeZone',value,true);}
     function defaultTimeZone(value){
@@ -32671,6 +32676,13 @@ var WeeklyRhythmPlanner=(()=>{
     }
     function completeScore(index,edited='first'){const row=state.days[index],source=edited==='second'?'score2':'score1',target=edited==='second'?'score1':'score2',auto=edited==='second'?'autoFirst':'autoSecond',n=Number(row[source]);if(row[source]!==''&&Number.isInteger(n)&&n>=0&&n<=100&&(row[target]===''||row[auto])&&!(target==='score1'&&row.first.status==='actual'&&core.fixed(row.first))){row[target]=String(row.mode==='one'&&target==='score2'?0:100-n);row[auto]=true;const el=document.getElementById(`wr-score-${index}-${target==='score1'?1:2}`);if(el)el.value=row[target];}updateEstimates(index);draft();commit();}
     function useEstimate(index,key){const row=state.days[index],e=core.estimate(row,key,state.settings);if(!['start','end'].includes(e.kind)){showToast('请先填分数和开始／结束中的一项；完整实际时间不会覆盖');return;}if(row[key].status==='actual'&&!confirm('这只是预计时间，采用后此觉将改为“已开始／预计结束”，不会记为实际完成。继续吗？'))return;row[key][e.kind==='end'?'end':'start']=core.format(e.time);if(row[key].status==='actual')row[key].status='started';persist();render();}
+    function recalculateEnd(index,key){
+        if(!state||(currentCloudUser?.id||'guest')!==owner)return;
+        const row=state.days[index],e=core.estimateEnd(row,key,state.settings);
+        if(e.kind!=='end'){showToast(e.text||'请先填写目标分数和有效开始时间');return;}
+        if(row[key].status==='actual'&&!confirm('这觉已标记实际完成。重算会覆盖结束时间，并改为“已开始／预计结束”，不再当成已完成实录。确定继续吗？'))return;
+        row[key].end=core.format(e.time);if(row[key].status==='actual')row[key].status='started';persist();render();
+    }
     function setting(key,value){state.settings[key]=value;if(key==='ignoreStartWindows')for(const el of document.getElementById('weekly-rhythm-planner-modal')?.querySelectorAll?.('[data-wr-start-window]')||[])el.disabled=value;state.days.forEach((_,i)=>updateEstimates(i));draft();commit();}
     function commit(){clearTimeout(saveTimer);persist();cancel();lastResult=null;const progress=document.getElementById('wr-progress');if(progress)progress.textContent='准备重新计算…';calcTimer=setTimeout(()=>void calculate(),180);}
     function pickWeek(value){if(!core.validDate(value)){showToast('请选择有效日期');return;}persist();cancel();load(core.monday(value));render();}
@@ -32707,7 +32719,7 @@ var WeeklyRhythmPlanner=(()=>{
     }
     function select(mode){state.selected=mode;persist();if(lastResult)show(lastResult);}
     function fixDay(mode,index){const row=lastResult?.plans.find(p=>p.mode===mode)?.path.find(p=>p.day===index);if(!row)return;if(!confirm('将这一天未完成的建议时间固定为要求？不会记为实际已完成。'))return;for(const key of ['first','second'])if(row[key]&&!(state.days[index][key].status==='actual'&&core.fixed(state.days[index][key]))){state.days[index][key].startMode=row[key].startMode||'effective';state.days[index][key].start=core.format(row[key].start);state.days[index][key].end=core.format(row[key].end);if(state.days[index][key].status==='actual')state.days[index][key].status='started';}persist();render();}
-    return {open,close,change,changeStartMode,changeTimeZone,defaultTimeZone,completeScore,useEstimate,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay};
+    return {open,close,change,changeStartMode,changeTimeZone,defaultTimeZone,completeScore,useEstimate,recalculateEnd,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay};
 })();
 function openWeeklyRhythmPlannerModal(){return WeeklyRhythmPlanner.open();}
 
@@ -32973,15 +32985,15 @@ function createSleepRewardLinkCore(){
             const manualEnergy=manualOk&&Number.isSafeInteger(manual.energy)&&manual.energy>=0&&Number.isSafeInteger(manual.energyTime)&&manual.energyTime<=manual.start;
             const match=manualEnergy?{record:{time:manual.energyTime,energy:manual.energy},gap:(manual.start-manual.energyTime)/60000}:act.error?null:time.lookup(energy,act.start,act.zone),found=match?.record||null;
             const crossWeek=found&&time.week(found.time,act.zone).date!==time.week(act.start,act.zone).date;
-            const reason=act.error||(!found?'同周开始时刻之前无能量记录':crossWeek?'能量不在睡眠开始的同一周':found.energy===0?'能量为0，不能计算比值':match.gap>gapLimit?'参考能量距开始过久，未纳入比值':'');
-            const eligible=!reason&&found.energy>0;
+            const reason=act.error||(!found?'同周开始时刻之前无能量记录':crossWeek?'能量不在睡眠开始的同一周':found.energy===0?'能量为0，不能计算比值':match.gap>gapLimit?'参考能量距开始过久，未纳入比值':points==null?'缺少实际分数，未纳入比值':points===0?'实际分数为0，不能计算比值':'');
+            const eligible=!reason&&found.energy>0&&points>0,energyScore=found&&points!=null?found.energy*points:null;
             return {...r,points,scoreSource,start:act.start??null,end:act.end??null,zone:act.zone||null,basis:act.basis||null,energySource:manualEnergy?'本板块实填':'时间轴匹配',energy:found?.energy??null,energyTime:found?.time??null,gap:match?.gap??null,reason,eligible,
-                shardsPerMillion:eligible?r.shards/found.energy*1e6:null,expPerMillion:eligible&&r.exp!=null?r.exp/found.energy*1e6:null};
+                energyScore,shardsPerTenMillion:eligible?r.shards/energyScore*1e7:null,expPerTenMillion:eligible&&r.exp!=null?r.exp/energyScore*1e7:null};
         });
     }
     function summary(rows,field){
-        const included=rows.filter(r=>r.eligible&&r[field]!=null),total=included.reduce((n,r)=>n+r[field],0),energy=included.reduce((n,r)=>n+r.energy,0);
-        return {count:included.length,total,energy,perMillion:energy?total/energy*1e6:null};
+        const included=rows.filter(r=>r.eligible&&r.energyScore>0&&r[field]!=null),total=included.reduce((n,r)=>n+r[field],0),energyScore=included.reduce((n,r)=>n+r.energyScore,0);
+        return {count:included.length,total,energyScore,perTenMillion:energyScore?total/energyScore*1e7:null};
     }
     function groups(rows){
         const map=new Map();for(const r of rows)if(r.eligible&&r.points!=null){
@@ -32996,9 +33008,9 @@ function renderSleepRewardLinks(rewards,logs,researches,gapLimit=180){
     const c=createSleepRewardLinkCore(),rows=c.link(rewards,logs,researches,{gapLimit}),shards=c.summary(rows,'shards'),exp=c.summary(rows,'exp'),groups=c.groups(rows);
     const esc=x=>escapeHtml(String(x??'')),fmt=n=>n==null?'—':n.toLocaleString('zh-CN',{maximumFractionDigits:2}),tz=createSnorlaxEnergyTimelineCore();
     return `<h3>实录能量与收益对照</h3><p class="rw-note">仅关联本周收益。按游戏日期＋觉次匹配已完成的周评时间与睡眠研究，不读取目标分数或计划时间；回查该觉录入时区内同周、开始时刻之前最近的能量；本板块实填信息优先，不依赖其他模块。需要补充或修正时，直接点击上方对应一觉／二觉，填写本板块的联动信息并保存。</p>
-        <p class="rw-note">参考能量最多早于开始 <strong>${gapLimit}分钟</strong>；更久的记录仍列出，但不纳入比值。每100万能量梦碎 <strong>${fmt(shards.perMillion)}</strong>（${shards.count}觉）；研究经验 <strong>${fmt(exp.perMillion)}</strong>（${exp.count}觉）。汇总比值＝这些已录入收益之和÷对应能量之和×100万，不是理论产出。</p>
-        <div style="overflow:auto"><table><thead><tr><th>日期／觉次</th><th>实际分数</th><th>开始时间／时区</th><th>参考能量／时间差</th><th>梦碎／经验</th><th>每100万能量梦碎／经验</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.date} ${Number(r.session)===2?'二':'一'}觉</td><td>${fmt(r.points)}<small style="display:block">${esc(r.scoreSource)}</small></td><td>${r.start==null?'—':esc(tz.wall(r.start,r.zone).replace('T',' '))}<small style="display:block">${esc(r.zone||'')} ${esc(r.basis||'')}</small></td><td>${fmt(r.energy)}<small style="display:block">${r.gap==null?'':`早${fmt(r.gap)}分钟`} ${esc(r.energySource)} ${esc(r.reason)}</small></td><td>${fmt(r.shards)}／${fmt(r.exp)}</td><td>${fmt(r.shardsPerMillion)}／${fmt(r.expPerMillion)}</td></tr>`).join('')||'<tr><td colspan="6">先录入收益，再补齐对应的已完成时间与能量记录。</td></tr>'}</tbody></table></div>
-        <details><summary class="rw-note">按实际能量与分数分组</summary><p class="rw-note">能量每100万、分数每20分分组；缺分数的样本不参与分组。范围只是已录入样本的最小～最大值，不是预测区间；不同活动和加成仍可能影响收益。</p><div style="overflow:auto"><table><thead><tr><th>能量区间</th><th>分数</th><th>样本</th><th>平均梦碎／实录范围</th><th>每100万能量梦碎／经验</th></tr></thead><tbody>${groups.map(g=>`<tr><td>${fmt(g.energyFrom)}～小于${fmt(g.energyFrom+1e6)}</td><td>${g.scoreFrom}～${g.scoreFrom===80?'100':'小于'+(g.scoreFrom+20)}</td><td>${g.rows.length}觉／经验${g.exp.count}觉</td><td>${fmt(g.averageShards)}／${fmt(g.minShards)}～${fmt(g.maxShards)}</td><td>${fmt(g.shards.perMillion)}／${fmt(g.exp.perMillion)}</td></tr>`).join('')||'<tr><td colspan="5">暂无信息完整的实录分组。</td></tr>'}</tbody></table></div></details>`;
+        <p class="rw-note">参考能量最多早于开始 <strong>${gapLimit}分钟</strong>；更久的记录仍列出，但不纳入比值。每1000万「能量×实际分数」梦碎 <strong>${fmt(shards.perTenMillion)}</strong>（${shards.count}觉）；研究经验 <strong>${fmt(exp.perTenMillion)}</strong>（${exp.count}觉）。单觉比值＝实录收益÷（参考能量×实际分数）×1000万；汇总比值＝纳入收益之和÷对应「能量×实际分数」之和×1000万。缺分数、分数或能量为0不参与比值，原收益仍保留。这是实录标准化对照，不是活动倍率校正后的睡意之力，也不是理论产出。</p>
+        <div style="overflow:auto"><table><thead><tr><th>日期／觉次</th><th>实际分数</th><th>开始时间／时区</th><th>参考能量／时间差</th><th>梦碎／经验</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.date} ${Number(r.session)===2?'二':'一'}觉</td><td>${fmt(r.points)}<small style="display:block">${esc(r.scoreSource)}</small></td><td>${r.start==null?'—':esc(tz.wall(r.start,r.zone).replace('T',' '))}<small style="display:block">${esc(r.zone||'')} ${esc(r.basis||'')}</small></td><td>${fmt(r.energy)}<small style="display:block">${r.gap==null?'':`早${fmt(r.gap)}分钟`} ${esc(r.energySource)} ${esc(r.reason)}</small></td><td>${fmt(r.shards)}／${fmt(r.exp)}</td><td>${fmt(r.shardsPerTenMillion)}／${fmt(r.expPerTenMillion)}</td></tr>`).join('')||'<tr><td colspan="6">先录入收益，再补齐对应的已完成时间与能量记录。</td></tr>'}</tbody></table></div>
+        <details><summary class="rw-note">按实际能量与分数分组</summary><p class="rw-note">能量每100万、分数每20分分组；缺分数的样本不参与分组。范围只是已录入样本的最小～最大值，不是预测区间；不同活动和加成仍可能影响收益。</p><div style="overflow:auto"><table><thead><tr><th>能量区间</th><th>分数</th><th>样本</th><th>平均梦碎／实录范围</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${groups.map(g=>`<tr><td>${fmt(g.energyFrom)}～小于${fmt(g.energyFrom+1e6)}</td><td>${g.scoreFrom}～${g.scoreFrom===80?'100':'小于'+(g.scoreFrom+20)}</td><td>${g.rows.length}觉／经验${g.exp.count}觉</td><td>${fmt(g.averageShards)}／${fmt(g.minShards)}～${fmt(g.maxShards)}</td><td>${fmt(g.shards.perTenMillion)}／${fmt(g.exp.perTenMillion)}</td></tr>`).join('')||'<tr><td colspan="5">暂无信息完整的实录分组。</td></tr>'}</tbody></table></div></details>`;
 }
 
 function createWeeklySleepRewardsCore(){
