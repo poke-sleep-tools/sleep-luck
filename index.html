@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.13.5</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.14.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -32970,7 +32970,6 @@ function createSleepRewardLinkCore(){
         for(const log of visible)if(log.type==='sleep_week_rhythm_state'&&reward.valid(log.state?.week))states.set(log.state.week,chooseNewerHistoryLog(states.get(log.state.week),log));
         const energy=time.fromHistory(visible,'Asia/Tokyo').rows,byResearch=new Map();
         for(const log of researches||[]){const n=log.session==='二觉'?2:1,k=reward.id(log.date,n);byResearch.set(k,chooseNewerHistoryLog(byResearch.get(k),log));}
-        const gapLimit=options.gapLimit==null?180:Number(options.gapLimit);
         return rewards.map(r=>{
             const n=Number(r.session),state=states.get(reward.week(r.date))?.state,day=state?.days?.[Math.round((Date.parse(r.date+'T12:00Z')-Date.parse(state.week+'T12:00Z'))/86400000)],session=day?.[n===1?'first':'second'];
             const manual=r.linkedInput,z=manual&&time.zone(manual.zone),manualOk=manual&&z&&Number.isSafeInteger(manual.start);
@@ -32985,7 +32984,7 @@ function createSleepRewardLinkCore(){
             const manualEnergy=manualOk&&Number.isSafeInteger(manual.energy)&&manual.energy>=0&&Number.isSafeInteger(manual.energyTime)&&manual.energyTime<=manual.start;
             const match=manualEnergy?{record:{time:manual.energyTime,energy:manual.energy},gap:(manual.start-manual.energyTime)/60000}:act.error?null:time.lookup(energy,act.start,act.zone),found=match?.record||null;
             const crossWeek=found&&time.week(found.time,act.zone).date!==time.week(act.start,act.zone).date;
-            const reason=act.error||(!found?'同周开始时刻之前无能量记录':crossWeek?'能量不在睡眠开始的同一周':found.energy===0?'能量为0，不能计算比值':match.gap>gapLimit?'参考能量距开始过久，未纳入比值':points==null?'缺少实际分数，未纳入比值':points===0?'实际分数为0，不能计算比值':'');
+            const reason=act.error||(!found?'同周开始时刻之前无能量记录':crossWeek?'能量不在睡眠开始的同一周':found.energy===0?'能量为0，不能计算比值':points==null?'缺少实际分数，未纳入比值':points===0?'实际分数为0，不能计算比值':'');
             const eligible=!reason&&found.energy>0&&points>0,energyScore=found&&points!=null?found.energy*points:null;
             return {...r,points,scoreSource,start:act.start??null,end:act.end??null,zone:act.zone||null,basis:act.basis||null,energySource:manualEnergy?'本板块实填':'时间轴匹配',energy:found?.energy??null,energyTime:found?.time??null,gap:match?.gap??null,reason,eligible,
                 energyScore,shardsPerTenMillion:eligible?r.shards/energyScore*1e7:null,expPerTenMillion:eligible&&r.exp!=null?r.exp/energyScore*1e7:null};
@@ -33004,11 +33003,11 @@ function createSleepRewardLinkCore(){
     }
     return {actual,link,summary,groups,rhythmReference};
 }
-function renderSleepRewardLinks(rewards,logs,researches,gapLimit=180){
-    const c=createSleepRewardLinkCore(),rows=c.link(rewards,logs,researches,{gapLimit}),shards=c.summary(rows,'shards'),exp=c.summary(rows,'exp'),groups=c.groups(rows);
+function renderSleepRewardLinks(rewards,logs,researches){
+    const c=createSleepRewardLinkCore(),rows=c.link(rewards,logs,researches),shards=c.summary(rows,'shards'),exp=c.summary(rows,'exp'),groups=c.groups(rows);
     const esc=x=>escapeHtml(String(x??'')),fmt=n=>n==null?'—':n.toLocaleString('zh-CN',{maximumFractionDigits:2}),tz=createSnorlaxEnergyTimelineCore();
     return `<h3>实录能量与收益对照</h3><p class="rw-note">仅关联本周收益。按游戏日期＋觉次匹配已完成的周评时间与睡眠研究，不读取目标分数或计划时间；回查该觉录入时区内同周、开始时刻之前最近的能量；本板块实填信息优先，不依赖其他模块。需要补充或修正时，直接点击上方对应一觉／二觉，填写本板块的联动信息并保存。</p>
-        <p class="rw-note">参考能量最多早于开始 <strong>${gapLimit}分钟</strong>；更久的记录仍列出，但不纳入比值。每1000万「能量×实际分数」梦碎 <strong>${fmt(shards.perTenMillion)}</strong>（${shards.count}觉）；研究经验 <strong>${fmt(exp.perTenMillion)}</strong>（${exp.count}觉）。单觉比值＝实录收益÷（参考能量×实际分数）×1000万；汇总比值＝纳入收益之和÷对应「能量×实际分数」之和×1000万。缺分数、分数或能量为0不参与比值，原收益仍保留。这是实录标准化对照，不是活动倍率校正后的睡意之力，也不是理论产出。</p>
+        <p class="rw-note">参考能量与开始时刻的时间差只供核对，不因间隔较长而排除。每1000万「能量×实际分数」梦碎 <strong>${fmt(shards.perTenMillion)}</strong>（${shards.count}觉）；研究经验 <strong>${fmt(exp.perTenMillion)}</strong>（${exp.count}觉）。单觉比值＝实录收益÷（参考能量×实际分数）×1000万；汇总比值＝纳入收益之和÷对应「能量×实际分数」之和×1000万。缺分数、分数或能量为0不参与比值，原收益仍保留。这是实录标准化对照，不是活动倍率校正后的睡意之力，也不是理论产出。</p>
         <div style="overflow:auto"><table><thead><tr><th>日期／觉次</th><th>实际分数</th><th>开始时间／时区</th><th>参考能量／时间差</th><th>梦碎／经验</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.date} ${Number(r.session)===2?'二':'一'}觉</td><td>${fmt(r.points)}<small style="display:block">${esc(r.scoreSource)}</small></td><td>${r.start==null?'—':esc(tz.wall(r.start,r.zone).replace('T',' '))}<small style="display:block">${esc(r.zone||'')} ${esc(r.basis||'')}</small></td><td>${fmt(r.energy)}<small style="display:block">${r.gap==null?'':`早${fmt(r.gap)}分钟`} ${esc(r.energySource)} ${esc(r.reason)}</small></td><td>${fmt(r.shards)}／${fmt(r.exp)}</td><td>${fmt(r.shardsPerTenMillion)}／${fmt(r.expPerTenMillion)}</td></tr>`).join('')||'<tr><td colspan="6">先录入收益，再补齐对应的已完成时间与能量记录。</td></tr>'}</tbody></table></div>
         <details><summary class="rw-note">按实际能量与分数分组</summary><p class="rw-note">能量每100万、分数每20分分组；缺分数的样本不参与分组。范围只是已录入样本的最小～最大值，不是预测区间；不同活动和加成仍可能影响收益。</p><div style="overflow:auto"><table><thead><tr><th>能量区间</th><th>分数</th><th>样本</th><th>平均梦碎／实录范围</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${groups.map(g=>`<tr><td>${fmt(g.energyFrom)}～小于${fmt(g.energyFrom+1e6)}</td><td>${g.scoreFrom}～${g.scoreFrom===80?'100':'小于'+(g.scoreFrom+20)}</td><td>${g.rows.length}觉／经验${g.exp.count}觉</td><td>${fmt(g.averageShards)}／${fmt(g.minShards)}～${fmt(g.maxShards)}</td><td>${fmt(g.shards.perTenMillion)}／${fmt(g.exp.perTenMillion)}</td></tr>`).join('')||'<tr><td colspan="5">暂无信息完整的实录分组。</td></tr>'}</tbody></table></div></details>`;
 }
@@ -33147,7 +33146,7 @@ var WeeklySleepRewards=(()=>{
         <div role="dialog" aria-modal="true" aria-label="每周梦碎与研究经验" class="flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-violet-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">每周梦碎与研究经验</h2><p class="text-xs text-violet-100">按觉记录 · 周累计 · 每日变化</p></div><button type="button" class="rw-close text-2xl" aria-label="关闭" onclick="WeeklySleepRewards.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
         <section class="${card}"><h3>录入单觉收益</h3><p class="rw-note">填这一次睡眠研究获得的数值。没有二觉就不填；梦碎为零请填0，研究经验可留空。不会改动原睡眠研究。</p><div class="rw-flex"><label>游戏日期<input id="${p}date" type="date" value="${c.today()}" max="${c.today()}" onchange="WeeklySleepRewards.loadSlot()"></label><label>觉次<select id="${p}session" onchange="WeeklySleepRewards.loadSlot()"><option value="1">一觉</option><option value="2">二觉</option></select></label><label>梦碎<input id="${p}shards" inputmode="numeric" placeholder="必填" style="width:9em"></label><label>研究经验<input id="${p}exp" inputmode="numeric" placeholder="选填" style="width:9em"></label><label>实际睡眠分数<input id="${p}score" type="number" min="0" max="100" step="1" placeholder="选填／自动关联" style="width:10em"></label><button type="button" onclick="WeeklySleepRewards.save()">保存这觉</button><button type="button" id="${p}delete" hidden onclick="WeeklySleepRewards.save(true)">删除这觉收益</button></div><div class="mt-4 rounded-xl border border-violet-100 bg-violet-50/40 p-3"><h3>这觉的联动信息（选填）</h3><div class="rw-flex mt-2"><button type="button" onclick="WeeklySleepRewards.referenceRhythm()">引用周评作息实录（当前日期／觉次）</button><span class="rw-note">先在上方选好游戏日期和一觉／二觉，再引用。</span></div><p id="${p}link-note" class="rw-note">在这里直接补齐即可，不必去其他板块录入。</p><div class="rw-flex"><label>录入时区（UTC时差从小到大）<select id="${p}zone" onchange="WeeklySleepRewards.zoneOptions()" style="max-width:100%">${sleepTimeZoneOptions(defaultZone(),c.today())}</select></label><button type="button" onclick="WeeklySleepRewards.setDefaultZone()">设为新录入默认时区</button></div><div class="rw-flex mt-2"><label>实际开始日期和时间<input id="${p}start" type="datetime-local" step="1"></label><label>实际结束日期和时间<input id="${p}end" type="datetime-local" step="1"></label><label>开始时间口径<select id="${p}basis"><option value="measurement">开始计测（扣5分钟等待）</option><option value="effective">有效入睡（不再扣除）</option></select></label></div><div class="rw-flex mt-2"><label>开始时参考能量<input id="${p}energy" inputmode="numeric" placeholder="选填，例如1,234,567"></label><label>能量对应的日期和时间<input id="${p}energy-time" type="datetime-local" step="1"></label></div><p class="rw-note">能量时间留空且填了能量，表示这就是开始时刻的实录能量。时间字段均按所选时区解释；改时区不自动换算已填钟面。时差按所选游戏日期显示，夏令时切换日请核对实际时刻。未填的联动项保持未知，不阻止仅保存收益。</p><button type="button" onclick="WeeklySleepRewards.save()">保存收益与联动信息</button></div><p id="${p}save-status" class="rw-note" aria-live="polite"></p><div class="rw-flex"><p id="${p}status" class="rw-note" aria-live="polite">正在读取本机记录…</p>${currentCloudUser?'<button type="button" onclick="WeeklySleepRewards.sync()">立即同步</button>':''}</div></section>
         <section class="${card}"><div class="rw-flex"><h3>每周统计</h3><button type="button" onclick="WeeklySleepRewards.move(-7)">上周</button><button type="button" onclick="WeeklySleepRewards.move(0)">本周</button><button type="button" onclick="WeeklySleepRewards.move(7)">下周</button><label>跳转到日期<input id="${p}jump" type="date" max="${c.today()}" onchange="WeeklySleepRewards.jump(this.value)"></label></div><div id="${p}week"></div></section>
-        <section class="${card}"><div class="rw-flex"><h3>每日收益趋势</h3><label>查看指标<select id="${p}metric" onchange="WeeklySleepRewards.renderWeek()"><option value="shards">梦碎</option><option value="exp">研究经验</option></select></label></div><div id="${p}chart"></div></section><section class="${card}"><label>能量参考最大时间差<select id="${p}gap-limit" onchange="WeeklySleepRewards.renderWeek()"><option value="60">1小时</option><option value="180" selected>3小时</option><option value="360">6小时</option><option value="1440">24小时</option></select></label><div id="${p}links"></div></section></div></div>`;
+        <section class="${card}"><div class="rw-flex"><h3>每日收益趋势</h3><label>查看指标<select id="${p}metric" onchange="WeeklySleepRewards.renderWeek()"><option value="shards">梦碎</option><option value="exp">研究经验</option></select></label></div><div id="${p}chart"></div></section><section class="${card}"><p class="rw-note">能量可能长时间未变化：记录早于开始多久都会显示，但不会因此排除比值。</p><div id="${p}links"></div></section></div></div>`;
         renderWeek();pick(c.today(),1);
     }
     function chart(summary,field){
@@ -33166,7 +33165,7 @@ var WeeklySleepRewards=(()=>{
             try{
                 const rewards=[...rows.values()].filter(r=>r.date>=week&&r.date<=c.shift(week,6)).sort((a,b)=>a.date.localeCompare(b.date)||Number(a.session)-Number(b.session));
                 const research=typeof getVisibleSleepResearchLogs==='function'?getVisibleSleepResearchLogs(historyLogs):[];
-                get('links').innerHTML=renderSleepRewardLinks(rewards,historyLogs,research,Number(val('gap-limit')||180));
+                get('links').innerHTML=renderSleepRewardLinks(rewards,historyLogs,research);
             }catch(error){console.warn('收益实录联动读取失败',error);get('links').textContent='联动暂不可用，原收益记录和统计不受影响。';}
         }
     }
