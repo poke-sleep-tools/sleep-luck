@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.16.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.17.1</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1009,6 +1009,7 @@
                     <button onclick="openIdealStrategyModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-cyan-100 text-cyan-900 shadow-sm flex items-center gap-1 hover:bg-cyan-200" title="用确定性的理想连续工时模型，在料理、树果与爆锅之间比较整周最高期望能量">
                         <i class="fa-solid fa-brain text-cyan-700"></i> 🧠 理论最优策略
                     </button>
+                    <button onclick="openWeeklyCuisineStatsModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-orange-100 text-orange-800 shadow-sm flex items-center gap-1 hover:bg-orange-200" title="按周记录料理类型，并统计全部历史或指定时间段"><i class="fa-solid fa-chart-pie"></i> 每周料理类型统计</button>
                     <button onclick="openLiveCookingPlannerModal()" class="px-3 py-1.5 rounded-xl font-bold text-xs transition bg-amber-100 text-amber-900 shadow-sm flex items-center gap-1 hover:bg-amber-200" title="记录本周已经吃过的料理，并根据当前食材与暴击率重新规划后续餐位">
                         <i class="fa-solid fa-calendar-check text-amber-600"></i> 🍽️ 实时料理规划
                     </button>
@@ -1814,7 +1815,7 @@ function isHistorySystemLog(log) {
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
         log?.type === 'snorlax_energy_point' || log?.type === 'snorlax_energy_settings' ||
-        log?.type === 'weekly_sleep_reward' ||
+        log?.type === 'weekly_sleep_reward' || log?.type === 'weekly_cuisine_type' ||
         !!(log && (log.type === 'sleep_week_rhythm_state' || log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
@@ -4457,7 +4458,7 @@ function mergeSleepResearchWithMeta(research, date, session) {
 
 function normalizeSleepResearchLogInPlace(log) {
     // 每周收益是独立流水：觉次是它自己的编号，不生成睡眠研究关联。
-    if (!log || isHistoryDeleteMarker(log) || log.type === 'weekly_sleep_reward') return log;
+    if (!log || isHistoryDeleteMarker(log) || log.type === 'weekly_sleep_reward' || log.type === 'weekly_cuisine_type') return log;
     if (log.date) log.date = normalizeSleepResearchDateValue(log.date);
     log.session = normalizeSleepResearchSessionValue(log.session || '一觉');
     if (isSleepResearchLog(log)) {
@@ -28672,6 +28673,9 @@ async function calculateAndRenderWeeklyCooking() {
     EMBEDDED_PRODUCTION_ROWS.push([547,2400,0.199,3.8,7,"ingredient"]);
     const EMBEDDED_RECIPE_LEVEL_ROWS = [[1,0],[2,0.02],[3,0.04],[4,0.06],[5,0.08],[6,0.09],[7,0.11],[8,0.13],[9,0.16],[10,0.18],[11,0.19],[12,0.21],[13,0.23],[14,0.24],[15,0.26],[16,0.28],[17,0.3],[18,0.31],[19,0.33],[20,0.35],[21,0.37],[22,0.4],[23,0.42],[24,0.45],[25,0.47],[26,0.5],[27,0.52],[28,0.55],[29,0.58],[30,0.61],[31,0.64],[32,0.67],[33,0.7],[34,0.74],[35,0.77],[36,0.81],[37,0.84],[38,0.88],[39,0.92],[40,0.96],[41,1],[42,1.04],[43,1.08],[44,1.13],[45,1.17],[46,1.22],[47,1.27],[48,1.32],[49,1.37],[50,1.42],[51,1.48],[52,1.53],[53,1.59],[54,1.65],[55,1.71],[56,1.77],[57,1.83],[58,1.9],[59,1.97],[60,2.03],[61,2.09],[62,2.15],[63,2.21],[64,2.27],[65,2.34],[66,2.39],[67,2.43],[68,2.48],[69,2.52],[70,2.58]];
 
+    // 2026-11-16 新坚果料理；基础能量不叠加限时活动倍率。
+    Object.assign(MEAL_NAME_BY_ID,{1026:'种子炸弹烤饼咖喱',2027:'打草结沙拉卷',3028:'美味尾巴蛋糕卷'});
+    EMBEDDED_MEAL_ROWS.push([1026,1,7950,[[20,15],[18,12],[16,12]]],[2027,2,26350,[[20,30],[19,22],[11,36],[12,33]]],[3028,3,19846,[[20,26],[14,10],[15,22],[3,33]]]);
     let cookingMaster = null;
     let cookingMeals = [];
     let autoProductionCache = { key: '', map: {}, team: [], details: {} };
@@ -28706,7 +28710,10 @@ async function calculateAndRenderWeeklyCooking() {
     function installMaster(master) {
         if (!master?.mealMap) return false;
         // 旧设备可能仍有7天有效的料理资料缓存；只补新物种缺项，不覆盖资料站已有参数。
-        master = {...master, pokedexMap:{...master.pokedexMap}, pokemonProducingParamsMap:{...master.pokemonProducingParamsMap}};
+        master = {...master, mealMap:{...master.mealMap}, pokedexMap:{...master.pokedexMap}, pokemonProducingParamsMap:{...master.pokemonProducingParamsMap}};
+        for (const [id,type,baseStrength,ingredients] of EMBEDDED_MEAL_ROWS.filter(row=>[1026,2027,3028].includes(row[0]))) {
+            if (!master.mealMap[id]) master.mealMap[id] = {id,type,baseStrength,ingredients:ingredients.map(([id,quantity])=>({id,quantity}))};
+        }
         for (const id of [546,547]) {
             const [,frequency,ingredientSplit,skillPercent,mainSkillId,specialty] = EMBEDDED_PRODUCTION_ROWS.find(row=>row[0]===id);
             if (!master.pokedexMap[id]) master.pokedexMap[id] = {serverSideData:{helpFrequencyBaseSec:frequency,mainSkillId,specialty}};
@@ -29513,6 +29520,7 @@ async function calculateAndRenderWeeklyCooking() {
         2001:'呆呆兽尾巴的胡椒沙拉',2002:'蘑菇孢子沙拉',2003:'拨雪凯撒沙拉',2004:'贪吃鬼土豆沙拉',2005:'湿润豆腐沙拉',2006:'蛮力豪迈沙拉',2007:'豆制火腿沙拉',2008:'好眠番茄沙拉',2009:'哞哞起司番茄沙拉',2010:'心情不定肉沙拉淋巧克力酱',2011:'过热沙拉',2012:'特选苹果沙拉',2013:'免疫葱花沙拉',2014:'迷人苹果起司沙拉',2015:'忍者沙拉',2016:'热风豆腐沙拉',2017:'萌绿沙拉',2018:'冥想香甜沙拉',2019:'乱击玉米沙拉',2020:'十字切碎丁沙拉',2021:'不服输咖啡沙拉',2022:'落英缤纷含羞草蛋沙拉',2023:'苹果酸奶沙拉',2024:'碎裂牛油果沙拉',2025:'重踏牛油果酱脆片',2026:'大块满满热水沙拉',
         3001:'熟成甜薯烧',3002:'不屈姜饼',3003:'特选苹果汁',3004:'手制劲爽汽水',3005:'火花姜茶',3006:'胖丁百汇布丁',3007:'恶魔之吻水果牛奶',3008:'祈愿苹果派',3009:'橙梦排毒茶',3010:'甜甜香气巧克力蛋糕',3011:'哞哞热鲜奶',3012:'轻装豆香蛋糕',3013:'活力蛋白饮',3014:'我行我素蔬菜汁',3015:'大马拉萨达',3016:'大力士豆香甜甜圈',3017:'大爆炸爆米花',3018:'茶会玉米司康',3019:'花瓣舞巧克力塔',3020:'花之礼马卡龙',3021:'早起咖啡冻',3022:'电光香料可乐',3023:'破格玉米香提拉米苏',3024:'土王闪电泡芙',3025:'心跳加速鬼面松饼',3026:'青草搅拌器冰沙',3027:'采蜜巧克力格子松饼'
     };
+    Object.assign(NAME_BY_ID,{1026:'种子炸弹烤饼咖喱',2027:'打草结沙拉卷',3028:'美味尾巴蛋糕卷'});
     let state = { type:'curry', dayKind:'weekday', healerId:'auto', basePot:57, goodCamp:false, cookingBoost:false, useTrainingPreview:true, recipeLevels:{} };
     let lastResults = [];
 
@@ -31114,6 +31122,27 @@ async function calculateAndRenderWeeklyCooking() {
     function getLiveCookingWeekRecords(weekStart){
         return liveCookingRecords.filter(item=>item.weekStart===weekStart&&!item.removed).sort((a,b)=>a.slotIndex-b.slotIndex);
     }
+    // 料理类型统计专用的只读来源：读取全历史，绝不启动规划或写回料理周历。
+    window.getWeeklyCuisineMealSources=async function(includeCloud=false){
+        const userId=currentCloudUser?.id||null,records=[];let error=null;
+        let local={};try{local=JSON.parse(localStorage.getItem(liveCookingStorageKey())||'{}')||{};}catch(_){}
+        records.push(...(Array.isArray(local.records)?local.records:[]));
+        records.push(...(Array.isArray(historyLogs)?historyLogs:[]).filter(isLiveCookingMealLog));
+        if(includeCloud&&userId&&typeof supabaseClient!=='undefined'){
+            try{
+                // 不能只取当前周，也不能受数据库默认返回条数限制。
+                for(let offset=0;;offset+=500){
+                    const result=await supabaseClient.from(LIVE_COOKING_CLOUD_RECORDS_TABLE).select('record_id,week_start,slot_index,payload,updated_at').eq('user_id',userId).order('record_id',{ascending:true}).range(offset,offset+499);
+                    if((currentCloudUser?.id||null)!==userId)return {records:[],staleUser:true};
+                    if(result.error)throw result.error;
+                    const data=result.data||[];data.forEach(row=>{if(row.payload&&typeof row.payload==='object')records.push({...row.payload,id:row.record_id,weekStart:row.week_start,slotIndex:row.slot_index,updatedAt:row.updated_at||row.payload.updatedAt});});
+                    if(data.length<500)break;
+                }
+            }catch(e){if(!isLiveCookingCloudTableMissing(e))error=e;}
+        }
+        const markers=getHistoryDeleteMarkerMap(historyLogs);
+        return {records:records.filter(r=>!isHistoryRecordDeletedByMarker(r,markers)),error};
+    };
     function getLiveCookingRecord(weekStart,index){ return getLiveCookingWeekRecords(weekStart).find(item=>item.slotIndex===index)||null; }
     function getLiveCookingLatestSlot(weekStart){ return getLiveCookingWeekRecords(weekStart).reduce((max,item)=>Math.max(max,item.slotIndex),-1); }
     function getLiveCookingWeekType(weekStart){ return LIVE_COOKING_TYPES[liveCookingState.weekTypes?.[weekStart]]?liveCookingState.weekTypes[weekStart]:'curry'; }
@@ -33057,6 +33086,118 @@ function renderSleepRewardLinks(rewards,logs,researches){
         <details><summary class="rw-note">按实际能量与分数分组</summary><p class="rw-note">能量每100万、分数每20分分组；缺分数的样本不参与分组。范围只是已录入样本的最小～最大值，不是预测区间；不同活动和加成仍可能影响收益。</p><div style="overflow:auto"><table><thead><tr><th>能量区间</th><th>分数</th><th>样本</th><th>平均梦碎／实录范围</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${groups.map(g=>`<tr><td>${fmt(g.energyFrom)}～小于${fmt(g.energyFrom+1e6)}</td><td>${g.scoreFrom}～${g.scoreFrom===80?'100':'小于'+(g.scoreFrom+20)}</td><td>${g.rows.length}觉／经验${g.exp.count}觉</td><td>${fmt(g.averageShards)}／${fmt(g.minShards)}～${fmt(g.maxShards)}</td><td>${fmt(g.shards.perTenMillion)}／${fmt(g.exp.perTenMillion)}</td></tr>`).join('')||'<tr><td colspan="5">暂无信息完整的实录分组。</td></tr>'}</tbody></table></div></details>`;
 }
 
+// 每周料理类型：独立统计，实际料理只读，手动覆盖按周同步。
+function createWeeklyCuisineCore(){
+    const type='weekly_cuisine_type',types=['curry','salad','dessert','special'],labels={curry:'咖喱',salad:'沙拉',dessert:'甜品',special:'特殊',unknown:'未记录'};
+    const valid=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d+'T12:00:00Z'))&&new Date(d+'T12:00:00Z').toISOString().slice(0,10)===d;
+    const shift=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
+    const week=d=>shift(d,-((new Date(d+'T12:00:00Z').getUTCDay()+6)%7));
+    function today(now=new Date()){const d=new Date(now);d.setDate(d.getDate()-(d.getHours()<4?1:0));return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+    const id=d=>'weekly_cuisine_type_'+d;
+    function manual(logs){const map=new Map(),markers=getHistoryDeleteMarkerMap(logs);for(const r of logs||[])if(r?.type===type&&valid(r.weekStart)&&week(r.weekStart)===r.weekStart&&r.id===id(r.weekStart)&&[...types,'unknown'].includes(r.mealType)&&!isHistoryRecordDeletedByMarker(r,markers))map.set(r.weekStart,chooseNewerHistoryLog(map.get(r.weekStart),r));return map;}
+    function actual(meals){
+        const newest=new Map();for(const r of meals||[]){if(!valid(r?.weekStart)||week(r.weekStart)!==r.weekStart||!Number.isInteger(Number(r.slotIndex))||r.slotIndex==null||r.slotIndex===''||Number(r.slotIndex)<0||Number(r.slotIndex)>20)continue;const key=r.weekStart+':'+Number(r.slotIndex);newest.set(key,chooseNewerHistoryLog(newest.get(key),r));}
+        const result=new Map();for(const r of newest.values()){
+            if(r.removed||r.skipped||!(Number(r.mealId)>0||String(r.mealName||'').trim()||Number(r.energy)>0))continue;
+            const fromId={1:'curry',2:'salad',3:'dessert'}[Math.floor(Number(r.mealId)/1000)];
+            const value=types.includes(r.mealType)?r.mealType:fromId;if(!value)continue;
+            const row=result.get(r.weekStart)||{types:new Set(),meals:0};row.types.add(value);row.meals++;result.set(r.weekStart,row);
+        }
+        return new Map([...result].map(([w,r])=>[w,{weekStart:w,mealType:r.types.size>1?'special':[...r.types][0],source:'auto',meals:r.meals,mixed:r.types.size>1,seen:[...r.types]}]));
+    }
+    function resolve(logs,meals,last){const out=actual(meals);for(const[w,r]of manual(logs))out.set(w,{weekStart:w,mealType:r.mealType,source:'manual',meals:out.get(w)?.meals||0,mixed:out.get(w)?.mixed||false,seen:out.get(w)?.seen||[]});for(const w of out.keys())if(w>last)out.delete(w);return out;}
+    function range(mode,now,records,from,to){
+        const current=week(now),month=now.slice(0,7)+'-01',year=now.slice(0,4);let start,end=current;
+        if(mode==='custom'){if(!valid(from)||!valid(to)||from>to)throw Error('请选择有效的开始和结束日期，开始不能晚于结束。');start=week(from);end=week(to);if(start>current)throw Error('不能统计尚未到来的周。');end=end>current?current:end;}
+        else if(mode==='week')start=current;
+        else if(mode==='month')start=week(month);
+        else if(mode==='lastMonth'){const prev=shift(month,-1);start=week(prev.slice(0,7)+'-01');end=week(prev);}
+        else if(mode==='year')start=week(year+'-01-01');
+        else if(mode==='last4')start=shift(current,-21);
+        else if(mode==='last12')start=shift(current,-77);
+        else start=[...records.keys(),current].filter(w=>w<=current).sort()[0];
+        return {start,end};
+    }
+    function analyze(records,start,end){
+        if(!valid(start)||!valid(end)||start>end)throw Error('统计区间无效');
+        const rows=[];for(let d=start;d<=end;d=shift(d,7))rows.push(records.get(d)||{weekStart:d,mealType:'unknown',source:'none',meals:0,mixed:false});
+        const counts=Object.fromEntries(types.map(t=>[t,0]));let known=0,maxStreak=0,streak=0,previous='';
+        for(const r of rows){if(types.includes(r.mealType)){counts[r.mealType]++;known++;streak=r.mealType===previous?streak+1:1;previous=r.mealType;maxStreak=Math.max(maxStreak,streak);}else{streak=0;previous='';}}
+        return {rows,counts,known,missing:rows.length-known,weeks:rows.length,maxStreak,percent:Object.fromEntries(types.map(t=>[t,known?counts[t]/known*100:0]))};
+    }
+    return {type,types,labels,valid,shift,week,today,id,manual,actual,resolve,range,analyze};
+}
+var WeeklyCuisine=(()=>{
+    const c=createWeeklyCuisineCore(),modalId='weekly-cuisine-modal',get=k=>document.getElementById('weekly-cuisine-'+k),value=k=>String(get(k)?.value||''),esc=x=>escapeHtml(String(x??''));
+    let generation=0,owner='',ready=Promise.resolve(false),queue=Promise.resolve(),meals=[],records=new Map(),limit=52,formSnapshot='';
+    const formValue=()=>value('pick')+'|'+value('type');
+    const user=()=>currentCloudUser?.id||'guest',active=t=>t===generation&&owner===user()&&!!document.getElementById(modalId);
+    function status(s){if(get('status'))get('status').textContent=s;}
+    function close(){generation++;document.getElementById(modalId)?.remove();}
+    async function sources(cloud,t){const result=await window.getWeeklyCuisineMealSources(cloud);if(!active(t))return null;meals=result.records||[];return result;}
+    function refresh(){const untouched=formValue()===formSnapshot;records=c.resolve(historyLogs,meals,c.week(c.today()));renderStats();if(untouched)selection();}
+    function sync(){
+        const t=generation,uid=user(),prepared=ready;
+        queue=queue.catch(()=>{}).then(async()=>{
+            if(!await prepared||!active(t)||uid!==user())return;
+            status(currentCloudUser?'正在读取账号与历史料理记录…':'正在重新读取本机料理记录…');
+            try{
+                let saved=null,readFailed=false;
+                if(currentCloudUser){
+                    if(historyDedicatedCloudSupport!==false){const r=await loadHistoryFromDedicatedCloud(uid);if(!active(t))return;if(!r?.ok&&!r?.missingTable)readFailed=true;}
+                    saved=await saveHistoryToCloudNow();if(!active(t))return;
+                }
+                const result=await sources(!!currentCloudUser,t);if(!result)return;refresh();
+                status(readFailed||result.error||saved&&!saved.ok?'本机记录已更新；部分云端读取或同步未完成，可点“刷新／同步”重试。':'已更新'+(currentCloudUser?'并同步到账号。':'；访客记录仅保存在本机。'));
+            }catch(error){if(active(t))status('同步未完成，本机记录保留，请稍后重试。');console.warn('每周料理类型同步失败',error);}
+        });return queue;
+    }
+    function open(){
+        close();owner=user();meals=[];records=new Map();limit=52;
+        const modal=document.createElement('div');modal.id=modalId;modal.className='fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/65 p-2 sm:p-4 backdrop-blur-sm';document.body.appendChild(modal);render();const t=generation;
+        ready=(async()=>{loadHistoryFromLocal();const r=await ensureHistoryLargeStorageReady();if(!active(t))return false;if(!r?.ok)throw Error('本机记录未完整加载');await sources(false,t);if(!active(t))return false;refresh();status('本机记录已加载。');return true;})().catch(error=>{if(active(t))status('本机记录读取失败，请关闭后重试。');return false;});
+        void sync();
+    }
+    async function set(w,mealType){
+        const t=generation,uid=user();try{
+            if(!c.valid(w)||c.week(w)!==w||w>c.week(c.today())||!['auto','unknown',...c.types].includes(mealType))throw Error('请选择本周或更早的周及有效料理类型。');
+            if(!await ready||!active(t)||uid!==user())return;
+            const id=c.id(w),old=c.manual(historyLogs).get(w);
+            if(mealType==='auto'){if(old){replaceHistoryDeleteMarker(id);historyLogs=mergeHistoryLogs([],historyLogs);}}
+            else{
+                const marker=getHistoryDeleteMarkerMap(historyLogs).get(id),at=new Date(Math.max(Date.now(),getHistoryLogMergeTime(marker)+1,getHistoryLogMergeTime(old)+1)).toISOString();
+                historyLogs=mergeHistoryLogs(historyLogs,[{id,type:c.type,date:w,weekStart:w,mealType,updatedAt:at}]);
+            }
+            saveHistoryToLocal({syncCloud:false});refresh();if(c.valid(value('pick'))&&c.week(value('pick'))===w)selection();status('已保存，统计已更新。');
+            const written=await waitForHistoryLargeStorageWrite();if(!active(t))return;if(written===false)throw Error('本机保存未完成，请重试。');
+            if(currentCloudUser)void sync();
+        }catch(error){if(active(t)){status(error.message);refresh();}}
+    }
+    function options(selected='auto'){return [['auto','自动识别'],...c.types.map(t=>[t,c.labels[t]]),['unknown','未记录（不计统计）']].map(([k,label])=>`<option value="${k}" ${k===selected?'selected':''}>${label}</option>`).join('');}
+    function selection(){const raw=value('pick'),w=c.valid(raw)?c.week(raw):c.week(c.today()),manual=c.manual(historyLogs).get(w);if(get('pick'))get('pick').value=w;if(get('type'))get('type').value=manual?.mealType||'auto';formSnapshot=formValue();}
+    function renderStats(){
+        if(!get('stats'))return;
+        const custom=value('range')==='custom';get('custom').hidden=!custom;
+        try{
+            const r=c.range(value('range'),c.today(),records,value('from'),value('to')),a=c.analyze(records,r.start,r.end);
+            const colors={curry:'#d97706',salad:'#059669',dessert:'#db2777',special:'#7c3aed'};
+            get('stats').innerHTML=`<p class="wc-note">${r.start} ～ ${c.shift(r.end,6)} · 已记录 <strong>${a.known}</strong> 周／未记录 ${a.missing} 周。每周只计一次，占比以已记录周为分母；“特殊”也计入。</p><div class="wc-counts">${c.types.map(t=>`<div style="border-top:3px solid ${colors[t]}"><span>${c.labels[t]}</span><strong style="color:${colors[t]}">${a.counts[t]}<small> 周</small></strong><span>${a.percent[t].toFixed(1)}%</span><div class="wc-bar"><i style="width:${a.percent[t]}%;background:${colors[t]}"></i></div></div>`).join('')}</div><p class="wc-note">区间内最长连续同类型：${a.maxStreak} 周（未记录周会中断）。按整周统计：日期范围触及的周一至周日均纳入；本周尚未结束也只计一周。</p>`;
+            const rows=a.rows.slice().reverse(),shown=rows.slice(0,limit);
+            get('weeks').innerHTML=`<div class="wc-table"><table><thead><tr><th>周一 ～ 周日</th><th>料理类型</th><th>来源</th><th>修改（自动保存）</th></tr></thead><tbody>${shown.map(row=>`<tr><td>${row.weekStart}<small>～ ${c.shift(row.weekStart,6)}</small></td><td><strong>${c.labels[row.mealType]}</strong>${row.mixed?'<small>实录含多类，请核对</small>':''}</td><td>${row.source==='manual'?'手动':row.source==='auto'?'实际料理自动识别':'未记录'}${row.meals?`<small>参考 ${row.meals} 餐</small>`:''}</td><td><select aria-label="${row.weekStart}料理类型" onchange="WeeklyCuisine.set('${row.weekStart}',this.value)">${options(row.source==='manual'?row.mealType:'auto')}</select></td></tr>`).join('')}</tbody></table></div>${rows.length>limit?`<button type="button" onclick="WeeklyCuisine.more()">再显示52周（共${rows.length}周）</button>`:''}`;
+        }catch(error){get('stats').textContent=error.message;get('weeks').innerHTML='';}
+    }
+    function render(){
+        const modal=document.getElementById(modalId),current=c.week(c.today());
+        formSnapshot=current+'|auto';
+        modal.innerHTML=`<style>#${modalId} .wc-card{background:#fff;border:1px solid #fed7aa;border-radius:18px;padding:16px}#${modalId} .wc-flex{display:flex;align-items:end;flex-wrap:wrap;gap:10px}#${modalId} .wc-note{font-size:12px;line-height:1.75;color:#64748b;margin:8px 0}#${modalId} label{display:grid;gap:5px;font-size:12px;font-weight:700}#${modalId} input,#${modalId} select{min-width:0;max-width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;font-size:16px}#${modalId} button:not(.wc-close){padding:9px 12px;border:1px solid #fed7aa;border-radius:10px;background:#fff7ed;color:#9a3412;font-size:13px;font-weight:800}#${modalId} h3{font-weight:900}#${modalId} .wc-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}#${modalId} .wc-counts>div{padding:12px;background:#fffaf5;border-radius:10px;display:grid;gap:4px;font-size:13px}#${modalId} .wc-counts strong{font-size:26px}#${modalId} small{display:block;font-size:11px;color:#94a3b8}#${modalId} .wc-counts small{display:inline;font-size:12px}#${modalId} .wc-bar{height:5px;background:#ffedd5;border-radius:9px;overflow:hidden}#${modalId} .wc-bar i{height:100%;display:block}#${modalId} .wc-table{overflow:auto}#${modalId} table{width:100%;border-collapse:collapse;font-size:13px}#${modalId} th,#${modalId} td{padding:10px 7px;border-bottom:1px solid #f1f5f9;text-align:left;white-space:nowrap}#${modalId} [hidden]{display:none!important}@media(max-width:540px){#${modalId} .wc-counts{grid-template-columns:repeat(2,minmax(0,1fr))}}</style>
+        <div role="dialog" aria-modal="true" aria-label="每周料理类型统计" class="flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-orange-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-orange-700 px-5 py-4 text-white"><div><h2 class="text-xl font-black">每周料理类型统计</h2><p class="text-xs">按周记录 · 自动识别 · 时间段统计</p></div><button type="button" class="wc-close text-2xl" aria-label="关闭" onclick="WeeklyCuisine.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
+        <section class="wc-card"><h3>记录／修改一周</h3><p class="wc-note">默认从已保存的实际料理自动识别，不把周历默认选项、预测或跳过的餐算实录。特殊活动可手动选“特殊”。手动修改只影响这里的统计，不改变原料理记录和规划。</p><div class="wc-flex"><label>选择周内任一天<input id="weekly-cuisine-pick" type="date" value="${current}" max="${c.today()}" onchange="WeeklyCuisine.selection()"></label><label>这一周的料理<select id="weekly-cuisine-type">${options()}</select></label><button type="button" onclick="WeeklyCuisine.save()">保存这一周</button><button type="button" onclick="WeeklyCuisine.sync()">刷新／同步</button></div><p id="weekly-cuisine-status" class="wc-note" role="status" aria-live="polite">正在读取…</p><p class="wc-note">选择“自动识别”并保存，可撤销该周手动覆盖；选“未记录”可暂不统计该周。不会删除原料理。</p></section>
+        <section class="wc-card"><div class="wc-flex"><h3>统计范围</h3><label>时间段<select id="weekly-cuisine-range" onchange="WeeklyCuisine.filter()"><option value="all">有记录以来全部</option><option value="week">本周</option><option value="month">本月涉及的周</option><option value="lastMonth">上月涉及的周</option><option value="last4">最近4周（含本周）</option><option value="last12">最近12周（含本周）</option><option value="year">今年涉及的周</option><option value="custom">自定义时间段</option></select></label><div id="weekly-cuisine-custom" class="wc-flex" hidden><label>开始日期<input id="weekly-cuisine-from" type="date" value="${current}" max="${c.today()}" onchange="WeeklyCuisine.filter()"></label><label>结束日期<input id="weekly-cuisine-to" type="date" value="${c.today()}" max="${c.today()}" onchange="WeeklyCuisine.filter()"></label></div></div><div id="weekly-cuisine-stats"></div></section><section class="wc-card"><h3>每周明细</h3><p class="wc-note">同周多种料理会暂记“特殊”，也可能是旧记录的类型填错，请按实际情况手动核对。缺失周留空，不推断成某一类。</p><div id="weekly-cuisine-weeks"></div></section></div></div>`;
+    }
+    return {open,close,sync,set,selection,save:()=>{const d=value('pick');if(!c.valid(d)){status('请选择有效日期');return;}return set(c.week(d),value('type'));},filter:()=>{limit=52;renderStats();},more:()=>{limit+=52;renderStats();}};
+})();
+function openWeeklyCuisineStatsModal(){WeeklyCuisine.open();}
+
 function createWeeklySleepRewardsCore(){
     const type='weekly_sleep_reward',max=Math.floor(Number.MAX_SAFE_INTEGER/14);
     function valid(date){if(typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date))return false;const t=Date.parse(date+'T12:00:00Z');return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===date;}
@@ -33265,6 +33406,7 @@ function openSleepSplitPlannerModal() {
         { id: 'graduationBackfill', group: 'pokemon', label: '补录出货个体', desc: '手动补充毕业档案', icon: 'fa-plus', tone: 'bg-amber-50 text-amber-700', action: 'openGraduationBackfillModal' },
 
         { id: 'liveCooking', group: 'cooking', label: '料理周历', desc: '记录料理并实时规划', icon: 'fa-calendar-days', tone: 'bg-orange-50 text-orange-700', action: 'openLiveCookingPlannerModal' },
+        { id: 'weeklyCuisine', group: 'cooking', label: '每周料理类型统计', desc: '按周记录咖喱／沙拉／甜品／特殊，支持时间段统计', icon: 'fa-chart-pie', tone: 'bg-orange-50 text-orange-700', action: 'openWeeklyCuisineStatsModal' },
         { id: 'mealPrep', group: 'cooking', label: '料理备料规划', desc: '计算下周提前囤料', icon: 'fa-basket-shopping', tone: 'bg-orange-50 text-orange-700', action: 'openMealPrepPlannerModal' },
         { id: 'recipeFit', group: 'cooking', label: '食谱 × Box适配', desc: '比较食谱与盒子效率', icon: 'fa-ranking-star', tone: 'bg-emerald-50 text-emerald-700', action: 'openRecipeBoxFitModal' },
         { id: 'ingredientTrainingGain', group: 'cooking', label: '食材宝培养收益', desc: '比较培养后对三类料理的实际改善', icon: 'fa-seedling', tone: 'bg-lime-50 text-lime-800', action: 'openIngredientTrainingGainModal' },
