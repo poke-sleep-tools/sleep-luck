@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.17.1</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.17.2</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -32823,15 +32823,25 @@ function createSnorlaxEnergyTimelineCore(){
         const weekday=new Date(day+'T00:00:00Z').getUTCDay();return weekFromDate(shift(day,-((weekday+6)%7)),z);
     }
     function energy(value){const s=String(value??'').trim();if(!/^[\d,，\s]+$/.test(s)||!/[0-9]/.test(s))throw Error('请输入非负整数能量，可带千位分隔符。');const n=Number(s.replace(/[,，\s]/g,''));if(!Number.isSafeInteger(n)||n<0)throw Error('能量超出可记录范围。');return n;}
-    function lookup(rows,time,z){const w=week(time,z);let best=null;for(const r of rows)if(r.time>=w.start&&r.time<=time&&(!best||r.time>best.time))best=r;return {week:w,record:best,gap:best?(time-best.time)/MIN:null};}
+    function normalizeGameWeek(value){
+        const d=String(value||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return null;
+        const t=Date.parse(d+'T12:00:00Z');if(!Number.isFinite(t)||new Date(t).toISOString().slice(0,10)!==d)return null;
+        return shift(d,-((new Date(t).getUTCDay()+6)%7));
+    }
+    function gameWeek(row,fallback='UTC'){return normalizeGameWeek(row?.gameWeek)||week(row.time,zone(row.zone)||zone(fallback)||'UTC').date;}
+    function lookup(rows,time,z,requestedWeek){
+        const wanted=normalizeGameWeek(requestedWeek)||week(time,z).date,w=weekFromDate(wanted,z);let best=null;
+        for(const r of rows)if(r.time<=time&&gameWeek(r,z)===wanted&&(!best||r.time>best.time))best=r;
+        return {week:w,record:best,gap:best?(time-best.time)/MIN:null};
+    }
     function rewind(wake,score,base=510,wait=5,basis='measurement'){
         if(!Number.isFinite(wake)||!Number.isInteger(score)||score<1||score>100||![510,660].includes(base)||!Number.isInteger(wait)||wait<0||wait>180)throw Error('目标分数须为1–100整数，入睡等待须为0–180分钟。');
         const minutes=Math.round(base*score/100),effective=wake-minutes*MIN,measurement=effective-wait*MIN;
         return {wake,minutes,effective,measurement,target:basis==='effective'?effective:measurement};
     }
     const pointId=time=>`snorlax_energy_at_${time}`,settingsId='snorlax_energy_settings_v1',legacyAt='1970-01-01T00:00:00.001Z';
-    function clean(row){return Number.isSafeInteger(row?.time)&&Math.abs(row.time)<253402300799000&&Number.isSafeInteger(row.energy)&&row.energy>=0?{time:row.time,energy:row.energy,zone:zone(row.zone)||'UTC'}:null;}
-    function point(row,updatedAt){return {...row,id:pointId(row.time),type:'snorlax_energy_point',date:new Date(row.time).toISOString().slice(0,10),updatedAt};}
+    function clean(row){return Number.isSafeInteger(row?.time)&&Math.abs(row.time)<253402300799000&&Number.isSafeInteger(row.energy)&&row.energy>=0?{time:row.time,energy:row.energy,zone:zone(row.zone)||'UTC',...(normalizeGameWeek(row.gameWeek)?{gameWeek:normalizeGameWeek(row.gameWeek)}:{})}:null;}
+    function point(row,updatedAt){return {...row,gameWeek:gameWeek(row),id:pointId(row.time),type:'snorlax_energy_point',date:new Date(row.time).toISOString().slice(0,10),updatedAt};}
     function settings(z,updatedAt){return {id:settingsId,type:'snorlax_energy_settings',zone:z,updatedAt};}
     function legacy(raw){
         const map=new Map();for(const r of Array.isArray(raw?.rows)?raw.rows:[]){const row=clean(r);if(row)map.set(row.time,point(row,legacyAt));}
@@ -32847,7 +32857,7 @@ function createSnorlaxEnergyTimelineCore(){
         }
         return {zone:zone(pref?.zone)||fallback,rows:[...map.values()].map(clean).sort((a,b)=>a.time-b.time)};
     }
-    return {MIN,zone,wall,parse,shift,week,weekFromDate,energy,lookup,rewind,pointId,settingsId,point,settings,legacy,fromHistory};
+    return {MIN,zone,wall,parse,shift,week,weekFromDate,normalizeGameWeek,gameWeek,energy,lookup,rewind,pointId,settingsId,point,settings,legacy,fromHistory};
 }
 var SnorlaxEnergyTimeline=(()=>{
     const core=createSnorlaxEnergyTimelineCore(),id='snorlax-energy-modal',storage=()=>`snorlax_energy_timeline_v1_${currentCloudUser?.id||'guest'}`;
@@ -32857,7 +32867,7 @@ var SnorlaxEnergyTimeline=(()=>{
     const fmt=n=>n.toLocaleString('zh-CN'),span=n=>{const m=Math.round(n);return `${m>=60?Math.floor(m/60)+'小时':''}${m%60}分钟`;};
     let state,owner,viewDate,result,limit,timer,generation=0,ready=Promise.resolve(),syncQueue=Promise.resolve();
     function rawLocal(){try{return JSON.parse(localStorage.getItem(owner)||'null');}catch(_){return null;}}
-    function read(){const raw=rawLocal();return {zone:core.zone(raw?.zone)||device(),rows:core.legacy(raw).filter(r=>r.type==='snorlax_energy_point').map(({time,energy,zone})=>({time,energy,zone})).sort((a,b)=>a.time-b.time)};}
+    function read(){const raw=rawLocal();return {zone:core.zone(raw?.zone)||device(),rows:core.legacy(raw).filter(r=>r.type==='snorlax_energy_point').map(({time,energy,zone,gameWeek})=>({time,energy,zone,gameWeek})).sort((a,b)=>a.time-b.time)};}
     const active=token=>token===generation&&storage()===owner&&!!document.getElementById(id);
     function status(message){const node=get('sync-status');if(node)node.textContent=message;}
     function refreshState(){
@@ -32922,9 +32932,9 @@ var SnorlaxEnergyTimeline=(()=>{
         const cls='rounded-2xl border border-slate-200 bg-white p-4',input='energy-timeline-',clock=core.wall(now(),state.zone).slice(0,16);
         node.innerHTML=`<style>#${id} .et-inputs{display:flex;flex-wrap:wrap;gap:8px;align-items:end}#${id} label{font-size:12px;font-weight:700;display:grid;gap:4px}#${id} input,#${id} select{min-width:0;max-width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;background:white}#${id} button:not(.et-close){padding:8px 11px;border:1px solid #a7f3d0;border-radius:9px;color:#065f46;font-weight:750;font-size:13px;background:#ecfdf5}#${id} .et-note{font-size:12px;color:#64748b;line-height:1.7;margin:6px 0}#${id} summary{cursor:pointer;font-weight:800}#${id} h3{font-weight:900}#${id} table{width:100%;font-size:13px;border-collapse:collapse}#${id} td,#${id} th{padding:7px 5px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}</style>
         <div role="dialog" aria-modal="true" aria-label="卡比兽能量时间轴" class="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-emerald-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">卡比兽能量时间轴</h2><p class="text-xs text-emerald-100">记录当时能量 · 回查外设拆觉参考</p></div><button class="et-close text-2xl" type="button" aria-label="关闭能量时间轴" onclick="SnorlaxEnergyTimeline.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
-        <section class="${cls}"><datalist id="energy-timeline-zones">${zoneList()}</datalist><div class="et-inputs"><label>默认时区／周界线<input id="${input}zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.changeZone()">保存默认时区</button>${currentCloudUser?'<button type="button" onclick="SnorlaxEnergyTimeline.sync()">立即同步</button>':''}</div><p id="${input}sync-status" class="et-note" aria-live="polite">${currentCloudUser?'正在读取本机账号记录…':'未登录：记录仅保存在本机访客空间。'}</p><p class="et-note">按默认时区每周一 04:00 分周，旧周记录保留。更改默认时区会按新时区重分周，不改变已保存的实际时刻。登录同一账号后，记录和默认时区可跨端同步。</p></section>
-        <section class="${cls}"><h3>记录能量</h3><div class="et-inputs"><label>卡比兽能量<input id="${input}energy" type="text" inputmode="numeric" placeholder="例如 1,234,567" onkeydown="if(event.key==='Enter')SnorlaxEnergyTimeline.add(false)"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(false)">用当前时刻保存</button></div><details class="mt-3"><summary>手动补录日期、时间和时区</summary><div class="et-inputs mt-2"><label>记录时间<input id="${input}manual" type="datetime-local" step="1" value="${clock}"></label><label>这条记录的时区<input id="${input}manual-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(true)">补录</button></div><p class="et-note">使用上方填写的同一个能量数值。手动时区不改变默认时区。</p></details></section>
-        <section class="${cls}"><h3>找回当时的能量</h3><div class="et-inputs"><label>往前多少小时<input id="${input}hours" type="number" min="0" max="87600" step="1" value="2" style="width:8em"></label><label>再往前多少分钟<input id="${input}mins" type="number" min="0" max="59" step="1" value="0" style="width:8em"></label><button type="button" onclick="SnorlaxEnergyTimeline.search(false)">从现在回查</button></div>
+        <section class="${cls}"><datalist id="energy-timeline-zones">${zoneList()}</datalist><div class="et-inputs"><label>默认显示／录入时区<input id="${input}zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.changeZone()">保存默认时区</button>${currentCloudUser?'<button type="button" onclick="SnorlaxEnergyTimeline.sync()">立即同步</button>':''}</div><p id="${input}sync-status" class="et-note" aria-live="polite">${currentCloudUser?'正在读取本机账号记录…':'未登录：记录仅保存在本机访客空间。'}</p><p class="et-note">游戏归属周与实际时刻分开保存。新记录留空时按该条录入时区周一04:00推定；提前换岛清零后，请明确选下一周。旧记录保留，未标注的周按原录入时区推定，可在下方修正。更改显示时区不会重新分配已标注的游戏周。同账号跨端同步。</p></section>
+        <section class="${cls}"><h3>记录能量</h3><div class="et-inputs"><label>能量游戏归属周（选周内任一天）<input id="${input}game-week" type="date" title="留空时按本条记录的录入时区推定；提前换岛后可选下一周"></label><label>卡比兽能量<input id="${input}energy" type="text" inputmode="numeric" placeholder="例如 1,234,567" onkeydown="if(event.key==='Enter')SnorlaxEnergyTimeline.add(false)"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(false)">用当前时刻保存</button></div><details class="mt-3"><summary>手动补录日期、时间和时区</summary><div class="et-inputs mt-2"><label>记录时间<input id="${input}manual" type="datetime-local" step="1" value="${clock}"></label><label>这条记录的时区<input id="${input}manual-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label><button type="button" onclick="SnorlaxEnergyTimeline.add(true)">补录</button></div><p class="et-note">使用上方填写的同一个能量数值。手动时区不改变默认时区。</p></details></section>
+        <section class="${cls}"><h3>找回当时的能量</h3><div class="et-inputs"><label>回查游戏周（选填）<input id="${input}query-week" type="date"></label><label>往前多少小时<input id="${input}hours" type="number" min="0" max="87600" step="1" value="2" style="width:8em"></label><label>再往前多少分钟<input id="${input}mins" type="number" min="0" max="59" step="1" value="0" style="width:8em"></label><button type="button" onclick="SnorlaxEnergyTimeline.search(false)">从现在回查</button></div>
         <div class="mt-3 border-t border-slate-100 pt-3"><h3>按睡眠分数倒推</h3><div class="et-inputs"><label>目标睡眠分数<input id="${input}score" type="number" min="1" max="100" step="1" value="50" style="width:7em"></label><label>起床时间<select id="${input}wake-mode" onchange="document.getElementById('energy-timeline-custom-wake').hidden=this.value!=='custom'"><option value="now">现在起床</option><option value="custom">自定义起床时间</option></select></label><label>满分时长<select id="${input}base"><option value="510">8小时30分</option><option value="660">11小时</option></select></label><label>入睡等待（分钟）<input id="${input}wait" type="number" min="0" max="180" step="1" value="5" style="width:7em"></label><label>回查哪个时间点<select id="${input}basis"><option value="measurement">开始计测</option><option value="effective">有效入睡</option></select></label></div><div id="${input}custom-wake" hidden class="mt-2"><div class="et-inputs"><label>起床日期和时间<input id="${input}wake" type="datetime-local" step="1" value="${clock}"></label><label>起床时区<input id="${input}wake-zone" list="energy-timeline-zones" value="${e(state.zone)}"></label></div></div><div class="et-inputs mt-2"><button type="button" onclick="SnorlaxEnergyTimeline.search(true)">倒推并回查能量</button></div><p class="et-note">用目标分数 × 满分时长 ÷ 100 估算有效睡眠。二觉被每日剩余分数封顶时，或实际计测有偏差时，分数不能唯一反推出入睡时间。</p></div><details><summary class="et-note">夏令时重复时刻（高级）</summary>${overlap()}</details><div id="${input}result" class="mt-2" aria-live="polite"></div></section>
         <section class="${cls}"><div class="et-inputs"><h3>每周能量折线</h3><button type="button" onclick="SnorlaxEnergyTimeline.move(-7)">上周</button><button type="button" onclick="SnorlaxEnergyTimeline.move(0)">本周</button><button type="button" onclick="SnorlaxEnergyTimeline.move(7)">下周</button><label>跳到某周<input type="date" id="${input}jump" onchange="SnorlaxEnergyTimeline.jump(this.value)"></label></div><div id="${input}week"></div></section></div></div>`;
         renderWeek();renderResult();
@@ -32938,11 +32948,21 @@ var SnorlaxEnergyTimeline=(()=>{
             if(time>now())throw Error('实际能量不能记录到未来时间。');const energy=core.energy(v('energy'));
             if(!await ready||!active(token))return;
             if(state.rows.some(r=>r.time===time)&&!confirm('该时刻已有一条记录，要替换能量吗？'))return;
-            const row={time,energy,zone:z},ok=await persist({...state,rows:[...state.rows.filter(r=>r.time!==time),row].sort((a,b)=>a.time-b.time)},{row},token);
+            const chosen=v('game-week'),gameWeek=chosen?core.normalizeGameWeek(chosen):core.week(time,z).date;
+            if(!gameWeek)throw Error('请选择有效的能量游戏归属周。');
+            const row={time,energy,zone:z,gameWeek},ok=await persist({...state,rows:[...state.rows.filter(r=>r.time!==time),row].sort((a,b)=>a.time-b.time)},{row},token);
             if(!active(token))return;
-            viewDate=core.week(time,state.zone).date===core.week(now(),state.zone).date?null:core.week(time,state.zone).date;limit=40;
+            viewDate=gameWeek===core.week(now(),state.zone).date?null:gameWeek;limit=40;
             if(ok)get('energy').value='';renderWeek();renderResult();showToast(ok?'已记录卡比兽能量':'本机写入未确认，请查看同步状态');
         }catch(error){showToast(error.message);}
+    }
+    async function changeGameWeek(time,date){
+        const token=generation;try{
+            const gameWeek=core.normalizeGameWeek(date);if(!gameWeek)throw Error('请选择有效的游戏归属周。');
+            if(!await ready||!active(token))return;const old=state.rows.find(r=>r.time===time);if(!old)throw Error('该能量记录已不存在，请刷新。');
+            const row={...old,gameWeek};await persist({...state,rows:state.rows.map(r=>r.time===time?row:r)},{row},token);
+            if(active(token)){renderWeek();renderResult();showToast('已修正游戏归属周，时间与能量不变。');}
+        }catch(error){showToast(error.message);if(active(token))renderWeek();}
     }
     function search(byScore){
         try{
@@ -32956,17 +32976,19 @@ var SnorlaxEnergyTimeline=(()=>{
                 target=now()-(h*60+m)*core.MIN;
             }
             if(target>now())throw Error('倒推的目标时刻尚未到达，不能查询未来能量。');
-            result={target,calc};viewDate=core.week(target,state.zone).date;limit=40;renderResult();renderWeek();
+            const chosen=v('query-week'),gameWeek=chosen?core.normalizeGameWeek(chosen):core.week(target,state.zone).date;
+            if(!gameWeek)throw Error('请选择有效的回查游戏周。');
+            result={target,calc,gameWeek};viewDate=gameWeek;limit=40;renderResult();renderWeek();
         }catch(error){result=null;renderWeek();get('result').textContent=error.message;}
     }
     function renderResult(){
         const out=get('result');if(!out)return;if(!result){out.innerHTML='';return;}
-        const {target,calc}=result,{record,gap,week}=core.lookup(state.rows,target,state.zone);
-        out.innerHTML=`<div class="rounded-xl bg-emerald-50 p-3"><div class="text-sm font-bold">查询时刻 ${e(text(target,state.zone))} · ${e(state.zone)}</div>${calc?`<p class="et-note">起床 ${e(text(calc.wake,state.zone))} · 有效睡眠约${span(calc.minutes)} · 有效入睡 ${e(text(calc.effective,state.zone))} · 开始计测 ${e(text(calc.measurement,state.zone))}${calc.minutes<90?'。倒推时长不足90分钟，请核对实际有效计测。':''}</p>`:''}${record?`<div class="text-xl font-black text-emerald-900">参考能量 ${fmt(record.energy)}</div><p class="et-note">取自 ${e(text(record.time,state.zone))}，${gap===0?'与目标同一时刻':`早于目标约${span(gap)}`}。这是当时或之前的最近记录，不代表目标时刻的精确能量。</p><button type="button" onclick="SnorlaxEnergyTimeline.carry()">用此能量拆觉</button>`:`<p class="et-note">${e(week.date)} 这一周内，目标时刻或之前没有记录；不会沿用上周或之后的能量。</p>`}</div>`;
+        const {target,calc}=result,{record,gap,week}=core.lookup(state.rows,target,state.zone,result.gameWeek);
+        out.innerHTML=`<div class="rounded-xl bg-emerald-50 p-3"><div class="text-sm font-bold">查询时刻 ${e(text(target,state.zone))} · ${e(state.zone)}</div>${calc?`<p class="et-note">起床 ${e(text(calc.wake,state.zone))} · 有效睡眠约${span(calc.minutes)} · 有效入睡 ${e(text(calc.effective,state.zone))} · 开始计测 ${e(text(calc.measurement,state.zone))}${calc.minutes<90?'。倒推时长不足90分钟，请核对实际有效计测。':''}</p>`:''}${record?`<div class="text-xl font-black text-emerald-900">参考能量 ${fmt(record.energy)}</div><p class="et-note">取自 ${e(text(record.time,state.zone))}，${gap===0?'与目标同一时刻':`早于目标约${span(gap)}`}。游戏归属周 ${e(week.date)}。这是该游戏周当时或之前的最近记录，不代表目标时刻的精确能量。</p><button type="button" onclick="SnorlaxEnergyTimeline.carry()">用此能量拆觉</button>`:`<p class="et-note">${e(week.date)} 这一周内，目标时刻或之前没有记录；不会沿用上周或之后的能量。</p>`}</div>`;
     }
     function chart(rows,w){
         if(!rows.length)return '<p class="et-note">这一周还没有能量记录。</p>';
-        const L=72,R=680,T=14,B=160,peak=rows.reduce((m,r)=>Math.max(m,r.energy),1),x=t=>L+(t-w.start)/(w.end-w.start)*(R-L),y=n=>B-(B-T)*n/peak;
+        const L=72,R=680,T=14,B=160,peak=rows.reduce((m,r)=>Math.max(m,r.energy),1),left=Math.min(w.start,rows[0].time),right=Math.max(w.end,rows.at(-1).time+core.MIN),x=t=>L+(t-left)/(right-left)*(R-L),y=n=>B-(B-T)*n/peak;
         const x0=x(rows[0].time),y0=y(rows[0].energy),end=Math.min(now(),w.end),d=`M${x0.toFixed(2)} ${y0.toFixed(2)}`+rows.slice(1).map(r=>` H${x(r.time).toFixed(2)} V${y(r.energy).toFixed(2)}`).join('')+` H${x(Math.max(rows.at(-1).time,end)).toFixed(2)}`;
         const marks=rows.length>180?rows.filter((_,i)=>i%Math.ceil(rows.length/180)===0||i===rows.length-1):rows;
         const q=result&&result.target>=w.start&&result.target<w.end?result.target:null,hit=q==null?null:core.lookup(rows,q,state.zone).record;
@@ -32975,14 +32997,15 @@ var SnorlaxEnergyTimeline=(()=>{
     function renderWeek(){
         const out=get('week');if(!out)return;
         const current=core.week(now(),state.zone),w=viewDate?core.weekFromDate(viewDate,state.zone):current;
-        const rows=state.rows.filter(r=>r.time>=w.start&&r.time<w.end),newest=rows.slice(-limit).reverse();get('jump').value=w.date;
-        out.innerHTML=`<p class="et-note">${w.date===current.date?'本周 · ':''}${e(text(w.start,state.zone))} 至 ${e(text(w.end,state.zone))}（不含终点） · ${rows.length}条</p>${chart(rows,w)}<p class="et-note">圆点是实录，虚线是在下一条实录前沿用最近值的示意；首条之前留空，不插值、不跨周延续。橙线标记查询时刻。</p>${rows.length?`<div style="overflow:auto"><table><thead><tr><th>时间（默认时区）</th><th>能量</th><th>录入时区</th><th>操作</th></tr></thead><tbody>${newest.map(r=>`<tr><td>${e(text(r.time,state.zone))}</td><td>${fmt(r.energy)}</td><td>${e(r.zone)}</td><td><button type="button" onclick="SnorlaxEnergyTimeline.remove(${r.time})">删除</button></td></tr>`).join('')}</tbody></table></div>${rows.length>limit?'<button type="button" onclick="SnorlaxEnergyTimeline.more()">加载更早记录</button>':''}`:''}`;
+        const rows=state.rows.filter(r=>core.gameWeek(r,state.zone)===w.date),newest=rows.slice(-limit).reverse();get('jump').value=w.date;
+        out.innerHTML=`<p class="et-note">${w.date===current.date?'本周 · ':''}${e(text(w.start,state.zone))} 至 ${e(text(w.end,state.zone))}（不含终点） · ${rows.length}条</p>${chart(rows,w)}<p class="et-note">按能量的游戏归属周筛选；圆点是实录，虚线仅示意沿用最近值，不跨游戏周。实际时刻超出自然周边界的记录仍保留，横轴随之扩展。橙线标记查询时刻。</p>${rows.length?`<div style="overflow:auto"><table><thead><tr><th>时间（默认时区）</th><th>能量</th><th>录入时区</th><th>游戏归属周（可修改）</th><th>操作</th></tr></thead><tbody>${newest.map(r=>`<tr><td>${e(text(r.time,state.zone))}</td><td>${fmt(r.energy)}</td><td>${e(r.zone)}</td><td><input type="date" aria-label="能量游戏归属周" value="${core.gameWeek(r,state.zone)}" onchange="SnorlaxEnergyTimeline.changeGameWeek(${r.time},this.value)"><small style="display:block">${r.gameWeek?'已标注':'按原录入时区推定'}</small></td><td><button type="button" onclick="SnorlaxEnergyTimeline.remove(${r.time})">删除</button></td></tr>`).join('')}</tbody></table></div>${rows.length>limit?'<button type="button" onclick="SnorlaxEnergyTimeline.more()">加载更早记录</button>':''}`:''}`;
     }
-    function move(delta){const current=core.week(now(),state.zone).date,next=delta?core.shift(viewDate||current,delta):current;if(next>current){showToast('还没有下一周的实录');return;}viewDate=next===current?null:next;limit=40;renderWeek();}
-    function jump(date){try{const current=core.week(now(),state.zone).date,w=core.week(core.parse(date+'T12:00',state.zone,'earlier'),state.zone).date;if(w>current)throw Error('请选择本周或更早的日期。');viewDate=w===current?null:w;limit=40;renderWeek();}catch(error){showToast(error.message);renderWeek();}}
+    function latestGameWeek(){return state.rows.reduce((last,r)=>core.gameWeek(r,state.zone)>last?core.gameWeek(r,state.zone):last,core.week(now(),state.zone).date);}
+    function move(delta){const current=core.week(now(),state.zone).date,next=delta?core.shift(viewDate||current,delta):current;if(next>latestGameWeek()){showToast('该游戏周还没有实录');return;}viewDate=next===current?null:next;limit=40;renderWeek();}
+    function jump(date){try{const current=core.week(now(),state.zone).date,w=core.normalizeGameWeek(date);if(!w||w>latestGameWeek())throw Error('请选择已有实录的游戏周，或本周及更早的日期。');viewDate=w===current?null:w;limit=40;renderWeek();}catch(error){showToast(error.message);renderWeek();}}
     async function remove(time){const token=generation;if(!confirm('删除这条能量记录？同账号的其他设备也会删除这条记录。'))return;try{if(!await ready||!active(token))return;await persist({...state,rows:state.rows.filter(r=>r.time!==time)},{remove:time},token);if(active(token)){renderWeek();renderResult();}}catch(error){showToast(error.message);}}
-    function carry(){if(!result||owner!==storage())return;const r=core.lookup(state.rows,result.target,state.zone).record;if(!r)return;close();openSleepSplitPlannerModal();const input=document.getElementById('sleep-split-energy');if(input){input.value=String(r.energy);renderSleepSplitPlanner();}}
-    return {open,close,changeZone,add,search,move,jump,remove,carry,sync,more:()=>{limit+=40;renderWeek();}};
+    function carry(){if(!result||owner!==storage())return;const r=core.lookup(state.rows,result.target,state.zone,result.gameWeek).record;if(!r)return;close();openSleepSplitPlannerModal();const input=document.getElementById('sleep-split-energy');if(input){input.value=String(r.energy);renderSleepSplitPlanner();}}
+    return {open,close,changeZone,changeGameWeek,add,search,move,jump,remove,carry,sync,more:()=>{limit+=40;renderWeek();}};
 })();
 function openSnorlaxEnergyTimelineModal(){SnorlaxEnergyTimeline.open();}
 
@@ -33039,6 +33062,14 @@ function createSleepRewardLinkCore(){
         return {localStart:startDay+'T'+r.start,localEnd:endDay+'T'+r.end,zone:time.zone(r.timeZone)||'',startMode:r.startMode==='effective'?'effective':'measurement',points,
             note:act.error||'',date,session:number};
     }
+    function energyReference(manual,energy,requestedWeek){
+        if(!manual||!Number.isSafeInteger(manual.energy)||manual.energy<0||!Number.isSafeInteger(manual.energyTime)||manual.energyTime>manual.start)return null;
+        const savedWeek=time.normalizeGameWeek(manual.energyGameWeek),point=energy.find(p=>p.time===manual.energyTime),matched=point&&point.energy===manual.energy;
+        // 旧版自动带入后保存的值未区分来源；只有时间与数值均吻合时才视为引用，不篡改旧数据。
+        const timeline=manual.energyMode==='timeline'||(!savedWeek&&matched);
+        const gameWeek=timeline&&point?time.gameWeek(point):savedWeek||requestedWeek;
+        return {record:{time:manual.energyTime,energy:manual.energy,gameWeek},gap:(manual.start-manual.energyTime)/60000,timeline};
+    }
     function link(rewards,logs,researches,options={}){
         const markers=getHistoryDeleteMarkerMap(logs),visible=logs.filter(r=>r&&!isHistoryRecordDeletedByMarker(r,markers)),states=new Map();
         for(const log of visible)if(log.type==='sleep_week_rhythm_state'&&reward.valid(log.state?.week))states.set(log.state.week,chooseNewerHistoryLog(states.get(log.state.week),log));
@@ -33055,12 +33086,12 @@ function createSleepRewardLinkCore(){
                 if(n===1){points=raw;scoreSource='实录有效时长换算';}
                 else if(first&&!first.error){points=Math.min(100-rhythm.score(first.minutes,base),raw);scoreSource='实录有效时长换算（含当日封顶）';}
             }
-            const manualEnergy=manualOk&&Number.isSafeInteger(manual.energy)&&manual.energy>=0&&Number.isSafeInteger(manual.energyTime)&&manual.energyTime<=manual.start;
-            const match=manualEnergy?{record:{time:manual.energyTime,energy:manual.energy},gap:(manual.start-manual.energyTime)/60000}:act.error?null:time.lookup(energy,act.start,act.zone),found=match?.record||null;
-            const crossWeek=found&&time.week(found.time,act.zone).date!==time.week(act.start,act.zone).date;
-            const reason=act.error||(!found?'同周开始时刻之前无能量记录':crossWeek?'能量不在睡眠开始的同一周':found.energy===0?'能量为0，不能计算比值':points==null?'缺少实际分数，未纳入比值':points===0?'实际分数为0，不能计算比值':'');
+            const requestedWeek=reward.week(r.date),savedEnergy=manualOk?energyReference(manual,energy,requestedWeek):null,manualEnergy=!!savedEnergy;
+            const match=savedEnergy||(act.error?null:time.lookup(energy,act.start,act.zone,requestedWeek)),found=match?.record||null;
+            const energyGameWeek=found?(manualEnergy?found.gameWeek:time.gameWeek(found,act.zone)):null,crossWeek=found&&energyGameWeek!==requestedWeek;
+            const reason=act.error||(!found?'所选游戏周开始时刻之前无能量记录':crossWeek?'保存的参考能量属于其他游戏周，请重新匹配':found.energy===0?'能量为0，不能计算比值':points==null?'缺少实际分数，未纳入比值':points===0?'实际分数为0，不能计算比值':'');
             const eligible=!reason&&found.energy>0&&points>0,energyScore=found&&points!=null?found.energy*points:null;
-            return {...r,points,scoreSource,start:act.start??null,end:act.end??null,zone:act.zone||null,basis:act.basis||null,energySource:manualEnergy?'本板块实填':'时间轴匹配',energy:found?.energy??null,energyTime:found?.time??null,gap:match?.gap??null,reason,eligible,
+            return {...r,points,scoreSource,start:act.start??null,end:act.end??null,zone:act.zone||null,basis:act.basis||null,energySource:manualEnergy?(savedEnergy.timeline?'已保存的时间轴引用':'本板块实填'):'时间轴匹配',energyGameWeek,energyMode:manualEnergy&&!savedEnergy.timeline?'manual':'timeline',energy:found?.energy??null,energyTime:found?.time??null,gap:match?.gap??null,reason,eligible,
                 energyScore,shardsPerTenMillion:eligible?r.shards/energyScore*1e7:null,expPerTenMillion:eligible&&r.exp!=null?r.exp/energyScore*1e7:null};
         });
     }
@@ -33075,14 +33106,14 @@ function createSleepRewardLinkCore(){
         }
         return [...map.values()].sort((a,b)=>a.energyFrom-b.energyFrom||a.scoreFrom-b.scoreFrom).map(g=>({...g,shards:summary(g.rows,'shards'),exp:summary(g.rows,'exp'),averageShards:g.rows.reduce((n,r)=>n+r.shards,0)/g.rows.length,minShards:Math.min(...g.rows.map(r=>r.shards)),maxShards:Math.max(...g.rows.map(r=>r.shards))}));
     }
-    return {actual,link,summary,groups,rhythmReference};
+    return {actual,link,summary,groups,rhythmReference,energyReference};
 }
 function renderSleepRewardLinks(rewards,logs,researches){
     const c=createSleepRewardLinkCore(),rows=c.link(rewards,logs,researches),shards=c.summary(rows,'shards'),exp=c.summary(rows,'exp'),groups=c.groups(rows);
     const esc=x=>escapeHtml(String(x??'')),fmt=n=>n==null?'—':n.toLocaleString('zh-CN',{maximumFractionDigits:2}),tz=createSnorlaxEnergyTimelineCore();
-    return `<h3>实录能量与收益对照</h3><p class="rw-note">仅关联本周收益。按游戏日期＋觉次匹配已完成的周评时间与睡眠研究，不读取目标分数或计划时间；回查该觉录入时区内同周、开始时刻之前最近的能量；本板块实填信息优先，不依赖其他模块。需要补充或修正时，直接点击上方对应一觉／二觉，填写本板块的联动信息并保存。</p>
+    return `<h3>实录能量与收益对照</h3><p class="rw-note">仅关联本周收益。按游戏日期＋觉次匹配已完成的周评时间与睡眠研究，不读取目标分数或计划时间；按收益游戏日期所属周，回查开始时刻之前最近的同游戏周能量；能量周归属不随睡眠时区改变；本板块实填信息优先，不依赖其他模块。需要补充或修正时，直接点击上方对应一觉／二觉，填写本板块的联动信息并保存。</p>
         <p class="rw-note">参考能量与开始时刻的时间差只供核对，不因间隔较长而排除。每1000万「能量×实际分数」梦碎 <strong>${fmt(shards.perTenMillion)}</strong>（${shards.count}觉）；研究经验 <strong>${fmt(exp.perTenMillion)}</strong>（${exp.count}觉）。单觉比值＝实录收益÷（参考能量×实际分数）×1000万；汇总比值＝纳入收益之和÷对应「能量×实际分数」之和×1000万。缺分数、分数或能量为0不参与比值，原收益仍保留。这是实录标准化对照，不是活动倍率校正后的睡意之力，也不是理论产出。</p>
-        <div style="overflow:auto"><table><thead><tr><th>日期／觉次</th><th>实际分数</th><th>开始时间／时区</th><th>参考能量／时间差</th><th>梦碎／经验</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.date} ${Number(r.session)===2?'二':'一'}觉</td><td>${fmt(r.points)}<small style="display:block">${esc(r.scoreSource)}</small></td><td>${r.start==null?'—':esc(tz.wall(r.start,r.zone).replace('T',' '))}<small style="display:block">${esc(r.zone||'')} ${esc(r.basis||'')}</small></td><td>${fmt(r.energy)}<small style="display:block">${r.gap==null?'':`早${fmt(r.gap)}分钟`} ${esc(r.energySource)} ${esc(r.reason)}</small></td><td>${fmt(r.shards)}／${fmt(r.exp)}</td><td>${fmt(r.shardsPerTenMillion)}／${fmt(r.expPerTenMillion)}</td></tr>`).join('')||'<tr><td colspan="6">先录入收益，再补齐对应的已完成时间与能量记录。</td></tr>'}</tbody></table></div>
+        <div style="overflow:auto"><table><thead><tr><th>日期／觉次</th><th>实际分数</th><th>开始时间／时区</th><th>参考能量／时间差</th><th>梦碎／经验</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.date} ${Number(r.session)===2?'二':'一'}觉</td><td>${fmt(r.points)}<small style="display:block">${esc(r.scoreSource)}</small></td><td>${r.start==null?'—':esc(tz.wall(r.start,r.zone).replace('T',' '))}<small style="display:block">${esc(r.zone||'')} ${esc(r.basis||'')}</small></td><td>${fmt(r.energy)}<small style="display:block">${r.gap==null?'':`早${fmt(r.gap)}分钟`} ${esc(r.energySource)} ${r.energyGameWeek?`游戏周 ${esc(r.energyGameWeek)}`:''} ${esc(r.reason)}</small></td><td>${fmt(r.shards)}／${fmt(r.exp)}</td><td>${fmt(r.shardsPerTenMillion)}／${fmt(r.expPerTenMillion)}</td></tr>`).join('')||'<tr><td colspan="6">先录入收益，再补齐对应的已完成时间与能量记录。</td></tr>'}</tbody></table></div>
         <details><summary class="rw-note">按实际能量与分数分组</summary><p class="rw-note">能量每100万、分数每20分分组；缺分数的样本不参与分组。范围只是已录入样本的最小～最大值，不是预测区间；不同活动和加成仍可能影响收益。</p><div style="overflow:auto"><table><thead><tr><th>能量区间</th><th>分数</th><th>样本</th><th>平均梦碎／实录范围</th><th>每1000万「能量×实际分数」梦碎／经验</th></tr></thead><tbody>${groups.map(g=>`<tr><td>${fmt(g.energyFrom)}～小于${fmt(g.energyFrom+1e6)}</td><td>${g.scoreFrom}～${g.scoreFrom===80?'100':'小于'+(g.scoreFrom+20)}</td><td>${g.rows.length}觉／经验${g.exp.count}觉</td><td>${fmt(g.averageShards)}／${fmt(g.minShards)}～${fmt(g.maxShards)}</td><td>${fmt(g.shards.perTenMillion)}／${fmt(g.exp.perTenMillion)}</td></tr>`).join('')||'<tr><td colspan="5">暂无信息完整的实录分组。</td></tr>'}</tbody></table></div></details>`;
 }
 
@@ -33227,7 +33258,7 @@ function createWeeklySleepRewardsCore(){
 var WeeklySleepRewards=(()=>{
     const c=createWeeklySleepRewardsCore(),modalId='weekly-sleep-rewards-modal',get=k=>document.getElementById('weekly-rewards-'+k),val=k=>String(get(k)?.value??''),e=x=>escapeHtml(String(x??''));
     const tz=createSnorlaxEnergyTimelineCore(),defaultKey=()=>`weekly_rewards_default_zone_${currentCloudUser?.id||'guest'}`;
-    let formSnapshot='';
+    let formSnapshot='',energyReferenceSnapshot=null;
     const linkFields=['start','end','zone','basis','energy','energy-time'];
     const formValue=()=>JSON.stringify(['shards','exp','score',...linkFields].map(val));
     function defaultZone(){let saved;try{saved=localStorage.getItem(defaultKey());}catch(_){}return tz.zone(saved)||tz.zone(Intl.DateTimeFormat().resolvedOptions().timeZone)||'Asia/Tokyo';}
@@ -33241,8 +33272,9 @@ var WeeklySleepRewards=(()=>{
         get('start').value=wall(raw?.start??linked?.start);get('end').value=wall(raw?.end??linked?.end);
         get('basis').value=(raw?.startMode||(linked?.basis==='有效入睡'?'effective':'measurement'));
         get('energy').value=raw?.energy??linked?.energy??'';get('energy-time').value=wall(raw?.energyTime??linked?.energyTime);
+        energyReferenceSnapshot=linked?.energy!=null?{energy:linked.energy,time:linked.energyTime,week:linked.energyGameWeek,mode:linked.energyMode}:null;
         if(get('score')&&get('score').value===''&&linked?.points!=null)get('score').value=String(linked.points);
-        if(get('link-note'))get('link-note').textContent=raw?'本觉已在这里保存联动信息，可直接修改。':linked?.start!=null?'已带出其他模块的实录信息；点击保存后成为本板块独立保存的数据。':'直接在这里填写即可；日期与时间均使用下方时区。';
+        if(get('link-note'))get('link-note').textContent=linked?.reason?.includes('其他游戏周')?'旧参考能量属于其他游戏周，已停止用于比值。请点“按游戏周重新匹配能量”；原记录未自动改写。':raw?'本觉已在这里保存联动信息，可直接修改。':linked?.start!=null?'已带出其他模块的实录信息；点击保存后成为本板块独立保存的数据。':'直接在这里填写即可；日期与时间均使用下方时区。';
     }
     async function referenceRhythm(){
         const token=generation,date=val('date'),number=Number(val('session'));
@@ -33258,9 +33290,24 @@ var WeeklySleepRewards=(()=>{
             if(ref.points!=null)get('score').value=String(ref.points);
             const linked=core.link([{date,session:number,shards:0,exp:null}],historyLogs,[])[0];
             get('energy').value=linked.energy??'';get('energy-time').value=linked.energyTime!=null&&ref.zone?tz.wall(linked.energyTime,ref.zone):'';
+            energyReferenceSnapshot=linked.energy!=null?{energy:linked.energy,time:linked.energyTime,week:linked.energyGameWeek,mode:'timeline'}:null;
             get('link-note').textContent=`已引用周评 ${date} ${number===2?'二':'一'}觉：开始、结束、${ref.zone?'时区':'时区待确认'}及时间口径${ref.points!=null?'、按实录换算分数':''}。${ref.note?'请核对：'+ref.note+'。':''}${linked.energy!=null?'已重新匹配参考能量。':'未找到可匹配的能量，可直接在下面填写。'}点击“保存收益与联动信息”才会保存；原周评记录不会改变。`;
         }catch(error){if(active(token))get('link-note').textContent='引用失败，请重试；你也可以直接在这里录入。';}
     }
+    async function rematchEnergy(){
+        const token=generation,date=val('date'),session=Number(val('session'));
+        try{
+            if(!await ready||!active(token)||date!==val('date')||session!==Number(val('session')))return;
+            if(!c.valid(date)||!tz.zone(val('zone'))||!val('start'))throw Error('请先选好游戏日期，并填好实际开始时间与时区。');
+            const start=tz.parse(val('start'),val('zone'));
+            if((val('energy')||val('energy-time'))&&!confirm('只重新匹配当前游戏周的参考能量及其时间，不改梦碎、经验、分数或睡眠时间。保存前不会修改旧记录。继续吗？'))return;
+            const linked=createSleepRewardLinkCore().link([{date,session,shards:0,exp:null,linkedInput:{start,end:null,zone:val('zone'),startMode:val('basis')}}],historyLogs,[])[0];
+            get('energy').value=linked.energy??'';get('energy-time').value=linked.energyTime!=null?tz.wall(linked.energyTime,val('zone')):'';
+            energyReferenceSnapshot=linked.energy!=null?{energy:linked.energy,time:linked.energyTime,week:linked.energyGameWeek,mode:'timeline'}:null;
+            get('link-note').textContent=linked.energy!=null?`已匹配游戏归属周 ${c.week(date)} 的能量；点击保存才会更新本觉联动信息。`:`游戏归属周 ${c.week(date)} 在开始前没有能量记录，已留空，不借用其他周。可到能量时间轴核对记录的游戏归属周。`;
+        }catch(error){if(active(token))saveStatus(error.message,true);}
+    }
+    function markEnergyManual(){energyReferenceSnapshot=null;if(get('link-note'))get('link-note').textContent=c.valid(val('date'))?`当前参考能量按手动填写处理，归属所选游戏周 ${c.week(val('date'))}；请确认是该周换岛清零前的能量。`:'当前参考能量按手动填写处理，请先选好游戏日期。';}
     function readLinks(){
         if(!get('start'))return undefined;
         if(!val('start')&&!val('end')&&!val('energy')&&!val('energy-time'))return null;
@@ -33271,8 +33318,10 @@ var WeeklySleepRewards=(()=>{
         const energy=val('energy').trim()===''?null:tz.energy(val('energy')),energyTime=val('energy-time')?tz.parse(val('energy-time'),zone):energy!=null?start:null;
         if(energy==null&&energyTime!=null)throw Error('填写能量时间后，也请填入对应能量。');
         if(energyTime>start)throw Error('参考能量的记录时间不能晚于开始时间。');
-        if(energyTime!=null&&tz.week(energyTime,zone).date!==tz.week(start,zone).date)throw Error('能量记录与睡眠开始不在同一游戏周，不能跨周借用能量。');
-        return {start,end,zone,startMode,energy,energyTime};
+        const fromReference=energy!=null&&energyReferenceSnapshot&&energyReferenceSnapshot.energy===energy&&energyReferenceSnapshot.time===energyTime;
+        const energyGameWeek=fromReference?energyReferenceSnapshot.week:c.week(val('date')),energyMode=fromReference?energyReferenceSnapshot.mode:'manual';
+        if(energy!=null&&energyGameWeek!==c.week(val('date')))throw Error('旧参考能量属于其他游戏周，请重新匹配；若是亲自确认的手填能量，请修改能量输入框后再保存。');
+        return {start,end,zone,startMode,energy,energyTime,energyGameWeek,energyMode};
     }
     const days=['周一','周二','周三','周四','周五','周六','周日'],fmt=n=>n==null?'—':n.toLocaleString('zh-CN',{maximumFractionDigits:2});
     let generation=0,owner='',week='',rows=new Map(),ready=Promise.resolve(false),queue=Promise.resolve();
@@ -33330,7 +33379,7 @@ var WeeklySleepRewards=(()=>{
         const modal=document.getElementById(modalId),card='rounded-2xl border border-violet-100 bg-white p-4',p='weekly-rewards-';
         modal.innerHTML=`<style>#${modalId} .rw-flex{display:flex;gap:9px;align-items:end;flex-wrap:wrap}#${modalId} label{display:grid;gap:5px;font-size:12px;font-weight:700}#${modalId} input,#${modalId} select{border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-size:16px;max-width:100%;min-width:0;background:#fff}#${modalId} button:not(.rw-close){border:1px solid #ddd6fe;color:#5b21b6;background:#f5f3ff;border-radius:9px;font-size:13px;font-weight:700;padding:8px 11px}#${modalId} .rw-note{font-size:12px;color:#64748b;line-height:1.7;margin:7px 0}#${modalId} table{width:100%;border-collapse:collapse;font-size:13px}#${modalId} td,#${modalId} th{padding:8px 5px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}#${modalId} h3{font-weight:900}#${modalId} [hidden]{display:none!important}</style>
         <div role="dialog" aria-modal="true" aria-label="每周梦碎与研究经验" class="flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-violet-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">每周梦碎与研究经验</h2><p class="text-xs text-violet-100">按觉记录 · 周累计 · 每日变化</p></div><button type="button" class="rw-close text-2xl" aria-label="关闭" onclick="WeeklySleepRewards.close()">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5 space-y-3">
-        <section class="${card}"><h3>录入单觉收益</h3><p class="rw-note">填这一次睡眠研究获得的数值。没有二觉就不填；梦碎为零请填0，研究经验可留空。不会改动原睡眠研究。</p><div class="rw-flex"><label>游戏日期<input id="${p}date" type="date" value="${c.today()}" max="${c.today()}" onchange="WeeklySleepRewards.loadSlot()"></label><label>觉次<select id="${p}session" onchange="WeeklySleepRewards.loadSlot()"><option value="1">一觉</option><option value="2">二觉</option></select></label><label>梦碎<input id="${p}shards" inputmode="numeric" placeholder="必填" style="width:9em"></label><label>研究经验<input id="${p}exp" inputmode="numeric" placeholder="选填" style="width:9em"></label><label>实际睡眠分数<input id="${p}score" type="number" min="0" max="100" step="1" placeholder="选填／自动关联" style="width:10em"></label><button type="button" onclick="WeeklySleepRewards.save()">保存这觉</button><button type="button" id="${p}delete" hidden onclick="WeeklySleepRewards.save(true)">删除这觉收益</button></div><div class="mt-4 rounded-xl border border-violet-100 bg-violet-50/40 p-3"><h3>这觉的联动信息（选填）</h3><div class="rw-flex mt-2"><button type="button" onclick="WeeklySleepRewards.referenceRhythm()">引用周评作息实录（当前日期／觉次）</button><span class="rw-note">先在上方选好游戏日期和一觉／二觉，再引用。</span></div><p id="${p}link-note" class="rw-note">在这里直接补齐即可，不必去其他板块录入。</p><div class="rw-flex"><label>录入时区（UTC时差从小到大）<select id="${p}zone" onchange="WeeklySleepRewards.zoneOptions()" style="max-width:100%">${sleepTimeZoneOptions(defaultZone(),c.today())}</select></label><button type="button" onclick="WeeklySleepRewards.setDefaultZone()">设为新录入默认时区</button></div><div class="rw-flex mt-2"><label>实际开始日期和时间<input id="${p}start" type="datetime-local" step="1"></label><label>实际结束日期和时间<input id="${p}end" type="datetime-local" step="1"></label><label>开始时间口径<select id="${p}basis"><option value="measurement">开始计测（扣5分钟等待）</option><option value="effective">有效入睡（不再扣除）</option></select></label></div><div class="rw-flex mt-2"><label>开始时参考能量<input id="${p}energy" inputmode="numeric" placeholder="选填，例如1,234,567"></label><label>能量对应的日期和时间<input id="${p}energy-time" type="datetime-local" step="1"></label></div><p class="rw-note">能量时间留空且填了能量，表示这就是开始时刻的实录能量。时间字段均按所选时区解释；改时区不自动换算已填钟面。时差按所选游戏日期显示，夏令时切换日请核对实际时刻。未填的联动项保持未知，不阻止仅保存收益。</p><button type="button" onclick="WeeklySleepRewards.save()">保存收益与联动信息</button></div><p id="${p}save-status" class="rw-note" aria-live="polite"></p><div class="rw-flex"><p id="${p}status" class="rw-note" aria-live="polite">正在读取本机记录…</p>${currentCloudUser?'<button type="button" onclick="WeeklySleepRewards.sync()">立即同步</button>':''}</div></section>
+        <section class="${card}"><h3>录入单觉收益</h3><p class="rw-note">填这一次睡眠研究获得的数值。没有二觉就不填；梦碎为零请填0，研究经验可留空。不会改动原睡眠研究。</p><div class="rw-flex"><label>游戏日期<input id="${p}date" type="date" value="${c.today()}" max="${c.today()}" onchange="WeeklySleepRewards.loadSlot()"></label><label>觉次<select id="${p}session" onchange="WeeklySleepRewards.loadSlot()"><option value="1">一觉</option><option value="2">二觉</option></select></label><label>梦碎<input id="${p}shards" inputmode="numeric" placeholder="必填" style="width:9em"></label><label>研究经验<input id="${p}exp" inputmode="numeric" placeholder="选填" style="width:9em"></label><label>实际睡眠分数<input id="${p}score" type="number" min="0" max="100" step="1" placeholder="选填／自动关联" style="width:10em"></label><button type="button" onclick="WeeklySleepRewards.save()">保存这觉</button><button type="button" id="${p}delete" hidden onclick="WeeklySleepRewards.save(true)">删除这觉收益</button></div><div class="mt-4 rounded-xl border border-violet-100 bg-violet-50/40 p-3"><h3>这觉的联动信息（选填）</h3><div class="rw-flex mt-2"><button type="button" onclick="WeeklySleepRewards.referenceRhythm()">引用周评作息实录（当前日期／觉次）</button><button type="button" onclick="WeeklySleepRewards.rematchEnergy()">按游戏周重新匹配能量</button><span class="rw-note">先在上方选好游戏日期和一觉／二觉，再引用。</span></div><p id="${p}link-note" class="rw-note">在这里直接补齐即可，不必去其他板块录入。</p><div class="rw-flex"><label>录入时区（UTC时差从小到大）<select id="${p}zone" onchange="WeeklySleepRewards.zoneOptions()" style="max-width:100%">${sleepTimeZoneOptions(defaultZone(),c.today())}</select></label><button type="button" onclick="WeeklySleepRewards.setDefaultZone()">设为新录入默认时区</button></div><div class="rw-flex mt-2"><label>实际开始日期和时间<input id="${p}start" type="datetime-local" step="1"></label><label>实际结束日期和时间<input id="${p}end" type="datetime-local" step="1"></label><label>开始时间口径<select id="${p}basis"><option value="measurement">开始计测（扣5分钟等待）</option><option value="effective">有效入睡（不再扣除）</option></select></label></div><div class="rw-flex mt-2"><label>开始时参考能量<input id="${p}energy" oninput="WeeklySleepRewards.markEnergyManual()" inputmode="numeric" placeholder="选填，例如1,234,567"></label><label>能量对应的日期和时间<input id="${p}energy-time" oninput="WeeklySleepRewards.markEnergyManual()" type="datetime-local" step="1"></label></div><p class="rw-note">能量时间留空且填了能量，表示这就是开始时刻的实录能量。时间字段均按所选时区解释；改时区不自动换算已填钟面。能量按上方游戏日期所属周匹配，不因睡眠时区重划周；手填能量视为该游戏周实录，提前换岛后的能量请在时间轴标为下一周。时差按所选游戏日期显示，夏令时切换日请核对实际时刻。未填的联动项保持未知，不阻止仅保存收益。</p><button type="button" onclick="WeeklySleepRewards.save()">保存收益与联动信息</button></div><p id="${p}save-status" class="rw-note" aria-live="polite"></p><div class="rw-flex"><p id="${p}status" class="rw-note" aria-live="polite">正在读取本机记录…</p>${currentCloudUser?'<button type="button" onclick="WeeklySleepRewards.sync()">立即同步</button>':''}</div></section>
         <section class="${card}"><div class="rw-flex"><h3>每周统计</h3><button type="button" onclick="WeeklySleepRewards.move(-7)">上周</button><button type="button" onclick="WeeklySleepRewards.move(0)">本周</button><button type="button" onclick="WeeklySleepRewards.move(7)">下周</button><label>跳转到日期<input id="${p}jump" type="date" max="${c.today()}" onchange="WeeklySleepRewards.jump(this.value)"></label></div><div id="${p}week"></div></section>
         <section class="${card}"><div class="rw-flex"><h3>每日收益趋势</h3><label>查看指标<select id="${p}metric" onchange="WeeklySleepRewards.renderWeek()"><option value="shards">梦碎</option><option value="exp">研究经验</option></select></label></div><div id="${p}chart"></div></section><section class="${card}"><p class="rw-note">能量可能长时间未变化：记录早于开始多久都会显示，但不会因此排除比值。</p><div id="${p}links"></div></section></div></div>`;
         renderWeek();pick(c.today(),1);
@@ -33356,7 +33405,7 @@ var WeeklySleepRewards=(()=>{
         }
     }
     function jump(d){if(!c.valid(d)||c.week(d)>c.week(c.today())){showToast('请选择本周或更早的日期。');renderWeek();return;}week=c.week(d);renderWeek();}
-    return {open,close,pick,save,sync,move,jump,renderWeek,referenceRhythm,zoneOptions,setDefaultZone:()=>{try{localStorage.setItem(defaultKey(),val('zone'));if(get('link-note'))get('link-note').textContent='已记住新录入默认时区，旧记录不会改变。';}catch(_){saveStatus('默认时区保存失败',true);}},loadSlot:()=>pick(val('date'),Number(val('session')))};
+    return {open,close,pick,save,sync,move,jump,renderWeek,referenceRhythm,rematchEnergy,markEnergyManual,zoneOptions,setDefaultZone:()=>{try{localStorage.setItem(defaultKey(),val('zone'));if(get('link-note'))get('link-note').textContent='已记住新录入默认时区，旧记录不会改变。';}catch(_){saveStatus('默认时区保存失败',true);}},loadSlot:()=>pick(val('date'),Number(val('session')))};
 })();
 function openWeeklySleepRewardsModal(){WeeklySleepRewards.open();}
 
