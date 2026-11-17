@@ -189,7 +189,7 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h1 class="text-xl font-extrabold tracking-tight">水跃鱼气运审计站 ⚖️</h1>
-                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.17.6</span>
+                        <span id="site-version-badge" class="rounded-full border border-cyan-300/40 bg-cyan-400/15 px-2 py-1 text-[10px] font-black text-cyan-200" title="用于确认手机是否已经加载最新版">v2026.11.17.8</span>
                     </div>
                     <p class="text-xs text-slate-400">试验工坊：记录血泪史与多宠综合运势推演</p>
                 </div>
@@ -1816,7 +1816,7 @@ function isHistorySystemLog(log) {
         isTrainingPlannerStateLog(log) || isMealPrepPlannerStateLog(log) ||
         isSleepTypeRecordLog(log) || isSleepTypePlannerStateLog(log) || isEncounterStatisticsLog(log) ||
         log?.type === 'snorlax_energy_point' || log?.type === 'snorlax_energy_settings' ||
-        log?.type === 'weekly_sleep_reward' || log?.type === 'weekly_cuisine_type' ||
+        log?.type === 'weekly_sleep_reward' || log?.type === 'weekly_cuisine_type' || log?.type === 'history_split_lab_plan' || log?.type === 'history_split_day_confirmed' ||
         !!(log && (log.type === 'sleep_week_rhythm_state' || log.type === 'sleep_type_dynamic_config' || log.type === 'live_cooking_state' || log.type === 'live_cooking_meal' || log.type === 'tool_launcher_state' || log.type === 'site_migration_bundle_v1'));
 }
 
@@ -4459,7 +4459,7 @@ function mergeSleepResearchWithMeta(research, date, session) {
 
 function normalizeSleepResearchLogInPlace(log) {
     // 每周收益是独立流水：觉次是它自己的编号，不生成睡眠研究关联。
-    if (!log || isHistoryDeleteMarker(log) || log.type === 'weekly_sleep_reward' || log.type === 'weekly_cuisine_type') return log;
+    if (!log || isHistoryDeleteMarker(log) || log.type === 'weekly_sleep_reward' || log.type === 'weekly_cuisine_type' || log.type === 'history_split_lab_plan' || log.type === 'history_split_day_confirmed') return log;
     if (log.date) log.date = normalizeSleepResearchDateValue(log.date);
     log.session = normalizeSleepResearchSessionValue(log.session || '一觉');
     if (isSleepResearchLog(log)) {
@@ -32794,7 +32794,21 @@ var WeeklyRhythmPlanner=(()=>{
     }
     function select(mode){state.selected=mode;persist();if(lastResult)show(lastResult);}
     function fixDay(mode,index){const row=lastResult?.plans.find(p=>p.mode===mode)?.path.find(p=>p.day===index);if(!row)return;if(!confirm('将这一天未完成的建议时间固定为要求？不会记为实际已完成。'))return;for(const key of ['first','second'])if(row[key]&&!(state.days[index][key].status==='actual'&&core.fixed(state.days[index][key]))){state.days[index][key].startMode=row[key].startMode||'effective';state.days[index][key].start=core.format(row[key].start);state.days[index][key].end=core.format(row[key].end);if(state.days[index][key].status==='actual')state.days[index][key].status='started';}persist();render();}
-    return {open,close,change,changeStartMode,changeTimeZone,defaultTimeZone,completeScore,useEstimate,recalculateEnd,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay};
+    function readWeek(w){
+        if(!core.validDate(w)||core.monday(w)!==w)throw Error('请选择有效游戏周。');
+        const markers=getHistoryDeleteMarkerMap(historyLogs),candidates=(historyLogs||[]).filter(r=>r.type===TYPE&&r.id===PREFIX+w&&!isHistoryRecordDeletedByMarker(r,markers)).map(r=>r.state);
+        try{const local=JSON.parse(localStorage.getItem(draftKey())||'null');if(local?.week===w)candidates.push(local);}catch(_){}
+        if(state&&week===w&&owner===(currentCloudUser?.id||'guest'))candidates.push(state);
+        const newest=candidates.filter(Boolean).reduce((a,b)=>(Date.parse(b.updatedAt)||0)>=(Date.parse(a?.updatedAt)||0)?b:a,null);
+        return normalize(newest,w);
+    }
+    function importHistoryPlan(plan){
+        const w=core.monday(plan.date),snapshot=readWeek(w),prepared=createHistorySplitPlanCore().importDay(snapshot,plan);
+        if(!confirm(`将 ${plan.date} 的一觉${plan.first.score}分＋二觉${plan.second.score}分写入周评作息规划，状态为“未完成／时间要求”，不会记为实际完成。${prepared.replacing?'这将替换该日已有的未完成计划。':'其他日期与设置不变。'}继续吗？`))return {ok:false,cancelled:true};
+        if(state&&owner===(currentCloudUser?.id||'guest')&&week!==w)persist();cancel();
+        state=prepared.state;week=w;owner=currentCloudUser?.id||'guest';persist();if(document.getElementById('weekly-rhythm-planner-modal'))render();return {ok:true,week:w};
+    }
+    return {open,close,change,changeStartMode,changeTimeZone,defaultTimeZone,completeScore,useEstimate,recalculateEnd,setting,commit,pickWeek,moveWeek,clearDay,select,fixDay,readWeek,importHistoryPlan};
 })();
 function openWeeklyRhythmPlannerModal(){return WeeklyRhythmPlanner.open();}
 
@@ -33484,6 +33498,31 @@ function createHistorySplitLabCore(){
             if(!best||r.margin>best.margin)best=r;
         }return best;
     }
+    function strictRules(raw,base,zone,dayStart,to){
+        if(!raw?.enabled)return null;
+        const D=Number(raw.maxDurationRange),C=Number(raw.maxCenterRange),anchors=raw.anchors||[];
+        // 空周没有中心／总时长基准：严格开关仍可开启，但本日先自由规划。
+        if(!anchors.length)return null;
+        if(!Number.isFinite(D)||D<0||D>1440||!Number.isFinite(C)||C<0||C>1440||Number(raw.base)!==base)throw Error('周评阈值或满分时长与当前条件不一致，请核对后重算。');
+        const circle=values=>{if(values.length<2)return 0;const a=values.map(x=>(x%1440+1440)%1440).sort((a,b)=>a-b);let gap=0;for(let i=0;i<a.length;i++)gap=Math.max(gap,(i+1<a.length?a[i+1]:a[0]+1440)-a[i]);return 1440-gap;};
+        const union=rs=>{const out=[];for(const r of rs.sort((a,b)=>a[0]-b[0])){const last=out.at(-1);if(last&&r[0]<=last[1]+1e-8)last[1]=Math.max(last[1],r[1]);else out.push(r.slice());}return out;};
+        const intersect=(a,b)=>union(a.flatMap(x=>b.map(y=>[Math.max(x[0],y[0]),Math.min(x[1],y[1])]).filter(x=>x[0]<=x[1]+1e-8)));
+        const wrap=(a,b)=>{if(b-a>=1440)return [[0,1440]];const x=(a%1440+1440)%1440,y=x+b-a;return y<=1440?[[x,y]]:[[x,1440],[0,y-1440]];};
+        let combos=[[]];for(const a of anchors){if(!Number.isFinite(a.total)||!Array.isArray(a.centers)||!a.centers.length||a.centers.some(x=>!Number.isFinite(x)))throw Error('周评参考日数据不完整，请核对。');combos=combos.flatMap(c=>a.centers.map(x=>[...c,(x%1440+1440)%1440]));}
+        let centers=[[0,1440]];for(const values of combos){if(circle(values)>C+1e-7)throw Error('本周其他已固定日期的长觉中心已超过上限，无法只靠这一天修复。');let allowed=[];if(C>=1440)allowed=[[0,1440]];else for(const cut of values){const v=values.map(x=>x<cut?x+1440:x),a=Math.min(...v),b=Math.max(...v);if(b-a<=C+1e-7)allowed.push(...wrap(b-C,a+C));}centers=intersect(centers,union(allowed));}
+        const totals=anchors.map(a=>a.total),lo=Math.max(180,Math.max(...totals)-D),hi=Math.min(1560,Math.min(...totals)+D);
+        if(Math.max(...totals)-Math.min(...totals)>D+1e-7||lo>hi||!centers.length)throw Error('本周其他已固定日期已不满足两项最大差值，严格模式无解；请先调整周评记录。');
+        const offset=t=>Date.parse(time.wall(t,zone)+'Z')-t;
+        if(offset(dayStart)!==offset(Math.min(to,dayStart+2*86400000)))throw Error('严格周评模式暂不跨夏令时跳时，请选择无跳时的统一录入时区或关闭严格模式。');
+        const midnight=dayStart/M-240;
+        function constrain(rs,effective,wait,checkCenter){
+            let out=rs;
+            if(checkCenter){const windows=[];for(const[a,b]of centers)for(let k=-1;k<=3;k++)windows.push([Math.ceil(midnight+a+1440*k-wait-effective/2-1e-8),Math.floor(midnight+b+1440*k-wait-effective/2+1e-8)]);out=merge(out.flatMap(([a,b])=>windows.map(([c,d])=>[Math.max(a,c),Math.min(b,d)]).filter(([a,b])=>a<=b)).sort((a,b)=>a[0]-b[0]));}
+            for(const o of raw.occupied||[]){const blockedLo=o.start/M-(effective+wait)-Number(raw.gap||0),blockedHi=o.end/M+Number(raw.gap||0);out=out.flatMap(([a,b])=>[[a,Math.min(b,Math.floor(blockedLo))],[Math.max(a,Math.ceil(blockedHi)),b]].filter(([a,b])=>a<=b));}
+            return out;
+        }
+        return {lo:Math.ceil(lo),hi:Math.floor(hi),centers,constrain,anchors,maxDurationRange:D,maxCenterRange:C};
+    }
     function plan(input){
         const {date,zone,base=510,wait=5,gap=0,bonus=1,starts,allowReverse=true,now=Date.now()}=input;
         if(!time.normalizeGameWeek(date)||!time.zone(zone)||![510,660].includes(base)||!Number.isInteger(wait)||wait<0||wait>30||!Number.isInteger(gap)||gap<0||gap>180||!Number.isFinite(bonus)||bonus<=0||!Array.isArray(starts)||starts.length!==6)throw Error('请核对游戏日期、时区、岛屿、倍率和时间要求。');
@@ -33493,6 +33532,9 @@ function createHistorySplitLabCore(){
         const from=Math.max(dayStart,input.from??dayStart),to=allowFuture?(input.to??defaultEnd):Math.min(now,input.to??defaultEnd);
         if(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)throw Error('可用时间不足；请检查游戏日、时区、完成模式和时间范围。');
         const lo=Math.ceil(from/M),hi=Math.min(Math.ceil(dayEnd/M)-1,Math.floor(to/M)),end=Math.floor(to/M);
+        const strict=strictRules(input.strict,base,zone,dayStart,to);
+        const occupied=input.strict?.enabled?input.strict.occupied||[]:[];
+        function avoid(rs,wall){let out=rs;for(const o of occupied){const lo=o.start/M-wall-Number(input.strict.gap||0),hi=o.end/M+Number(input.strict.gap||0);out=out.flatMap(([a,b])=>[[a,Math.min(b,Math.floor(lo))],[Math.max(a,Math.ceil(hi)),b]].filter(([a,b])=>a<=b));}return out;}
         const map=new Map();for(const row of input.rows||[])if(Number.isSafeInteger(row.time)&&row.time<=now&&Number.isSafeInteger(row.energy)&&row.energy>=0&&time.gameWeek(row,zone)===gameWeek)map.set(row.time,row);
         const rows=[...map.values()].sort((a,b)=>a.time-b.time);if(!rows.length)throw Error('该游戏周没有能量节点；请先录入或核对节点的游戏归属周，不会借用其他周。');
         // 事件驱动：只在能量节点处切段。以下端点向分钟网格取整，不逐分钟采样。
@@ -33507,29 +33549,45 @@ function createHistorySplitLabCore(){
             if(input.firstScore!=null&&s1!==input.firstScore)continue;
             const s2=100-s1,e1=duration(s1,base),e2=duration(s2,base);if(score(e1,base)!==s1)continue;
             const a=bands(s1),b=bands(s2);
+            if(strict){
+                const max1=Math.min(780,Math.ceil((s1+.5)*base/100-1e-8)-1),cache=new Map();
+                const constrained=(side,n,e,center)=>{const key=[side,n,e,center].join(':');if(!cache.has(key))cache.set(key,strict.constrain((side===1?a:b)[n],e,wait,center));return cache.get(key);};
+                for(let first=e1;first<=max1;first++)for(let second=Math.max(e2,strict.lo-first);second<=Math.min(780,strict.hi-first);second++){
+                    for(let total=16;total>=Math.max(6,best);total--)for(let c1=Math.max(3,total-8);c1<=Math.min(8,total-3);c1++){
+                        const c2=total-c1;if(!a[c1].length||!b[c2].length)continue;
+                        const aa=constrained(1,c1,first,first>=second),bb=constrained(2,c2,second,second>=first);if(!aa.length||!bb.length)continue;
+                        for(const order of orders){const possible=box(aa,bb,first+wait,second+wait,order,gap,end);if(!possible)continue;if(total>best){best=total;candidates=[];}candidates.push({s1,s2,c1,c2,order,a:aa,b:bb,e1:first,e2:second,possible,strict:true});}
+                    }
+                }continue;
+            }
             for(let c1=3;c1<=8;c1++)for(let c2=3;c2<=8;c2++){
                 const total=c1+c2;if(total<best||!a[c1].length||!b[c2].length)continue;
-                for(const order of orders){const possible=box(a[c1],b[c2],e1+wait,e2+wait,order,gap,end);if(!possible)continue;
+                const aa=occupied.length?avoid(a[c1],e1+wait):a[c1],bb=occupied.length?avoid(b[c2],e2+wait):b[c2];
+                for(const order of orders){const possible=box(aa,bb,e1+wait,e2+wait,order,gap,end);if(!possible)continue;
                     if(total>best){best=total;candidates=[];}
                     candidates.push({s1,s2,c1,c2,order,a:a[c1],b:b[c2],e1,e2,possible});
                 }
             }
         }
-        if(best<0)throw Error('当前范围无法容纳两段不重叠、每段至少90分钟有效睡眠且合计100分的安排。可允许稍后完成、扩大时间范围，或放宽间隔／顺序要求。');
+        if(best<0)throw Error(strict?'严格周评要求下，当前范围无法容纳达标方案；不会退回不达标结果。请检查参考日、两项上限和可用时间。':'当前范围无法容纳两段不重叠、每段至少90分钟有效睡眠且合计100分的安排。可允许稍后完成、扩大时间范围，或放宽间隔／顺序要求。');
         function lookup(t){let result=null;for(const row of rows){if(row.time>t*M)break;result=row;}return result;}
         const families=candidates.map(r=>{
             // 在仍能达到最优遇见数时，优先用分数中心附近的时长，而非最短计分临界时长。
-            const central1=Math.max(90,Math.round(r.s1*base/100)),central2=Math.max(90,Math.round(r.s2*base/100));
-            const central=box(r.a,r.b,central1+wait,central2+wait,r.order,gap,end),b=central||r.possible,example=representative(b);
+            const central1=Math.max(90,Math.round(r.s1*base/100));let central2=Math.max(90,Math.round(r.s2*base/100));
+            // 空周严格模式仍自由优化，仅在同收益可行时优先让长觉明确，避免等长中心歧义。
+            if(input.strict?.enabled&&!strict&&central1===central2&&central2<780)central2++;
+            const central=r.strict?r.possible:box(occupied.length?avoid(r.a,central1+wait):r.a,occupied.length?avoid(r.b,central2+wait):r.b,central1+wait,central2+wait,r.order,gap,end),b=central||r.possible,example=representative(b);
             const p1=lookup(example.first),p2=lookup(example.second);
             const early=r.order==='12'?r.possible.first:r.possible.second,late=r.order==='12'?r.possible.second:r.possible.first,earliestEarly=early[0][0],earliestLate=late.map(([a,z])=>[Math.max(a,earliestEarly+r.possible.D),z]).find(([a,z])=>a<=z)[0];
             const earliestCompletion=earliestLate+(r.order==='12'?r.possible.d2:r.possible.d1);
-            return {s1:r.s1,s2:r.s2,c1:r.c1,c2:r.c2,total:best,order:r.order,first:b.first,second:b.second,d1:b.d1,d2:b.d2,e1:b.d1-wait,e2:b.d2-wait,minimumDuration:!central,condition:b.D,minimumBox:r.possible,earliestCompletion,example:{...example,firstEnergy:p1.energy,secondEnergy:p2.energy,firstNode:p1.time,secondNode:p2.time}};
+            return {s1:r.s1,s2:r.s2,c1:r.c1,c2:r.c2,total:best,order:r.order,first:b.first,second:b.second,d1:b.d1,d2:b.d2,e1:b.d1-wait,e2:b.d2-wait,minimumDuration:!central,strict:!!r.strict,condition:b.D,minimumBox:r.possible,earliestCompletion,example:{...example,firstEnergy:p1.energy,secondEnergy:p2.energy,firstNode:p1.time,secondNode:p2.time}};
         }).sort((a,b)=>b.example.margin-a.example.margin||Math.abs(a.s1-a.s2)-Math.abs(b.s1-b.s2)||a.order.localeCompare(b.order)||a.s1-b.s1);
-        return {best,families,gameWeek,dayStart,dayEnd,from,to,zone,base,wait,gap,now,allowFuture,earliestCompletion:Math.min(...families.map(f=>f.earliestCompletion)),energyNodes:rows.map(r=>({time:r.time,energy:r.energy})),energySegments:segments.length,knownSamples:segments.reduce((n,s)=>n+s.hi-s.lo+1,0),nodes:rows.length,resolution:1};
+        return {best,families,gameWeek,dayStart,dayEnd,from,to,zone,base,wait,gap,now,allowFuture,strict:input.strict||null,earliestCompletion:families.reduce((n,f)=>Math.min(n,f.earliestCompletion),Infinity),energyNodes:rows.map(r=>({time:r.time,energy:r.energy})),energySegments:segments.length,knownSamples:segments.reduce((n,s)=>n+s.hi-s.lo+1,0),nodes:rows.length,resolution:1};
     }
+    const indexes=new WeakMap();
+    function index(result){if(!indexes.has(result)){const buckets=new Map(),scores={12:new Set(),21:new Set()};for(const f of result.families){const key=f.order+':'+f.s1;if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push(f);scores[f.order].add(f.s1);}indexes.set(result,{buckets,scores:{12:[...scores[12]].sort((a,b)=>a-b),21:[...scores[21]].sort((a,b)=>a-b)}});}return indexes.get(result);}
     function variants(result,points,order){
-        const out=[];for(const f of result.families)if(f.s1===points&&f.order===order){out.push(f);const m=f.minimumBox;if(m&&(m.d1!==f.d1||m.d2!==f.d2))out.push({...f,first:m.first,second:m.second,d1:m.d1,d2:m.d2,e1:m.d1-result.wait,e2:m.d2-result.wait,condition:m.D,minimumDuration:true});}return out;
+        const out=[];for(const f of index(result).buckets.get(order+':'+points)||[]){out.push(f);const m=f.minimumBox;if(m&&(m.d1!==f.d1||m.d2!==f.d2))out.push({...f,first:m.first,second:m.second,d1:m.d1,d2:m.d2,e1:m.d1-result.wait,e2:m.d2-result.wait,condition:m.D,minimumDuration:true});}return out;
     }
     const contains=(rs,x)=>rs.some(([a,b])=>x>=a&&x<=b);
     const union=rs=>merge(rs.slice().sort((a,b)=>a[0]-b[0]));
@@ -33545,7 +33603,7 @@ function createHistorySplitLabCore(){
             if(b)out.push({...f,first:b.first,second:b.second});
         }return out;
     }
-    function availableScores(result,order,locks={}){const scores=[...new Set(result.families.filter(f=>f.order===order).map(f=>f.s1))].sort((a,b)=>a-b);return locks.first==null&&locks.second==null?scores:scores.filter(s=>lockedVariants(result,s,order,locks).length>0);}
+    function availableScores(result,order,locks={}){const scores=index(result).scores[order]||[];return locks.first==null&&locks.second==null?scores:scores.filter(s=>lockedVariants(result,s,order,locks).length>0);}
     function interactive(result,points,order,earlyStart=null,lateStart=null,locks={}){
         const scores=availableScores(result,order,locks);
         if(!scores.length)throw Error('保持锁定时间和最高遇见数时，此顺序无可行方案；请先解锁或换回可行顺序。');
@@ -33567,32 +33625,92 @@ function createHistorySplitLabCore(){
     }
     return {plan,count,score,duration,box,representative,merge,interactive,availableScores,rangeSize,at,indexOf};
 }
+function createHistorySplitPlanCore(){
+    const time=createSnorlaxEnergyTimelineCore(),rhythm=createWeeklyRhythmCore(),TYPE='history_split_lab_plan',CONFIRMED='history_split_day_confirmed';
+    const copy=x=>JSON.parse(JSON.stringify(x));
+    const confirmedId=date=>'history_split_day_'+date;
+    function confirmed(logs,week=null){const markers=getHistoryDeleteMarkerMap(logs),out=new Map();for(const r of logs||[])if(r?.type===CONFIRMED&&valid(r.plan)&&r.id===confirmedId(r.plan.date)&&(!week||time.normalizeGameWeek(r.plan.date)===week)&&!isHistoryRecordDeletedByMarker(r,markers))out.set(r.plan.date,chooseNewerHistoryLog(out.get(r.plan.date),r));return out;}
+    function context(state,date,zone,confirmedDays=new Map()){
+        if(!state||state.week!==time.normalizeGameWeek(date))throw Error('本周还没有周评作息记录，请先在周评模块录入参考日。');
+        const s=rhythm.settings(state.settings||{}),target=Math.round((Date.parse(date+'T12:00Z')-Date.parse(state.week+'T12:00Z'))/86400000),anchors=[],occupied=[],pending=[];
+        const center=(session,p)=>{const wall=time.wall(session.start+(p.wait+session.effectiveMinutes/2)*60000,zone);return Number(wall.slice(11,13))*60+Number(wall.slice(14,16))+Number(wall.slice(17,19))/60;};
+        for(let i=0;i<7;i++)if(i!==target){const day=time.shift(state.week,i),d=state.days?.[i]||{},record=confirmedDays.get(day),facts=['first','second'].some(k=>['actual','started'].includes(d[k]?.status)),manual=[d.first,...(d.mode==='one'?[]:[d.second])].some(r=>r&&(r.start||r.end)&&r.source!=='history_split_lab');
+            // 实录／已开始事实优先。否则只采用明确确认的计划；普通保存及普通导入不会自动变基准。
+            if(!facts&&record){const p=record.plan;if(time.zone(p.zone)!==time.zone(zone))throw Error('已确认日期与本次录入时区不同，请先统一录入时区；常用显示时区不参与计算。');
+                const a=p.first,b=p.second,centers=a.effectiveMinutes>b.effectiveMinutes?[center(a,p)]:b.effectiveMinutes>a.effectiveMinutes?[center(b,p)]:[center(a,p),center(b,p)];
+                anchors.push({day:i,date:day,total:a.effectiveMinutes+b.effectiveMinutes,centers,actual:false,source:'confirmed',base:p.base,confirmedId:record.id});occupied.push({start:a.start,end:a.end},{start:b.start,end:b.end});continue;
+            }
+            if(!facts&&!manual){pending.push(i);continue;}
+            const first=rhythm.fixed(d.first),second=d.mode==='one'?null:rhythm.fixed(d.second);
+            const sessions=[['first',first],['second',second]].filter(([,r])=>r);for(const[key,r]of sessions){if(r.duration<90||r.duration>780)throw Error('周评参考日存在无效时长，请先核对。');if(time.zone(d[key].timeZone)!==time.zone(zone))throw Error('严格周评校验需要参考日与本次使用相同录入时区；请先统一周评录入时区。常用显示时区不参与校验。');
+                const start=time.parse(time.shift(day,Math.floor(r.start/1440))+'T'+rhythm.format(r.start),zone),end=start+(r.duration+rhythm.delay(d[key]))*60000;occupied.push({start,end});}
+            if(!first||d.mode!=='one'&&!second){pending.push(i);continue;}
+            if(second&&first.start<second.end&&second.start<first.end)throw Error('周评参考日两觉重叠，请先核对。');
+            const longest=second&&second.duration>first.duration?second:first,centers=[(longest.start+rhythm.delay(longest)+longest.duration/2)%1440];if(second&&second.duration===first.duration)centers.push((second.start+rhythm.delay(second)+second.duration/2)%1440);
+            anchors.push({day:i,date:day,total:first.duration+(second?.duration||0),centers,actual:d.first.status==='actual'&&(d.mode==='one'||d.second.status==='actual'),source:facts?'weekly-fact':'weekly-fixed',base:Number(s.base)});
+        }
+        if(anchors.length&&(s.maxDurationRange===''||s.maxCenterRange===''||![510,660].includes(Number(s.base))||!Number.isFinite(Number(s.maxDurationRange))||!Number.isFinite(Number(s.maxCenterRange))))throw Error('周评的满分时长或两项最大差值设置不完整，请先核对。');
+        const bases=[...new Set(anchors.map(a=>a.base))];if(bases.length>1)throw Error('本周确定日期的满分时长口径不一致，请先核对。');
+        return {enabled:true,phase:anchors.length?'anchored':'free',base:bases[0]||Number(s.base),maxDurationRange:Number(s.maxDurationRange)||0,maxCenterRange:Number(s.maxCenterRange)||0,gap:Number(s.gap),anchors,occupied,pending,sourceUpdatedAt:state.updatedAt||'',week:state.week};
+    }
+    function metrics(plan,strict){
+        const d1=plan.first.effectiveMinutes,d2=plan.second.effectiveMinutes,z=plan.zone;
+        const center=(session,d)=>{const t=session.start+(plan.wait+d/2)*60000,wall=time.wall(t,z);return Number(wall.slice(11,13))*60+Number(wall.slice(14,16))+Number(wall.slice(17,19))/60;};
+        const centers=d1>d2?[center(plan.first,d1)]:d2>d1?[center(plan.second,d2)]:[center(plan.first,d1),center(plan.second,d2)];
+        const path=[...(strict?.anchors||[]).map(a=>({total:a.total,centers:a.centers,late:0})),{total:d1+d2,centers,late:0}];
+        return rhythm.metrics(path,true,{maxDurationRange:strict?.maxDurationRange??60,maxCenterRange:strict?.maxCenterRange??60});
+    }
+    function snapshot(result,selection,config){
+        const f=selection.family,make=(key,e,d,score,count,energy)=>({start:selection[key]*60000,end:(selection[key]+d)*60000,effectiveMinutes:e,score,count,energy});
+        return {schema:1,date:config.date,week:result.gameWeek,zone:result.zone,island:config.island,bonus:config.bonus,base:result.base,wait:result.wait,gap:result.gap,allowReverse:config.allowReverse,allowFuture:result.allowFuture,windowFrom:result.from,windowTo:result.to,strictEnabled:!!result.strict?.enabled,strictContext:result.strict||null,total:result.best,first:make('first',f.e1,f.d1,f.s1,f.c1,selection.firstEnergy),second:make('second',f.e2,f.d2,f.s2,f.c2,selection.secondEnergy)};
+    }
+    function valid(p){return p?.schema===1&&rhythm.validDate(p.date)&&time.zone(p.zone)&&[510,660].includes(p.base)&&Number.isInteger(p.wait)&&p.wait>=0&&p.wait<=30&&['first','second'].every(k=>Number.isSafeInteger(p[k]?.start)&&Number.isSafeInteger(p[k]?.end)&&p[k].end>p[k].start&&Number.isInteger(p[k].effectiveMinutes)&&p[k].effectiveMinutes>=90&&p[k].effectiveMinutes<=780&&(p[k].end-p[k].start)/60000===p[k].effectiveMinutes+p.wait)&&p.first.score+p.second.score===100;}
+    function importDay(state,plan){
+        if(!valid(plan))throw Error('保存的方案数据不完整，不能写入周评。');
+        const w=time.normalizeGameWeek(plan.date);if(state.week!==w)throw Error('周归属不匹配。');const out=copy(state),i=Math.round((Date.parse(plan.date+'T12:00Z')-Date.parse(w+'T12:00Z'))/86400000),old=out.days[i];
+        for(const k of ['first','second'])if(['actual','started'].includes(old[k]?.status))throw Error('该日有实际已完成或已开始的觉，不能覆盖。请先在周评中自行核对。');
+        function session(k){const p=plan[k],mode=plan.wait===5?'measurement':'effective',start=p.start+(mode==='effective'?plan.wait*60000:0),text=time.wall(start,plan.zone),end=time.wall(p.end,plan.zone),s={status:'planned',start:text.slice(11,16),end:end.slice(11,16),startMode:mode,timeZone:plan.zone,source:'history_split_lab'};
+            const f=rhythm.fixed(s),dayOffset=Math.floor(f.start/1440),expected=time.parse(time.shift(plan.date,dayOffset)+'T'+s.start,plan.zone);
+            if(expected!==start||f.duration!==p.effectiveMinutes)throw Error('该方案跨日或等待口径无法无损写入周评，请调整开始时间后重试。');return s;}
+        out.days[i]={...old,mode:'two',score1:String(plan.first.score),score2:String(plan.second.score),autoFirst:false,autoSecond:false,first:session('first'),second:session('second')};
+        const set=rhythm.settings(out.settings||{});if(Number(set.base)!==plan.base)throw Error('周评与方案的满分时长口径不同，请先统一。');
+        if(plan.second.start<plan.first.start&&!set.allowSecondBeforeFirst)throw Error('请先在周评开启“允许二觉在一觉前”，再写入此方案。');
+        // 不修改全周偏好；直接按现有周评规则检查该日的固定要求。
+        const check=rhythm.dayOptions(out.days[i],i,set,{totals:[],centers:[]});if(check.pending||!check.options?.length)throw Error('该方案与周评的每日时长上限、间隔或长觉偏好冲突，请先核对周评设置；未写入。');
+        return {state:out,index:i,replacing:!!(old.score1!==''||old.score2!==''||old.first?.start||old.first?.end||old.second?.start||old.second?.end)};
+    }
+    function saved(logs){const markers=getHistoryDeleteMarkerMap(logs),map=new Map();for(const r of logs||[])if(r?.type===TYPE&&valid(r.plan)&&!isHistoryRecordDeletedByMarker(r,markers))map.set(String(r.id),chooseNewerHistoryLog(map.get(String(r.id)),r));return [...map.values()].sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));}
+    return {TYPE,CONFIRMED,confirmedId,confirmed,context,metrics,snapshot,valid,importDay,saved};
+}
 var HistorySplitLab=(()=>{
     const core=createHistorySplitLabCore(),time=createSnorlaxEnergyTimelineCore(),id='history-split-lab-modal',get=k=>document.getElementById('history-split-lab-'+k),val=k=>String(get(k)?.value||''),user=()=>currentCloudUser?.id||'guest',esc=x=>sleepSplitEsc(String(x??''));
-    let owner='',generation=0,calculationRevision=0,ready=Promise.resolve(false),rows=[],result=null,currentOnly=null,selection=null,locks={first:null,second:null},displayZone='Asia/Tokyo';
+    let owner='',generation=0,calculationRevision=0,ready=Promise.resolve(false),rows=[],result=null,currentOnly=null,selection=null,lastConfig=null,busy=false,locks={first:null,second:null},displayZone='Asia/Tokyo';
+    const planCore=()=>createHistorySplitPlanCore();
+    function weekContext(date,zone){const pc=planCore(),w=time.normalizeGameWeek(date);return pc.context(WeeklyRhythmPlanner.readWeek(w),date,zone,pc.confirmed(historyLogs,w));}
     const active=t=>generation===t&&owner===user()&&!!document.getElementById(id);
     function status(s){if(get('status'))get('status').textContent=s;}
     function gameDate(z){const wall=time.wall(Date.now(),z),d=wall.slice(0,10);return wall.slice(11,16)<'04:00'?time.shift(d,-1):d;}
     function read(){let local=null;try{local=JSON.parse(localStorage.getItem(`snorlax_energy_timeline_v1_${user()}`)||'null');}catch(_){}rows=time.fromHistory([...(Array.isArray(historyLogs)?historyLogs:[]),...time.legacy(local)],'Asia/Tokyo').rows;}
-    function close(){generation++;document.getElementById(id)?.remove();result=null;currentOnly=null;selection=null;locks={first:null,second:null};}
+    function close(){generation++;document.getElementById(id)?.remove();result=null;currentOnly=null;selection=null;lastConfig=null;busy=false;locks={first:null,second:null};}
     function defaultDisplayZone(){let saved;try{saved=localStorage.getItem(`history_split_lab_display_zone_${user()}`);}catch(_){}return time.zone(saved)||time.zone(Intl.DateTimeFormat().resolvedOptions().timeZone)||'Asia/Tokyo';}
-    async function refresh(){const t=generation;try{if(!await ready||!active(t))return;status('正在读取能量节点…');if(currentCloudUser&&historyDedicatedCloudSupport!==false){const r=await loadHistoryFromDedicatedCloud(currentCloudUser.id);if(!active(t))return;if(!r?.ok&&!r?.missingTable)throw Error('账号读取未完成；本机节点保留，可稍后重试。');}read();invalidate();status(`已读取 ${rows.length} 个历史能量节点（仅使用指定游戏周、开始时刻之前的实录）。`);}catch(error){if(active(t))status(error.message);}}
+    async function refresh(){const t=generation;try{if(!await ready||!active(t))return;status('正在读取能量节点…');if(currentCloudUser&&historyDedicatedCloudSupport!==false){const r=await loadHistoryFromDedicatedCloud(currentCloudUser.id);if(!active(t))return;if(!r?.ok&&!r?.missingTable)throw Error('账号读取未完成；本机节点保留，可稍后重试。');}read();renderSaved();invalidate();status(`已读取 ${rows.length} 个历史能量节点（仅使用指定游戏周、开始时刻之前的实录）。`);}catch(error){if(active(t))status(error.message);}}
     function open(){
         close();owner=user();rows=[];displayZone=defaultDisplayZone();const z='Pacific/Pago_Pago',date=gameDate(z),modal=document.createElement('div');modal.id=id;modal.className='fixed inset-0 z-[126] flex items-center justify-center bg-slate-950/65 p-2 sm:p-4 backdrop-blur-sm';document.body.appendChild(modal);render(z,date);const t=generation;
-        ready=(async()=>{loadHistoryFromLocal();const r=await ensureHistoryLargeStorageReady();if(!active(t))return false;if(!r?.ok)throw Error('本机历史未完整加载');read();status(`本机已读取 ${rows.length} 个节点。`);return true;})().catch(error=>{if(active(t))status(error.message);return false;});
+        ready=(async()=>{loadHistoryFromLocal();const r=await ensureHistoryLargeStorageReady();if(!active(t))return false;if(!r?.ok)throw Error('本机历史未完整加载');read();renderSaved();renderConfirmed();status(`本机已读取 ${rows.length} 个节点。`);return true;})().catch(error=>{if(active(t))status(error.message);return false;});
         if(currentCloudUser)void refresh();
     }
-    function invalidate(){calculationRevision++;result=null;selection=null;currentOnly=null;locks={first:null,second:null};if(get('result'))get('result').innerHTML='<p class="hl-note">输入或能量节点已更新，请点击“计算拆觉可调范围”；本次时间锁定已清除。不会修改现有拆觉规划或原始记录。</p>';}
+    function invalidate(){calculationRevision++;result=null;selection=null;currentOnly=null;locks={first:null,second:null};if(get('result'))get('result').innerHTML='<p class="hl-note">输入或能量节点已更新，请点击“计算拆觉可调范围”；本次时间锁定已清除。不会修改已确认日期、原始记录或原拆觉模块。</p>';renderConfirmed();}
     async function run(){
         const t=generation,revision=++calculationRevision;try{
             if(!await ready||!active(t)||revision!==calculationRevision)return;const z=time.zone(val('zone'));if(!z)throw Error('请选择有效时区。');
-            const config={date:val('date'),zone:z,rows,base:Number(val('base')),wait:Number(val('wait')),gap:Number(val('gap')),allowFuture:val('completion')!=='past',allowReverse:get('reverse').checked,bonus:Number(val('bonus')),starts:SLEEP_SPLIT_SCORE_LINES[val('island')]?.starts,firstScore:val('first-score')===''?null:Number(val('first-score')),from:val('from')?time.parse(val('from'),z):undefined,to:val('to')?time.parse(val('to'),z):undefined};
+            const config={date:val('date'),zone:z,island:val('island'),rows,base:Number(val('base')),wait:Number(val('wait')),gap:Number(val('gap')),allowFuture:val('completion')!=='past',allowReverse:get('reverse').checked,bonus:Number(val('bonus')),starts:SLEEP_SPLIT_SCORE_LINES[val('island')]?.starts,firstScore:val('first-score')===''?null:Number(val('first-score')),from:val('from')?time.parse(val('from'),z):undefined,to:val('to')?time.parse(val('to'),z):undefined};
             // 两种完成模式使用同一默认时间窗口，差异只在是否截到当前时刻。
-            if(config.to==null)config.to=time.parse(time.shift(config.date,1)+'T04:00',z)+(config.base+config.wait)*60000;
+            if(get('strict')?.checked){config.strict=weekContext(config.date,z);}
+            if(config.to==null)config.to=time.parse(time.shift(config.date,1)+'T04:00',z)+((config.strict?.anchors.length?780:config.base)+config.wait)*60000;
             status('正在比较分数、时段与先后顺序…');await new Promise(r=>setTimeout(r,0));if(!active(t)||revision!==calculationRevision)return;
             const began=performance.now();result=core.plan(config);currentOnly=null;
             if(config.allowFuture){try{currentOnly=core.plan({...config,allowFuture:false,to:result.to});}catch(_){}}else currentOnly=result;
-            const best=result.families[0];locks={first:null,second:null};selection=core.interactive(result,best.s1,best.order);renderResult();status(`计算完成 · ${(performance.now()-began).toFixed(0)}毫秒 · ${result.energySegments}个能量分段直接推导区间，不逐分钟试时间。`);
+            const best=result.families[0];lastConfig=config;locks={first:null,second:null};selection=core.interactive(result,best.s1,best.order);renderResult();status(`计算完成 · ${(performance.now()-began).toFixed(0)}毫秒 · ${result.energySegments}个能量分段直接推导区间，不逐分钟试时间。`);
         }catch(error){if(active(t)&&revision===calculationRevision){result=null;selection=null;get('result').textContent=error.message;status('未得到可行方案，请检查上述提示。');}}
     }
     const fmt=n=>n.toLocaleString('zh-CN'),stamp=(minute,z)=>{
@@ -33606,11 +33724,11 @@ var HistorySplitLab=(()=>{
         if(owner!==user()||!document.getElementById(id))return;const z=time.zone(value);if(!z){status('请选择有效常用时区。');return;}
         displayZone=z;try{localStorage.setItem(`history_split_lab_display_zone_${user()}`,z);}catch(_){}
         // 只重新格式化显示，绝不重新调用plan/interactive或改变任何时间戳。
-        if(result&&selection)renderResult();status('常用时区已切换，仅改变对应时间显示；方案、分数和锁定时刻均未改变。');
+        if(result&&selection)renderResult();showSaved();status('常用时区已切换，仅改变对应时间显示；方案、分数和锁定时刻均未改变。');
     }
     function renderResult(){
         if(!result||!selection||!get('result'))return;const r=result,z=r.zone;
-        get('result').innerHTML=`<div class="hl-card"><h3>本模型最高合计遇见 ${r.best} 只</h3><p class="hl-note">${r.allowFuture?`允许稍后完成；只用现在以前的时段时，${currentOnly?`最高${currentOnly.best}只`:'暂时无完整可行方案'}`:'仅使用现在以前可完成的时段'}。最高数量下理论最早完成：${stamp(r.earliestCompletion,z)}${commonLine(r.earliestCompletion)}（可能贴近边界，滑条默认选较宽松的内部示例）。</p><p class="hl-note">${esc(z)} · 游戏周 ${r.gameWeek} · ${r.nodes} 个同周节点。可用实际范围 ${esc(time.wall(r.from,z).replace('T',' '))} ～ ${esc(time.wall(r.to,z).replace('T',' '))}${commonLine(r.from/60000,r.to/60000)}；两段开始仍须属于所选游戏日，结束可跨日。每段含${r.wait}分钟等待、段间至少${r.gap}分钟。遇见数不等于保证捕获数，不含熏香／露营额外宝可梦。</p>${r.to>r.now?'<p class="hl-rule">未来部分只是“同游戏周最新已知能量暂不变化”的参考，不是实测，也不计入尚未发生的能量增长。换岛／清零或补入新节点后请重新计算。</p>':''}</div><section class="hl-card"><div class="hl-flex"><h3>在最优范围内调节</h3><label>实际时段先后<select id="history-split-lab-order" onchange="HistorySplitLab.changeOrder(this.value)">${[['12','实际一觉在前'],['21','实际二觉在前']].map(([v,label])=>`<option value="${v}" ${v===selection.order?'selected':''} ${r.families.some(f=>f.order===v)?'':'disabled'}>${label}</option>`).join('')}</select></label><button type="button" onclick="HistorySplitLab.resetSelection()">恢复推荐时间（保留锁定）</button><button id="history-split-lab-unlock-all" type="button" onclick="HistorySplitLab.unlockAll()">解除全部时间锁定</button></div><div class="hl-slider"><div id="history-split-lab-score-label" class="font-black"></div><input id="history-split-lab-score-slider" type="range" min="0" step="1" oninput="HistorySplitLab.changeScore(this.value)" aria-label="最优一觉分数"><p id="history-split-lab-score-ranges" class="hl-note"></p></div><div class="hl-slider"><div class="hl-flex"><div id="history-split-lab-early-label" class="font-black"></div><button id="history-split-lab-lock-early" type="button" class="hl-lock" onclick="HistorySplitLab.toggleTimeLock(\'early\')" aria-pressed="false">锁定开始</button></div><small id="history-split-lab-early-common" class="hl-common"></small><input id="history-split-lab-early-slider" type="range" min="0" step="1" oninput="HistorySplitLab.changeEarly(this.value)" aria-label="先发生一段的最优开始时间"><p id="history-split-lab-early-ranges" class="hl-note"></p></div><div class="hl-slider"><div class="hl-flex"><div id="history-split-lab-late-label" class="font-black"></div><button id="history-split-lab-lock-late" type="button" class="hl-lock" onclick="HistorySplitLab.toggleTimeLock(\'late\')" aria-pressed="false">锁定开始</button></div><small id="history-split-lab-late-common" class="hl-common"></small><input id="history-split-lab-late-slider" type="range" min="0" step="1" oninput="HistorySplitLab.changeLate(this.value)" aria-label="后发生一段的最优开始时间"><p id="history-split-lab-late-ranges" class="hl-note"></p></div><p id="history-split-lab-lock-note" class="hl-note"></p><p class="hl-note">锁定只固定该觉开始时刻，不固定分数或结束时间；分数改变时有效时长可能变化。若锁定不兼容则禁止该调整，不自动解锁。可随时点击解锁；修改计算条件／重新计算会清除本次锁定。</p><p class="hl-rule">滑条只经过能保持最高合计${r.best}只的有效分数／时刻；不连续区间会跳过空档。先调前一段，后一段范围会联动，区间不能任意组合，不会产生两段重叠。</p><div id="history-split-lab-selection"></div></section>`;
+        get('result').innerHTML=`<div class="hl-card"><h3>本模型最高合计遇见 ${r.best} 只</h3><p class="hl-note">${r.allowFuture?`允许稍后完成；只用现在以前的时段时，${currentOnly?`最高${currentOnly.best}只`:'暂时无完整可行方案'}`:'仅使用现在以前可完成的时段'}。最高数量下理论最早完成：${stamp(r.earliestCompletion,z)}${commonLine(r.earliestCompletion)}（可能贴近边界，滑条默认选较宽松的内部示例）。</p><p class="hl-note">${esc(z)} · 游戏周 ${r.gameWeek} · ${r.nodes} 个同周节点。可用实际范围 ${esc(time.wall(r.from,z).replace('T',' '))} ～ ${esc(time.wall(r.to,z).replace('T',' '))}${commonLine(r.from/60000,r.to/60000)}；两段开始仍须属于所选游戏日，结束可跨日。每段含${r.wait}分钟等待、段间至少${r.gap}分钟。遇见数不等于保证捕获数，不含熏香／露营额外宝可梦。</p>${r.to>r.now?'<p class="hl-rule">未来部分只是“同游戏周最新已知能量暂不变化”的参考，不是实测，也不计入尚未发生的能量增长。换岛／清零或补入新节点后请重新计算。</p>':''}</div><section class="hl-card"><div class="hl-flex"><h3>在最优范围内调节</h3><button type="button" onclick="HistorySplitLab.savePlan()">保存候选（不作为基准）</button><button type="button" onclick="HistorySplitLab.confirmDay()">确认此日，作为后续依据</button><button type="button" onclick="HistorySplitLab.transfer()">写入周评（未完成计划）</button><label>实际时段先后<select id="history-split-lab-order" onchange="HistorySplitLab.changeOrder(this.value)">${[['12','实际一觉在前'],['21','实际二觉在前']].map(([v,label])=>`<option value="${v}" ${v===selection.order?'selected':''} ${r.families.some(f=>f.order===v)?'':'disabled'}>${label}</option>`).join('')}</select></label><button type="button" onclick="HistorySplitLab.resetSelection()">恢复推荐时间（保留锁定）</button><button id="history-split-lab-unlock-all" type="button" onclick="HistorySplitLab.unlockAll()">解除全部时间锁定</button></div><div class="hl-slider"><div id="history-split-lab-score-label" class="font-black"></div><input id="history-split-lab-score-slider" type="range" min="0" step="1" oninput="HistorySplitLab.changeScore(this.value)" aria-label="最优一觉分数"><p id="history-split-lab-score-ranges" class="hl-note"></p></div><div class="hl-slider"><div class="hl-flex"><div id="history-split-lab-early-label" class="font-black"></div><button id="history-split-lab-lock-early" type="button" class="hl-lock" onclick="HistorySplitLab.toggleTimeLock(\'early\')" aria-pressed="false">锁定开始</button></div><small id="history-split-lab-early-common" class="hl-common"></small><input id="history-split-lab-early-slider" type="range" min="0" step="1" oninput="HistorySplitLab.changeEarly(this.value)" aria-label="先发生一段的最优开始时间"><p id="history-split-lab-early-ranges" class="hl-note"></p></div><div class="hl-slider"><div class="hl-flex"><div id="history-split-lab-late-label" class="font-black"></div><button id="history-split-lab-lock-late" type="button" class="hl-lock" onclick="HistorySplitLab.toggleTimeLock(\'late\')" aria-pressed="false">锁定开始</button></div><small id="history-split-lab-late-common" class="hl-common"></small><input id="history-split-lab-late-slider" type="range" min="0" step="1" oninput="HistorySplitLab.changeLate(this.value)" aria-label="后发生一段的最优开始时间"><p id="history-split-lab-late-ranges" class="hl-note"></p></div><p id="history-split-lab-lock-note" class="hl-note"></p><p class="hl-note">锁定只固定该觉开始时刻，不固定分数或结束时间；分数改变时有效时长可能变化。若锁定不兼容则禁止该调整，不自动解锁。可随时点击解锁；修改计算条件／重新计算会清除本次锁定。</p><p class="hl-rule">滑条只经过能保持最高合计${r.best}只的有效分数／时刻；不连续区间会跳过空档。先调前一段，后一段范围会联动，区间不能任意组合，不会产生两段重叠。</p><div id="history-split-lab-selection"></div><div id="history-split-lab-rhythm-check"></div></section>`;
         updateSelection();
     }
     function updateSelection(){
@@ -33633,7 +33751,8 @@ var HistorySplitLab=(()=>{
         if(get('late-common'))get('late-common').textContent=commonText(s.lateStart);
         get('early-ranges').innerHTML='可调区间：'+ranges(s.earlyRanges,z);get('late-ranges').innerHTML='随前一段开始时间联动的可调区间：'+ranges(s.lateRanges,z);
         const firstEnd=s.first+f.d1,secondEnd=s.second+f.d2,remaining=Math.max(0,Math.ceil((s.completion*60000-r.now)/60000));
-        get('selection').innerHTML=`<div class="hl-two"><div class="hl-card"><h3>游戏一觉 · ${s.points}分 · ${f.c1}只</h3><p>${stamp(s.first,z)} → ${stamp(firstEnd,z)}</p>${commonLine(s.first,firstEnd)}<p>有效睡眠${f.e1}分钟＋等待${r.wait}分钟</p><p>参考能量 ${fmt(s.firstEnergy)}</p><p class="hl-note">${s.first*60000>r.now?'未来开始：沿用已知能量，非实测':'开始时刻已过去：取此前最近实录'}</p></div><div class="hl-card"><h3>游戏二觉 · ${100-s.points}分 · ${f.c2}只</h3><p>${stamp(s.second,z)} → ${stamp(secondEnd,z)}</p>${commonLine(s.second,secondEnd)}<p>有效睡眠${f.e2}分钟＋等待${r.wait}分钟</p><p>参考能量 ${fmt(s.secondEnergy)}</p><p class="hl-note">${s.second*60000>r.now?'未来开始：沿用已知能量，非实测':'开始时刻已过去：取此前最近实录'}；二觉按每日剩余分数封顶。</p></div></div><p class="hl-rule">本次调节后的完成时间：${stamp(s.completion,z)}。${commonLine(s.completion)}${remaining?`尚需等待约${Math.floor(remaining/60)}小时${remaining%60}分钟，该完成时间到来后才可作为过去时段录入。`:'两段均已结束，可按实际情况录入。'}</p><p class="hl-note">${f.minimumDuration?'当前选择使用接近最低计分时长；注意实际计测误差。':'优先使用分数中心附近的有效时长。'}开始区间、有效时长和衔接均按1分钟精度。这里仅调整试用方案，不改写能量节点、原拆觉工具或睡眠记录。</p>`;
+        get('selection').innerHTML=`<div class="hl-two"><div class="hl-card"><h3>游戏一觉 · ${s.points}分 · ${f.c1}只</h3><p>${stamp(s.first,z)} → ${stamp(firstEnd,z)}</p>${commonLine(s.first,firstEnd)}<p>有效睡眠${f.e1}分钟＋等待${r.wait}分钟</p><p>参考能量 ${fmt(s.firstEnergy)}</p><p class="hl-note">${s.first*60000>r.now?'未来开始：沿用已知能量，非实测':'开始时刻已过去：取此前最近实录'}</p></div><div class="hl-card"><h3>游戏二觉 · ${100-s.points}分 · ${f.c2}只</h3><p>${stamp(s.second,z)} → ${stamp(secondEnd,z)}</p>${commonLine(s.second,secondEnd)}<p>有效睡眠${f.e2}分钟＋等待${r.wait}分钟</p><p>参考能量 ${fmt(s.secondEnergy)}</p><p class="hl-note">${s.second*60000>r.now?'未来开始：沿用已知能量，非实测':'开始时刻已过去：取此前最近实录'}；二觉按每日剩余分数封顶。</p></div></div><p class="hl-rule">本次调节后的完成时间：${stamp(s.completion,z)}。${commonLine(s.completion)}${remaining?`尚需等待约${Math.floor(remaining/60)}小时${remaining%60}分钟，该完成时间到来后才可作为过去时段录入。`:'两段均已结束，可按实际情况录入。'}</p><p class="hl-note">${f.strict?'当前有效时长按严格周评约束选定，可能延长二觉。':f.minimumDuration?'当前选择使用接近最低计分时长；注意实际计测误差。':'优先使用分数中心附近的有效时长。'}开始区间、有效时长和衔接均按1分钟精度。这里仅调整试用方案，不改写能量节点、原拆觉工具或睡眠记录。</p>`;
+        if(get('rhythm-check')){if(r.strict?.enabled&&!r.strict.anchors.length)get('rhythm-check').textContent='空周／尚无完整确定日：本日自由优化，不施加长觉中心或日总时长基准。普通保存不建立约束；选好具体时间并点“确认此日，作为后续依据”后，下一天才会参考它。';else if(r.strict?.enabled){const m=planCore().metrics(currentPlan(),r.strict);get('rhythm-check').textContent=`逐日滚动校验：共同参考全部${r.strict.anchors.length}个已确定日（${r.strict.anchors.map(a=>a.date||time.shift(r.gameWeek,a.day)).join('、')}），总有效时长最大差值 ${m.durationRange.toFixed(1)}／${r.strict.maxDurationRange} 分钟；长觉中心最大差值 ${m.centerRange.toFixed(1)}／${r.strict.maxCenterRange} 分钟。未定${r.strict.pending?.length||0}天；${m.within?'当前纳入日期满足两项上限，不保证整周S':'不满足，不能作为严格方案使用'}。`;}else get('rhythm-check').textContent='未开启严格周评模式：仍按原方式自由优化遇见数量，不施加已确认日期的周评约束。';}
     }
     function changeScore(index){if(!selection||!result||!active(generation))return;const i=Math.max(0,Math.min(selection.scores.length-1,Math.round(Number(index)||0)));try{selection=core.interactive(result,selection.scores[i],selection.order,locks.first!=null||locks.second!=null?selection.earlyStart:null,locks.first!=null||locks.second!=null?selection.lateStart:null,locks);updateSelection();}catch(error){status(error.message);updateSelection();}}
     function changeOrder(order){if(!selection||!result||!active(generation))return;try{selection=core.interactive(result,selection.points,order,null,null,locks);updateSelection();}catch(error){status(error.message);updateSelection();}}
@@ -33647,11 +33766,49 @@ var HistorySplitLab=(()=>{
     }
     function toggleTimeLock(slot){if(selection)toggleLock(slot==='early'?(selection.order==='12'?'first':'second'):(selection.order==='12'?'second':'first'));}
     function unlockAll(){if(!selection||!result||!active(generation))return;locks={first:null,second:null};selection=core.interactive(result,selection.points,selection.order,selection.earlyStart,selection.lateStart,locks);updateSelection();status('已解除所有时间锁定，当前开始时刻保留。');}
+    function currentPlan(){if(!selection||!result||!lastConfig)throw Error('请先计算并选好当前方案。');return planCore().snapshot(result,selection,lastConfig);}
+    async function persistPlans(t){saveHistoryToLocal({syncCloud:false});if(await waitForHistoryLargeStorageWrite()===false)throw Error('本机保存未确认，请重试。');if(!active(t))return;renderSaved();renderConfirmed();if(currentCloudUser){const r=await saveHistoryToCloudNow();if(active(t)){renderSaved();renderConfirmed();status(r?.ok?'方案已保存并同步到账号。':'方案已保存本机，账号同步尚未完成，请稍后刷新。');}return !!r?.ok;}else{status('方案已保存本机；访客模式不跨端。');return null;}}
+    async function savePlan(){const t=generation;if(busy)return;busy=true;try{if(!await ready||!active(t))return;const plan=currentPlan(),key=typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+'_'+Math.random().toString(36).slice(2),row={id:'history_split_lab_plan_'+key,type:'history_split_lab_plan',plan,updatedAt:new Date().toISOString()};historyLogs=mergeHistoryLogs(historyLogs,[row]);await persistPlans(t);if(active(t)&&get('saved-list')){get('saved-list').value=row.id;showSaved();}}catch(error){if(active(t))status(error.message);}finally{if(active(t))busy=false;}}
+    function renderSaved(){if(!get('saved-list'))return;const chosen=val('saved-list'),saved=planCore().saved(historyLogs);get('saved-list').innerHTML='<option value="">选择已保存方案</option>'+saved.map(r=>`<option value="${esc(r.id)}">${r.plan.date} · ${esc(SLEEP_SPLIT_SCORE_LINES[r.plan.island]?.label||r.plan.island)} · ${r.plan.first.score}＋${r.plan.second.score}分／${r.plan.total}只 · ${esc(String(r.updatedAt||'').slice(0,16))}</option>`).join('');if(saved.some(r=>r.id===chosen))get('saved-list').value=chosen;showSaved();}
+    function selectedSaved(){return planCore().saved(historyLogs).find(r=>String(r.id)===val('saved-list'));}
+    function showSaved(){if(!get('saved-detail'))return;const row=selectedSaved();if(!row){get('saved-detail').textContent='保存的是计划快照，不是实际睡眠。可选择查看、重新载入或写入周评。';return;}const p=row.plan,display=(s)=>stamp(s.start/60000,p.zone)+' → '+stamp(s.end/60000,p.zone);get('saved-detail').innerHTML=`<p class="hl-note">${p.date} · ${esc(p.zone)} · 已保存计划，尚非实际完成。能量与遇见数是保存时的参考。</p><div class="hl-two"><div><strong>一觉 ${p.first.score}分／${p.first.count}只</strong><p>${display(p.first)}</p></div><div><strong>二觉 ${p.second.score}分／${p.second.count}只</strong><p>${display(p.second)}</p></div></div>`;}
+    async function loadSaved(){if(!active(generation))return;const row=selectedSaved();if(!row)return;const p=row.plan;if(!confirm('载入保存的条件并按最新能量节点重新计算；原快照不变，新结果可能不同。继续吗？'))return;
+        for(const[k,v]of Object.entries({date:p.date,zone:p.zone,island:p.island,bonus:p.bonus,base:p.base,wait:p.wait,gap:p.gap,completion:p.allowFuture?'later':'past',from:time.wall(p.windowFrom,p.zone).slice(0,16),to:time.wall(p.windowTo,p.zone).slice(0,16),'first-score':''}))if(get(k))get(k).value=String(v);if(get('reverse'))get('reverse').checked=p.allowReverse!==false;if(get('strict'))get('strict').checked=p.strictEnabled;invalidate();await run();
+        if(result&&selection){const order=p.second.start<p.first.start?'21':'12';try{const x=core.interactive(result,p.first.score,order,Math.min(p.first.start,p.second.start)/60000,Math.max(p.first.start,p.second.start)/60000);if(x.first*60000===p.first.start&&x.second*60000===p.second.start){selection=x;updateSelection();status('已载入保存的时间，按最新数据仍在当前最优范围。');}else status('已按最新节点重算；原保存时刻已不在当前最优范围，原快照保留。');}catch(_){status('原方案不再属于当前最优范围，已显示最新结果，原快照保留。');}}
+    }
+    async function deleteSaved(){const t=generation;if(!active(t))return;const row=selectedSaved();if(!row||busy||!confirm('删除这份保存的计划？不会删除周评、梦碎或原能量节点。'))return;busy=true;try{if(!await ready||!active(t))return;replaceHistoryDeleteMarker(row.id);historyLogs=mergeHistoryLogs([],historyLogs);await persistPlans(t);}catch(error){if(active(t))status(error.message);}finally{if(active(t))busy=false;}}
+    async function transfer(saved=false){const t=generation;if(busy)return;busy=true;try{if(!await ready||!active(t))return;const p=saved?selectedSaved()?.plan:currentPlan();if(!p)throw Error('请先选择保存的方案。');if(currentCloudUser&&historyDedicatedCloudSupport!==false){const r=await loadHistoryFromDedicatedCloud(currentCloudUser.id);if(!active(t))return;if(!r?.ok&&!r?.missingTable)throw Error('账号周评读取未完成，为避免覆盖，暂不写入，请稍后重试。');}
+            if(p.strictEnabled){const latest=weekContext(p.date,p.zone);if(latest.anchors.length&&!planCore().metrics(p,latest).within)throw Error('已确定日期已变化，此方案不再严格达标，请重新计算后再写入。');}
+            const written=WeeklyRhythmPlanner.importHistoryPlan(p);if(!written?.ok)return;if(await waitForHistoryLargeStorageWrite()===false)throw Error('写入未确认，请到周评核对后重试。');if(currentCloudUser){const r=await saveHistoryToCloudNow();if(active(t))status(r?.ok?'已写入周评并同步：仅为未完成的时间要求，不是实际记录。':'已写入本机周评，云端同步未完成，请稍后重试。');}else if(active(t))status('已写入本机周评：未完成／时间要求，未记为实际完成。');
+        }catch(error){if(active(t))status(error.message);}finally{if(active(t))busy=false;}}
+    function renderConfirmed(){
+        if(!get('confirmed'))return;const date=val('date'),w=time.normalizeGameWeek(date);if(!w){get('confirmed').textContent='先选择游戏日期。';return;}
+        try{const pc=planCore(),committed=pc.confirmed(historyLogs,w),state=WeeklyRhythmPlanner.readWeek(w),candidates=pc.saved(historyLogs),clock=createWeeklyRhythmCore();
+            get('confirmed').innerHTML=`<p class="hl-note">${w} ～ ${time.shift(w,6)}。后续共同参考全部已确定日期，不只参考昨天。普通候选与普通导入计划不自动成为约束；周评中的实录／已开始事实优先，手动固定时间也可作为依据。确认不等于实际完成。</p><div style="overflow:auto"><table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th>日期</th><th>状态</th><th>已确认计划</th><th>操作</th></tr></thead><tbody>${Array.from({length:7},(_,i)=>{const d=time.shift(w,i),r=committed.get(d),day=state.days[i],fact=['first','second'].some(k=>['actual','started'].includes(day[k]?.status)),manual=['first','second'].some(k=>day[k]?.source!=='history_split_lab'&&clock.fixed(day[k])),saved=candidates.some(x=>x.plan.date===d),label=fact?'周评事实优先':r?'已确认（后续基准）':manual?'周评手动固定':saved?'仅候选，未确认':'未确定';return `<tr><td style="padding:7px">${d}${d===date?' · 当前日':''}</td><td>${label}</td><td>${r?`${r.plan.first.score}＋${r.plan.second.score}分 · 总有效${r.plan.first.effectiveMinutes+r.plan.second.effectiveMinutes}分钟${fact?'（旧确认保留，计算用周评事实）':''}`:'—'}</td><td>${r?`<button type="button" onclick="HistorySplitLab.cancelConfirmed('${d}')">取消计划确认</button>`:''}</td></tr>`;}).join('')}</tbody></table></div>`;
+        }catch(error){get('confirmed').textContent=error.message;}
+    }
+    async function confirmDay(saved=false){
+        const t=generation;if(busy)return;busy=true;try{
+            if(!await ready||!active(t))return;const p=saved?selectedSaved()?.plan:currentPlan();if(!p)throw Error('请先选择一个具体方案。');
+            if(currentCloudUser&&historyDedicatedCloudSupport!==false){const r=await loadHistoryFromDedicatedCloud(currentCloudUser.id);if(!active(t))return;if(!r?.ok&&!r?.missingTable)throw Error('最新账号记录读取未完成，暂不确认，请重试。');}
+            const pc=planCore(),state=WeeklyRhythmPlanner.readWeek(p.week),index=Math.round((Date.parse(p.date+'T12:00Z')-Date.parse(p.week+'T12:00Z'))/86400000),day=state.days[index];
+            if(['first','second'].some(k=>['actual','started'].includes(day[k]?.status)))throw Error('该日已有周评实录或已开始事实，不能用计划重设基准；后续会优先采用周评事实。');
+            let warning='';try{const context=weekContext(p.date,p.zone);if(context.anchors.length&&((context.base!==p.base)||!pc.metrics(p,context).within))throw Error('此方案与本周已有确定日期的周评基准不兼容。');
+                for(const x of [p.first,p.second])if(context.occupied.some(o=>x.start<o.end+context.gap*60000&&o.start<x.end+context.gap*60000))throw Error('此方案与另一已确定日的睡眠时间冲突。');
+            }catch(error){if(p.strictEnabled)throw error;warning=`注意：${error.message} 确认后，后续严格规划可能无解。`;}
+            const existing=pc.confirmed(historyLogs).get(p.date),tie=p.first.effectiveMinutes===p.second.effectiveMinutes?'两觉等长，长觉中心有两种可能，后续严格模式会保守处理，可能无解；建议先调整为明确长觉。':'';
+            if(!confirm(`确认 ${p.date}（${p.zone}）的具体方案，作为本周后续逐日规划依据？这仍是计划，不会记为实际完成。${existing?'将更新此日原确认，旧候选快照保留。':''}${warning}${tie}`))return;
+            const marker=getHistoryDeleteMarkerMap(historyLogs).get(pc.confirmedId(p.date)),at=new Date(Math.max(Date.now(),getHistoryLogMergeTime(existing)+1,getHistoryLogMergeTime(marker)+1)).toISOString(),key=typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+'_'+Math.random().toString(36).slice(2),candidate={id:'history_split_lab_plan_'+key,type:pc.TYPE,plan:JSON.parse(JSON.stringify(p)),updatedAt:at};
+            historyLogs=mergeHistoryLogs(historyLogs,[candidate,{id:pc.confirmedId(p.date),type:pc.CONFIRMED,date:p.date,plan:JSON.parse(JSON.stringify(p)),sourcePlanId:candidate.id,updatedAt:at}]);const synced=await persistPlans(t);if(!active(t))return;
+            if(lastConfig?.date!==p.date)invalidate();if(get('saved-list')){get('saved-list').value=candidate.id;showSaved();}renderConfirmed();status(`已确认 ${p.date}，后续严格规划将把它作为依据；仍非实际完成。${currentCloudUser?(synced?'已同步账号。':'本机已存，账号同步未完成。'):'已保存本机。'}可切换到下一天继续优化。`);
+        }catch(error){if(active(t))status(error.message);}finally{if(active(t))busy=false;}
+    }
+    async function cancelConfirmed(date){const t=generation;if(!active(t)||busy)return;busy=true;try{if(!await ready||!active(t))return;const pc=planCore(),row=pc.confirmed(historyLogs).get(date);if(!row)return;if(!confirm(`取消 ${date} 的计划确认？候选快照、周评实录和能量记录都保留。若周评已有事实或手动固定时间，它们仍会作为依据。`))return;replaceHistoryDeleteMarker(row.id);historyLogs=mergeHistoryLogs([],historyLogs);await persistPlans(t);if(active(t)){invalidate();status('已取消计划确认，候选与事实保留；请按最新基准重新计算。');}}catch(error){if(active(t))status(error.message);}finally{if(active(t))busy=false;}}
     function render(z,date){
         const modal=document.getElementById(id);
-        modal.innerHTML=`<style>#${id} .hl-card{border:1px solid #c7d2fe;background:white;border-radius:16px;padding:15px;margin-top:12px}#${id} .hl-note{font-size:12px;color:#64748b;line-height:1.8;margin:7px 0}#${id} .hl-flex{display:flex;flex-wrap:wrap;align-items:end;gap:10px}#${id} label{display:grid;gap:5px;font-size:12px;font-weight:700;min-width:0}#${id} input,#${id} select{min-width:0;max-width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:9px;background:white;font-size:16px}#${id} button:not(.hl-close){padding:9px 12px;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:10px;font-size:13px;font-weight:800}#${id} h3{font-weight:900}#${id} .hl-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;font-size:13px;line-height:1.8}#${id} .hl-tag{background:#eef2ff;border-radius:8px;padding:4px 7px;font-size:11px;font-weight:800;color:#4338ca}#${id} .hl-rule{font-size:12px;color:#92400e;background:#fffbeb;padding:9px;border-radius:9px;margin:9px 0}#${id} .hl-common{display:block;color:#0f766e;font-size:12px;line-height:1.7}#${id} button.hl-lock[aria-pressed=true]{background:#fff7ed;color:#9a3412;border-color:#fdba74}#${id} .hl-slider{padding:14px 0;border-bottom:1px solid #e2e8f0}#${id} .hl-slider input[type=range]{width:100%;height:34px;padding:0;border:0;accent-color:#4f46e5;background:transparent;cursor:pointer}#${id} .hl-slider input[type=range]:disabled{opacity:.5}#${id} summary{font-size:13px;font-weight:800;cursor:pointer}@media(max-width:600px){#${id} .hl-two{grid-template-columns:1fr}}</style><div role="dialog" aria-modal="true" aria-label="历史拆觉优化试用" class="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-indigo-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">历史拆觉优化 · 试用</h2><p class="text-xs">独立实验工具，不改原拆觉规划与历史记录</p></div><button class="hl-close text-2xl" type="button" onclick="HistorySplitLab.close()" aria-label="关闭">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5"><section class="hl-card"><p class="hl-note">目标：两觉合计遇见数量最多。游戏一觉／二觉是计分顺序，不强制等同实际时间先后；两段必须不重叠。每日合计100分，每段有效睡眠至少90分钟，计分采用现有周评规划的四舍五入口径。本模型不验证游戏后端是否接受特定补录方式，也不保证实际出现数量。</p><div class="hl-flex"><label>要录入的游戏日期<input id="history-split-lab-date" type="date" value="${date}" onchange="HistorySplitLab.invalidate()"></label><label>录入时区<select id="history-split-lab-zone" onchange="HistorySplitLab.invalidate()">${sleepTimeZoneOptions(z,date)}</select></label><label>常用时区（仅显示）<select id="history-split-lab-display-zone" onchange="HistorySplitLab.changeDisplayZone(this.value)">${sleepTimeZoneOptions(displayZone,date)}</select></label><label>岛屿<select id="history-split-lab-island" onchange="HistorySplitLab.invalidate()">${Object.entries(SLEEP_SPLIT_SCORE_LINES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label><label>睡意之力倍率<select id="history-split-lab-bonus" onchange="HistorySplitLab.invalidate()">${SLEEP_SPLIT_BONUSES.map(v=>`<option value="${v.value}">${esc(v.label)}</option>`).join('')}</select></label></div><div class="hl-flex mt-3"><label>完成模式<select id="history-split-lab-completion" onchange="HistorySplitLab.invalidate()"><option value="later">允许稍后完成／稍后录入</option><option value="past">只使用现在以前能完成的时段</option></select></label><label>可用实际时间：最早（选填）<input id="history-split-lab-from" type="datetime-local" onchange="HistorySplitLab.invalidate()"></label><label>最晚完成／预计录入时间（选填）<input id="history-split-lab-to" type="datetime-local" onchange="HistorySplitLab.invalidate()"></label></div><p class="hl-note">输入时间均按“录入时区”解释；“常用时区”仅补充对应时间显示，不参与任何计算或改变锁定时刻。“允许稍后完成”不再截到现在；最晚时间留空时，允许最后一段在次日04:00后继续睡满所需时长。两段开始仍必须属于所选游戏日。可手动指定最晚完成／预计录入时刻；未来开始沿用该游戏周最新已知能量，不预测上涨。游戏周按游戏日期匹配，不按现实日期重划。</p><div class="hl-flex"><label>满分有效时长<select id="history-split-lab-base" onchange="HistorySplitLab.invalidate()"><option value="510">8小时30分</option><option value="660">11小时</option></select></label><label>每段等待（分钟）<input id="history-split-lab-wait" type="number" value="5" min="0" max="30" style="width:8em" onchange="HistorySplitLab.invalidate()"></label><label>段间最少间隔（分钟）<input id="history-split-lab-gap" type="number" value="0" min="0" max="180" style="width:8em" onchange="HistorySplitLab.invalidate()"></label><label>限定一觉分数（选填，会限制最优范围）<input id="history-split-lab-first-score" type="number" min="1" max="99" placeholder="留空自动优化" style="width:10em" onchange="HistorySplitLab.invalidate()"></label><label style="display:flex;align-items:center;gap:7px;padding:9px"><input id="history-split-lab-reverse" type="checkbox" checked onchange="HistorySplitLab.invalidate()">允许实际二觉在一觉前</label></div><div class="hl-flex mt-3"><button type="button" onclick="HistorySplitLab.run()">计算拆觉可调范围</button><button type="button" onclick="HistorySplitLab.refresh()">刷新／读取账号能量节点</button></div><p id="history-split-lab-status" class="hl-note" role="status">正在读取本机能量节点…</p></section><div id="history-split-lab-result"><p class="hl-note">填写要求后手动计算；不会自动启动长时间计算。</p></div></div></div>`;
+        modal.innerHTML=`<style>#${id} .hl-card{border:1px solid #c7d2fe;background:white;border-radius:16px;padding:15px;margin-top:12px}#${id} .hl-note{font-size:12px;color:#64748b;line-height:1.8;margin:7px 0}#${id} .hl-flex{display:flex;flex-wrap:wrap;align-items:end;gap:10px}#${id} label{display:grid;gap:5px;font-size:12px;font-weight:700;min-width:0}#${id} input,#${id} select{min-width:0;max-width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:9px;background:white;font-size:16px}#${id} button:not(.hl-close){padding:9px 12px;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:10px;font-size:13px;font-weight:800}#${id} h3{font-weight:900}#${id} .hl-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;font-size:13px;line-height:1.8}#${id} .hl-tag{background:#eef2ff;border-radius:8px;padding:4px 7px;font-size:11px;font-weight:800;color:#4338ca}#${id} .hl-rule{font-size:12px;color:#92400e;background:#fffbeb;padding:9px;border-radius:9px;margin:9px 0}#${id} .hl-common{display:block;color:#0f766e;font-size:12px;line-height:1.7}#${id} button.hl-lock[aria-pressed=true]{background:#fff7ed;color:#9a3412;border-color:#fdba74}#${id} .hl-slider{padding:14px 0;border-bottom:1px solid #e2e8f0}#${id} .hl-slider input[type=range]{width:100%;height:34px;padding:0;border:0;accent-color:#4f46e5;background:transparent;cursor:pointer}#${id} .hl-slider input[type=range]:disabled{opacity:.5}#${id} summary{font-size:13px;font-weight:800;cursor:pointer}@media(max-width:600px){#${id} .hl-two{grid-template-columns:1fr}}</style><div role="dialog" aria-modal="true" aria-label="历史拆觉优化试用" class="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-slate-50 shadow-2xl" style="max-height:94vh"><header class="flex items-center justify-between bg-indigo-800 px-5 py-4 text-white"><div><h2 class="text-xl font-black">历史拆觉优化 · 试用</h2><p class="text-xs">独立实验工具，不改原拆觉规划与历史记录</p></div><button class="hl-close text-2xl" type="button" onclick="HistorySplitLab.close()" aria-label="关闭">×</button></header><div class="min-h-0 overflow-auto p-3 sm:p-5"><section class="hl-card"><p class="hl-note">目标：两觉合计遇见数量最多。游戏一觉／二觉是计分顺序，不强制等同实际时间先后；两段必须不重叠。每日合计100分，每段有效睡眠至少90分钟，计分采用现有周评规划的四舍五入口径。本模型不验证游戏后端是否接受特定补录方式，也不保证实际出现数量。</p><div class="hl-flex"><label>要录入的游戏日期<input id="history-split-lab-date" type="date" value="${date}" onchange="HistorySplitLab.invalidate()"></label><label>录入时区<select id="history-split-lab-zone" onchange="HistorySplitLab.invalidate()">${sleepTimeZoneOptions(z,date)}</select></label><label>常用时区（仅显示）<select id="history-split-lab-display-zone" onchange="HistorySplitLab.changeDisplayZone(this.value)">${sleepTimeZoneOptions(displayZone,date)}</select></label><label>岛屿<select id="history-split-lab-island" onchange="HistorySplitLab.invalidate()">${Object.entries(SLEEP_SPLIT_SCORE_LINES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label><label>睡意之力倍率<select id="history-split-lab-bonus" onchange="HistorySplitLab.invalidate()">${SLEEP_SPLIT_BONUSES.map(v=>`<option value="${v.value}">${esc(v.label)}</option>`).join('')}</select></label></div><div class="hl-flex mt-3"><label>完成模式<select id="history-split-lab-completion" onchange="HistorySplitLab.invalidate()"><option value="later">允许稍后完成／稍后录入</option><option value="past">只使用现在以前能完成的时段</option></select></label><label>可用实际时间：最早（选填）<input id="history-split-lab-from" type="datetime-local" onchange="HistorySplitLab.invalidate()"></label><label>最晚完成／预计录入时间（选填）<input id="history-split-lab-to" type="datetime-local" onchange="HistorySplitLab.invalidate()"></label></div><p class="hl-note">输入时间均按“录入时区”解释；“常用时区”仅补充对应时间显示，不参与任何计算或改变锁定时刻。“允许稍后完成”不再截到现在；最晚时间留空时，允许最后一段在次日04:00后继续睡满所需时长。两段开始仍必须属于所选游戏日。可手动指定最晚完成／预计录入时刻；未来开始沿用该游戏周最新已知能量，不预测上涨。游戏周按游戏日期匹配，不按现实日期重划。</p><div class="hl-flex"><label>满分有效时长<select id="history-split-lab-base" onchange="HistorySplitLab.invalidate()"><option value="510">8小时30分</option><option value="660">11小时</option></select></label><label>每段等待（分钟）<input id="history-split-lab-wait" type="number" value="5" min="0" max="30" style="width:8em" onchange="HistorySplitLab.invalidate()"></label><label>段间最少间隔（分钟）<input id="history-split-lab-gap" type="number" value="0" min="0" max="180" style="width:8em" onchange="HistorySplitLab.invalidate()"></label><label>限定一觉分数（选填，会限制最优范围）<input id="history-split-lab-first-score" type="number" min="1" max="99" placeholder="留空自动优化" style="width:10em" onchange="HistorySplitLab.invalidate()"></label><label style="display:flex;align-items:center;gap:7px;padding:9px"><input id="history-split-lab-strict" type="checkbox" onchange="HistorySplitLab.invalidate()">按本周已确定日期滚动约束（空周自由规划）</label><label style="display:flex;align-items:center;gap:7px;padding:9px"><input id="history-split-lab-reverse" type="checkbox" checked onchange="HistorySplitLab.invalidate()">允许实际二觉在一觉前</label></div><p class="hl-note">空周先自由规划；保存候选不会建立约束。选好具体时间后“确认此日”，后续共同参考本周全部已确认日与周评固定记录，实际／已开始记录优先。使用周评最大差值设置，可延长二觉；参考日须使用相同录入时区，未定日期不保证整周S。可取消或更新确认，候选快照仍保留。</p><div class="hl-flex mt-3"><button type="button" onclick="HistorySplitLab.run()">计算拆觉可调范围</button><button type="button" onclick="HistorySplitLab.refresh()">刷新／读取账号能量节点</button></div><p id="history-split-lab-status" class="hl-note" role="status">正在读取本机能量节点…</p></section><section class="hl-card"><h3>已保存候选（不自动成为周评基准）</h3><select id="history-split-lab-saved-list" onchange="HistorySplitLab.showSaved()" style="width:100%"><option value="">选择已保存方案</option></select><div class="hl-flex mt-2"><button type="button" onclick="HistorySplitLab.loadSaved()">载入条件并按最新节点重算</button><button type="button" onclick="HistorySplitLab.confirmDay(true)">确认选中候选为该日方案</button><button type="button" onclick="HistorySplitLab.transfer(true)">将选中计划写入周评</button><button type="button" onclick="HistorySplitLab.deleteSaved()">删除选中快照</button></div><div id="history-split-lab-saved-detail"></div></section><section class="hl-card"><h3>本周逐日确认依据</h3><div id="history-split-lab-confirmed"></div></section><div id="history-split-lab-result"><p class="hl-note">填写要求后手动计算；不会自动启动长时间计算。</p></div></div></div>`;
     }
-    return {open,close,refresh,run,invalidate,changeScore,changeOrder,changeEarly,changeLate,resetSelection,toggleTimeLock,toggleLock,unlockAll,changeDisplayZone};
+    return {open,close,refresh,run,invalidate,changeScore,changeOrder,changeEarly,changeLate,resetSelection,toggleTimeLock,toggleLock,unlockAll,changeDisplayZone,savePlan,renderSaved,showSaved,loadSaved,deleteSaved,transfer,confirmDay,cancelConfirmed,renderConfirmed};
 })();
 function openHistorySplitLabModal(){HistorySplitLab.open();}
 
